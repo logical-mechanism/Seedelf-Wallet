@@ -14,7 +14,7 @@ import type { NetworkName } from "../src/networks";
 import type { MessagingEntry } from "../src/shared/rpc";
 import { fakeRelay, type FakeRelay } from "./fake-relay";
 import { loadTestWasm, memoryArea, testWallet, vectors, type MemoryArea } from "./fakes";
-import { cursorOf } from "./messaging-harness";
+import { BOTH_OPEN, cursorOf } from "./messaging-harness";
 
 const PASSWORD = "correct horse battery";
 const phrase = (words: number) =>
@@ -104,7 +104,7 @@ async function party(words: number, relay: FakeRelay, directory: Directory, seed
   const t = testWallet({ local: memoryArea(), session: memoryArea(), clock });
   await t.wallet.create(phrase(words), PASSWORD);
   const store = new PrivateStore({ wallet: t.wallet, local: t.local });
-  const preferences = new PreferencesService(t.local);
+  const preferences = new PreferencesService(t.local, BOTH_OPEN);
   const base: Omit<Party, "messaging" | "restart"> = {
     wallet: t.wallet,
     local: t.local,
@@ -915,6 +915,27 @@ describe("what the screens show (54f)", { timeout: 30_000 }, () => {
     expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 9 }])).toEqual({ dir: "in" });
     expect(lastOf([{ id: 0, dir: "in", at: 1, kind: 2 }])).toEqual({ dir: "in", reveal: true });
     expect(lastOf([])).toBeUndefined();
+  });
+
+  // The 1.10.0 gate's blind reading: a refused message's row read "You: …", as if it went, and one waiting for a
+  // reply "Sending…". The list is handed the one thing its count of the outbox doesn't say (`unsent`).
+  it("says, for the list, a last message of the user's that ended unsent, and waiting ones that all wait for a reply", () => {
+    type Sent = "queued" | "pending" | "posted" | "refused";
+    const out = (id: number, sent: Sent, more: object = {}) => ({ id, dir: "out" as const, at: id, text: `m${id}`, sent, ...more });
+    // Refused, by the server (its bytes kept) or by the wallet's own crate.
+    expect(lastOf([out(0, "posted"), out(1, "refused", { envelope: "01ab" })])).toEqual({ dir: "out", text: "m1", unsent: "refused" });
+    expect(lastOf([out(0, "refused", { refusedBy: "wallet" })])).toEqual({ dir: "out", text: "m0", unsent: "refused" });
+    expect(lastOf([out(0, "posted"), { id: 1, dir: "out", at: 1, kind: 2, sent: "refused" }])).toEqual({ dir: "out", reveal: true, unsent: "refused" });
+    // One the other side wrote after it: the row is their message's.
+    expect(lastOf([out(0, "refused"), { id: 1, dir: "in", at: 1, text: "hi" }])).toEqual({ dir: "in", text: "hi" });
+    // Sent, being prepared or being posted: nothing to say but what the outbox's count does.
+    expect(lastOf([out(0, "posted")])).toEqual({ dir: "out", text: "m0" });
+    expect(lastOf([out(0, "queued")])).toEqual({ dir: "out", text: "m0" });
+    expect(lastOf([out(0, "posted"), out(1, "pending")])).toEqual({ dir: "out", text: "m1" });
+    // Every waiting one queued behind a message past its stamp: they wait for a reply, as the thread says of each.
+    expect(lastOf([out(0, "posted"), out(1, "queued"), out(2, "queued")])).toEqual({ dir: "out", text: "m2", unsent: "reply" });
+    // One of them still being posted: something is on its way.
+    expect(lastOf([out(0, "pending"), out(1, "queued")])).toEqual({ dir: "out", text: "m1" });
   });
 
   it("says the relay didn't answer while it doesn't, and stops once it does; never while the switch is off", async () => {

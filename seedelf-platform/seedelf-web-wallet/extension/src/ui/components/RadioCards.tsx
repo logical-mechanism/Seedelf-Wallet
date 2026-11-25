@@ -27,6 +27,7 @@ export function RadioCards<T extends string>({
   value,
   onChange,
   testId,
+  wrap = false,
 }: {
   label: string;
   id: string;
@@ -34,6 +35,8 @@ export function RadioCards<T extends string>({
   value?: T;
   onChange: (value: T) => void;
   testId?: string;
+  /** Each card's label whole, on as many lines as it takes, where it's what tells the choices apart (Show my Seedelf). */
+  wrap?: boolean;
 }) {
   return (
     <div className="field">
@@ -56,7 +59,7 @@ export function RadioCards<T extends string>({
                 <span className="avatar avatar--contact" aria-hidden="true">
                   {on ? <CheckIcon size={16} /> : o.icon}
                 </span>
-                <span className="token-row__label">{o.label}</span>
+                <span className={wrap ? "token-row__label token-row__label--wrap" : "token-row__label"}>{o.label}</span>
                 <span />
                 {o.text && <span className="token-row__sub wrap">{o.text}</span>}
               </button>

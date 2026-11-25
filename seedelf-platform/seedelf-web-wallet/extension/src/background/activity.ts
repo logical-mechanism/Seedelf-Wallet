@@ -53,6 +53,7 @@ import {
   type HistoryClass,
 } from "../shared/histories";
 import { entrySession, type ActivityEntry, type ActivityStaking, type Balances, type PendingTx, type TokenQuantity } from "../shared/rpc";
+import { seedelfName, seedelfShort } from "../shared/seedelf-name";
 import type * as Wasm from "@seedelf/wasm";
 
 import type { PathedUtxo } from "./account";
@@ -262,6 +263,12 @@ const SEEDELF_KINDS: ReadonlySet<PendingTx["kind"]> = new Set([
 const newestFirst = (a: ActivityEntry, b: ActivityEntry) => b.at - a.at || a.txHash.localeCompare(b.txHash);
 const shortHex = (hex: string) => (hex.length > 20 ? `${hex.slice(0, 12)}…${hex.slice(-6)}` : hex);
 /**
+ * A Seedelf with no tag, as an entry names it: its name cut as every screen cuts one (seedelf-name.ts `seedelfShort`:
+ * its prefix, its last sixteen and its output index). Twelve and six kept its prefix, its index, one byte of the
+ * transaction its mint spent and three more, which a Seedelf minted from another output of that transaction shares.
+ */
+const shortSeedelf = (name: string) => (seedelfName(name) ? seedelfShort(name) : shortHex(name));
+/**
  * Who was paid: the one, or the first and how many more. A count, not "and
  * 2 more": the history is sealed for good, and the page says it in whatever
  * language it's in by then (ui/activity.ts activityDetail).
@@ -415,7 +422,7 @@ export class ActivityService {
             : pending.kind === "lovejoin-withdraw"
               ? { ...shared, kind: "lovejoin-withdraw", direction: "in", detail: "Lovejoin" }
             : pending.kind === "transfer"
-              ? { ...shared, kind: "transfer", direction: "out", ...several(paid.map((p) => p.label ?? shortHex(String(p.to)))) }
+              ? { ...shared, kind: "transfer", direction: "out", ...several(paid.map((p) => p.label ?? shortSeedelf(String(p.to)))) }
               : pending.kind === "withdraw"
                 ? {
                     ...shared,
@@ -428,7 +435,7 @@ export class ActivityService {
                   : pending.kind === "lovejoin-launch"
                     ? // What it locks for good left the balance, as what a payment pays does.
                       { ...shared, kind: "lovejoin-launch", direction: "out" }
-                    : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortHex(String(s.name)) };
+                    : { ...shared, kind: "remove", direction: "none", detail: s.label ?? shortSeedelf(String(s.name)) };
     return this.update(network, (h) => {
       // A return's money came from the session's account, which its fundings paid: it carries what they
       // spent, as their change does, and keeps it should their entries age out. `classes` reads all of a

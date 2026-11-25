@@ -49,7 +49,7 @@
 // has a key of its own (`NetworkChoice`, below).
 
 import { t } from "../i18n";
-import { isNetworkName, NETWORKS, type NetworkName } from "../networks";
+import { isNetworkName, MESSAGING_NETWORKS, messagingOpen, NETWORKS, type NetworkName } from "../networks";
 import {
   DEFAULT_PREFERENCES,
   isAccountIndex,
@@ -120,7 +120,19 @@ export class NetworkChoice {
 let writing: Promise<unknown> = Promise.resolve();
 
 export class PreferencesService {
-  constructor(private readonly local: Area) {}
+  constructor(
+    private readonly local: Area,
+    /**
+     * The networks Messages is open on (networks.ts `MESSAGING_NETWORKS`: preprod only for now). The worker never
+     * passes another; a test of both pools does.
+     */
+    private readonly messagingNetworks: readonly NetworkName[] = MESSAGING_NETWORKS,
+  ) {}
+
+  /** Whether Messages can be turned on for `network` in this release. */
+  messagingOpen(network: NetworkName): boolean {
+    return messagingOpen(network, this.messagingNetworks);
+  }
 
   async get(): Promise<Preferences> {
     const kept = (await this.local.get<Partial<Preferences>>(LOCAL_PREFERENCES)) ?? {};
@@ -139,7 +151,8 @@ export class PreferencesService {
       lovejoinDelay: isLovejoinDelay(kept.lovejoinDelay) ? kept.lovejoinDelay : DEFAULT_PREFERENCES.lovejoinDelay,
       lovejoinWidth: isLovejoinWidth(kept.lovejoinWidth) ? kept.lovejoinWidth : DEFAULT_PREFERENCES.lovejoinWidth,
       koiosOnly: typeof kept.koiosOnly === "boolean" ? kept.koiosOnly : DEFAULT_PREFERENCES.koiosOnly,
-      messaging: messagingSwitches(kept.messaging),
+      // Off on a network Messages isn't open on, whatever is kept: every reader of the switches reads them here.
+      messaging: messagingSwitches(kept.messaging, this.messagingNetworks),
     };
   }
 
@@ -171,13 +184,17 @@ export class PreferencesService {
     if (isLovejoinDelay(change.lovejoinDelay)) next.lovejoinDelay = change.lovejoinDelay;
     if (isLovejoinWidth(change.lovejoinWidth)) next.lovejoinWidth = change.lovejoinWidth;
     if (typeof change.koiosOnly === "boolean") next.koiosOnly = change.koiosOnly;
-    // One network's switch at a time, the other kept: each is only ever a boolean.
+    // One network's switch at a time, the other kept: each is only ever a boolean. Never on where Messages isn't open:
+    // `get` read such a kept switch as off, and one asked on is written off.
     if (typeof change.messaging === "object" && change.messaging !== null) {
       const asked = change.messaging as unknown as Partial<Record<string, unknown>>;
-      next.messaging = {
-        preprod: typeof asked.preprod === "boolean" ? asked.preprod : next.messaging.preprod,
-        mainnet: typeof asked.mainnet === "boolean" ? asked.mainnet : next.messaging.mainnet,
-      };
+      next.messaging = messagingSwitches(
+        {
+          preprod: typeof asked.preprod === "boolean" ? asked.preprod : next.messaging.preprod,
+          mainnet: typeof asked.mainnet === "boolean" ? asked.mainnet : next.messaging.mainnet,
+        },
+        this.messagingNetworks,
+      );
     }
     await this.local.set(LOCAL_PREFERENCES, next);
     return next;

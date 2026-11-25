@@ -8,7 +8,7 @@
 import { type ConversationFile, MessagingService, storedBytes } from "../src/background/messaging";
 import { rememberRegister } from "../src/background/minted-by";
 import { PreferencesService } from "../src/background/preferences";
-import { conversationRecord, PrivateStore, type RecordName } from "../src/background/private-store";
+import { conversationRecord, PRIVATE_PREFIX, PrivateStore, type RecordName } from "../src/background/private-store";
 import { type Admit, SESSION_UNLOCKED_AT, type Wallet } from "../src/background/wallet";
 import type { RegisterHex } from "../src/background/chain";
 import type { NetworkName } from "../src/networks";
@@ -16,6 +16,13 @@ import { fakeRelay, type FakeRelay } from "./fake-relay";
 import { loadTestWasm, memoryArea, testWallet, vectors, type MemoryArea } from "./fakes";
 
 export const PASSWORD = "correct horse battery";
+
+/**
+ * The harness's wallets have Messages open on both networks, as a release that opens mainnet will: the tests of two
+ * pools, of an envelope copied across them and of the one budget stay live. What ships now, preprod only (networks.ts
+ * `MESSAGING_NETWORKS`), is messaging-open.test.ts's, over the worker's own settings.
+ */
+export const BOTH_OPEN: readonly NetworkName[] = ["preprod", "mainnet"];
 export const phrase = (words: number) =>
   vectors("cardano_account.json").find((v) => v.account === 0 && v.phrase.split(" ").length === words)!.phrase as string;
 
@@ -82,6 +89,13 @@ export interface Party {
    */
   log: LogEntry[];
   /**
+   * chrome.storage.local's own reads of the wallet's sealed records, as each is asked (1.10.0's second review, F5): the
+   * log's `get` is a record's unseal in the wallet's queue, and a read of the area with no unseal after it (one whose
+   * call was then turned away, a count's fallback) showed nowhere. Kept beside the log, never in it, so nothing an
+   * earlier test compares changes: `index` is where the log stood as the read was asked.
+   */
+  area: AreaRead[];
+  /**
    * Every throw a take passed over without a word (W9; the 1.10.0 gate's f2): a test that meets one it didn't mean to
    * fails (an error thrown out of the run), unless it sets `passOverOk`.
    */
@@ -114,6 +128,8 @@ export interface LogEntry {
     | "receive"
     | "lane-start"
     | "lane-end"
+    | "run-start"
+    | "run-end"
     | "step-start"
     | "step-end"
     | "gate"
@@ -125,6 +141,33 @@ export interface LogEntry {
   bytes?: number;
   at: number;
   t: number;
+}
+
+/** One read of chrome.storage.local for a sealed record (`Party.area`). */
+export interface AreaRead {
+  /** The record's name. */
+  name: string;
+  /** What the area holds under its key then: its JSON's length, 0 for none. */
+  bytes: number;
+  /** Where the log stood as it was asked: entries from `index` on came after. */
+  index: number;
+  at: number;
+  t: number;
+}
+
+/**
+ * Notes each read of `area` for a sealed record as it's asked (F5), whatever follows it. Outside `overIpc`'s turn, where
+ * that's on: a read is noted as the service asks, not as the area answers.
+ */
+function tracedArea(p: Pick<Party, "log" | "area">, area: MemoryArea): void {
+  const get = area.get.bind(area) as (key: string) => Promise<unknown>;
+  (area as unknown as { get: (key: string) => Promise<unknown> }).get = (key: string) => {
+    if (key.startsWith(PRIVATE_PREFIX)) {
+      const raw = area.data.get(key) as string | undefined;
+      p.area.push({ name: key.slice(PRIVATE_PREFIX.length), bytes: raw?.length ?? 0, index: p.log.length, at: clock.now, t: performance.now() });
+    }
+    return get(key);
+  };
 }
 
 const logged = (p: Pick<Party, "log">, what: LogEntry["what"], name?: string, bytes?: number) =>
@@ -217,6 +260,8 @@ export interface ServiceOptions {
   takeMarginMs?: number;
   /** The first-contact stamp's bits, solved and asked: 6 otherwise, cheap for tests. */
   firstContactBits?: number;
+  /** The call a solve makes between its slices so Chrome keeps the worker (`keepAlive`): none otherwise. */
+  keepAlive?: () => Promise<void>;
 }
 
 function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, directory: Directory, options: ServiceOptions, given?: Wasm): MessagingService {
@@ -394,7 +439,7 @@ export async function party(
     local: t.local,
     session: t.session,
     store: new PrivateStore({ wallet: t.wallet, local: t.local }),
-    preferences: new PreferencesService(t.local),
+    preferences: new PreferencesService(t.local, BOTH_OPEN),
     own: [],
     keptView: true,
     revealReads: 0,
@@ -403,6 +448,7 @@ export async function party(
     changed: [],
     trace: [],
     log: [],
+    area: [],
     passedOver: [],
     passOverOk: false,
     unreachable: [],
@@ -429,6 +475,7 @@ export async function party(
     overIpc(t.local);
     overIpc(t.session);
   }
+  tracedArea(base, t.local);
   // One object: what a test changes on the party (its Seedelfs, its kept view) is what its service reads.
   const p = base as Party;
   p.messaging = service(p, relay, directory, given);

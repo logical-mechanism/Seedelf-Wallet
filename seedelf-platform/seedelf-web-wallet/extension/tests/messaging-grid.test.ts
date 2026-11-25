@@ -296,7 +296,9 @@ describe("one grid for every page (round 5, risk 3)", { timeout: 300_000 }, () =
     expect(x.b.messaging.pollIn()).toBe(6300);
     await lane;
     expect(x.b.messaging.pollIn()).toBe(6300);
-    // Malformed pages are heard as none: a long ID, a number.
+    // Malformed pages are heard as none: a long ID, a number. A's first service ends its take before another is made over
+    // its storage: two live workers on one storage aren't a thing Chrome has (1.10.0's second review, the jitter sweep).
+    await x.a.messaging.whenIdle();
     const c = x.a.restart();
     await c.sync("preprod", { page: "x".repeat(65), kind: "view" });
     await c.sync("preprod", { page: 7, kind: "view" });

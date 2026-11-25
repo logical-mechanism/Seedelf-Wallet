@@ -124,7 +124,10 @@ async function heldAcrossTick(p: Party, kind: Kind, taking: boolean, at: { next:
   const lanes = lanesOf(p, from).length;
   const at0 = p.log.length;
   const t1 = performance.now();
-  const tick = kind === "alarm" ? p.messaging.syncAll(["preprod"]) : p.messaging.sync("preprod", page);
+  // The alarm's run says it's the alarm's, as sw.ts's does (1.10.0's second review, F1): a tick is served only by its
+  // own run. This test's plain `syncAll` was taken for the alarm's only because any lane near a tick served it, which
+  // was the bug; left plain, the tick would now be waited for until its grace is past.
+  const tick = kind === "alarm" ? p.messaging.syncAll(["preprod"], { alarm: true }) : p.messaging.sync("preprod", page);
   await turns(3);
   foreign!.release();
   await foreign!.done;
@@ -295,7 +298,8 @@ describe("the alarm's first tick, appearing 10 s ahead after a read with none (r
         await x.b.wallet.touch();
         await new Promise((r) => setTimeout(r, 0));
       }
-      await Promise.all([x.a.messaging.syncAll(["preprod"]), x.b.messaging.syncAll(["preprod"])]);
+      // The alarm's own run, said so (F1, as above).
+      await Promise.all([x.a.messaging.syncAll(["preprod"], { alarm: true }), x.b.messaging.syncAll(["preprod"], { alarm: true })]);
     }
     next = Number.POSITIVE_INFINITY;
     for (let i = 0; i < 300; i++) {

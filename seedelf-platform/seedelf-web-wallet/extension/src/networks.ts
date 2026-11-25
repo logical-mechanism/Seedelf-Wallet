@@ -187,6 +187,21 @@ export function relayOrigin(network: NetworkName, override = ""): string {
 }
 
 /**
+ * The networks Seedelf Messaging is open on in this release: preprod only
+ * (the owner's call, 2026-11-24, 1.10.0's second review). On any other, a
+ * Messages switch can't be turned on and one kept on reads as off
+ * (background/preferences.ts), so nothing of that network's reaches the
+ * relay, and the Messages page says so. Mainnet opens by adding it here, in a
+ * later release: seedelf-messaging/docs/protocol.md §20's freeze starts then.
+ */
+export const MESSAGING_NETWORKS: readonly NetworkName[] = ["preprod"];
+
+/** Whether Messages can be turned on for `network`: the worker's gate and the pages', one source. */
+export function messagingOpen(network: NetworkName, open: readonly NetworkName[] = MESSAGING_NETWORKS): boolean {
+  return open.includes(network);
+}
+
+/**
  * Origins the pages may reach without a host permission: services that
  * answer with CORS headers. The data layer is one: it answers the wallet's
  * own origin (seedelf-data's DATA_ORIGINS), so it adds nothing asked for at

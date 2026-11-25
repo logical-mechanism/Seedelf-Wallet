@@ -66,11 +66,53 @@ function inWasm(e: Error): boolean {
  * every object the old instance made (the wallet's keys among them) stops.
  * That takes the glue's reset function (wasm-bindgen's
  * --experimental-reset-state-function, which build.sh passes). A glue built
- * without it can't be reset, so the extension restarts instead.
+ * without it can't be reset, so the extension restarts instead. The old
+ * instance's memory is then overwritten with zeros (`replace`): a trap inside
+ * a call that borrowed a key leaves the key where no free() reaches it.
  */
 export function freshWasm(): void {
   const reset = (wasm as { __wbg_reset_state?: () => void }).__wbg_reset_state;
   if (!reset) return chrome.runtime.reload();
+  replace(reset);
+}
+
+/**
+ * A lock's last step (wallet.ts `free`): replaces the instance with a fresh
+ * one, as `freshWasm` does, and overwrites the old one's whole memory with
+ * zeros. free() overwrites a key where its object kept it, and the scrub what
+ * calls left on the stack; but a call that builds something can copy bytes an
+ * earlier call left on the stack into the heap, where neither reaches (the
+ * 1.10.0 gate's review found 16 bytes of the stake key there after a lock).
+ * So nothing of the instance that held the keys is kept. Every object it made
+ * stops, as after a trap: the lock has freed the keys by then, and nothing
+ * else holds one past the call that made it. A glue built without the reset
+ * function can't be replaced: this does nothing then (a lock never restarts
+ * the extension), and the scrub is what there is.
+ */
+export function renewWasm(): void {
+  const reset = (wasm as { __wbg_reset_state?: () => void }).__wbg_reset_state;
+  if (reset) replace(reset);
+}
+
+/** The memory of the instance there is, if there is one: the glue's `initSync` gives its exports once it's loaded. */
+function memoryNow(): WebAssembly.Memory | undefined {
+  try {
+    return (wasm as unknown as { initSync(): { memory?: WebAssembly.Memory } }).initSync().memory;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Puts a fresh instance in the old one's place with the glue's `reset`, then
+ * overwrites the old one's whole memory with zeros. In that order: the old
+ * instance never runs again, so nothing runs on zeroed memory; and a reset
+ * that throws before another instance is in place leaves the one there is as
+ * it was, to go on or to be replaced another way.
+ */
+function replace(reset: () => void): void {
+  // Taken first: the glue lets go of it at the reset.
+  const old = memoryNow();
   try {
     reset();
   } catch (e) {
@@ -80,4 +122,6 @@ export function freshWasm(): void {
     // after the new instance is in place, so that one error means nothing.
     if (!(e instanceof TypeError && e.message.includes("__wbindgen_start"))) throw e;
   }
+  // Its buffer as it is now: growing a memory replaces the buffer it had.
+  if (old && memoryNow() !== old) new Uint8Array(old.buffer).fill(0);
 }

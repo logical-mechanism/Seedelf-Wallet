@@ -18,8 +18,8 @@
 // unverified "says they're …" would be a tool for phishing. The wallet's own
 // notice of it is drawn as a notice, never as a bubble of the other side's, so
 // no text a message carries can pass for it (the 1.10.0 gate's screens#1).
-// A tag is said as a tag, with its last sixteen, and a contact's name only for
-// that contact's Seedelf, as Send says them (screens#3).
+// A tag is said as a tag, with its last sixteen and its output index, and a
+// contact's name only for that contact's Seedelf, as Send says them (screens#3).
 
 import {
   useCallback,
@@ -33,8 +33,8 @@ import {
   type SetStateAction,
 } from "react";
 
-import { joinSentences, Rich, useT } from "../../i18n";
-import { NETWORKS, type NetworkName } from "../../networks";
+import { joinList, joinSentences, Rich, useT } from "../../i18n";
+import { MESSAGING_NETWORKS, messagingOpen, NETWORKS, type NetworkName } from "../../networks";
 import {
   CONVERSATION_NAME_CHARS as NAME_CHARS,
   type Contact,
@@ -50,6 +50,8 @@ import { ContactEditor, useContacts } from "../components/Contacts";
 import {
   BackIcon,
   CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CopyIcon,
   MessageIcon,
   PencilIcon,
@@ -72,12 +74,15 @@ import {
   conversationTitle,
   dayOf,
   expiresOf,
+  type Held,
+  heldOf,
   initialOf,
   listTimeOf,
   momentOf,
   onMessagingChanged,
   ownShown,
   revealVerifiedText,
+  rowWaiting,
   seedelfOf,
   shareUsedUp,
   tagShared,
@@ -86,6 +91,7 @@ import {
 } from "../messaging";
 import { useNetwork } from "../network";
 import { usePreferences } from "../preferences";
+import { waitText } from "../sites";
 import { SeedelfNameInput, type Found } from "./Transfer";
 
 /** Wide enough for the list and a conversation side by side. */
@@ -203,6 +209,7 @@ export function Messages({
         cid={open.cid}
         draft={open.draft}
         on={on}
+        held={heldOf(overview)}
         contacts={contacts}
         onContacts={setContacts}
         titleOf={titleOf}
@@ -267,6 +274,10 @@ function useReadWhileSeen(network: NetworkName, load: () => void): void {
     };
   }, [network, load]);
 }
+
+/** Where Messages is open, said on a network where it isn't: the list's line, and the box's in a pane there. */
+const openOn = (t: ReturnType<typeof useT>) =>
+  t("messages.warn.openOn", { network: joinList(MESSAGING_NETWORKS.map((n) => NETWORKS[n].label)) });
 
 /** Whether the window is wide enough for the list and a conversation side by side. */
 function useWide(): boolean {
@@ -374,6 +385,10 @@ function ListPane({
   // The switch as the overview says it, or as the settings do where the overview can't be read: it's still the
   // user's to turn (cross-feature#8).
   const on = overview ? overview.on : loaded && prefs.messaging[network];
+  // Messages isn't open on every network yet (networks.ts `MESSAGING_NETWORKS`, the owner's call 2026-11-24): where
+  // it isn't, the page says where it is and offers no switch, and nothing is written from here, nor from a pane of
+  // what a development build left there (`closed`, below: its box, Accept, Start again and Show my Seedelf).
+  const closed = !messagingOpen(network);
 
   const flip = () =>
     press.run(async () => {
@@ -420,7 +435,7 @@ function ListPane({
           aria-label={t("messages.new")}
           title={t("messages.new")}
           aria-pressed={open?.kind === "new"}
-          disabled={!overview}
+          disabled={!overview || closed}
           data-testid="messages-new"
         >
           <PenIcon size={17} />
@@ -428,21 +443,28 @@ function ListPane({
       </header>
 
       <div className="messages__scroll">
-        {/* Just the switch (the owner, 2026-11-22): what it tells the server is the privacy policy's. */}
-        <div className="setting-row messages__switch">
-          <span id="messages-switch-label">{t("messages.switch")}</span>
-          <button
-            type="button"
-            role="switch"
-            className="switch"
-            aria-checked={on}
-            aria-labelledby="messages-switch-label"
-            onClick={() => void flip()}
-            disabled={(!overview && !loaded) || press.busy}
-            aria-busy={press.waits("switch") || undefined}
-            data-testid="messages-switch"
-          />
-        </div>
+        {/* Just the switch (the owner, 2026-11-22): what it tells the server is the privacy policy's. On a network
+            Messages isn't open on, one line in its place. */}
+        {closed ? (
+          <p className="note messages__closed" data-testid="messages-closed">
+            {openOn(t)}
+          </p>
+        ) : (
+          <div className="setting-row messages__switch">
+            <span id="messages-switch-label">{t("messages.switch")}</span>
+            <button
+              type="button"
+              role="switch"
+              className="switch"
+              aria-checked={on}
+              aria-labelledby="messages-switch-label"
+              onClick={() => void flip()}
+              disabled={(!overview && !loaded) || press.busy}
+              aria-busy={press.waits("switch") || undefined}
+              data-testid="messages-switch"
+            />
+          </div>
+        )}
         {press.waits("switch") && (
           <p className="note messages__waiting" role="status" data-testid="press-waits">
             {t("messages.pressWaiting")}
@@ -452,6 +474,13 @@ function ListPane({
           <p className="error" role="alert">
             {press.error}
           </p>
+        )}
+        {/* While Messages are a test (the owner, 2026-11-24): the Seedelf key is the same on every network, so the test
+            is for a wallet that holds nothing on mainnet (seedelf-messaging/docs/security.md). */}
+        {!closed && (
+          <Callout tone="warn" testId="messages-test-wallet">
+            {t("messages.warn.testWallet")}
+          </Callout>
         )}
 
         {/* The overview the worker couldn't read: its words, Try again, and, for an inbox that won't open, starting this
@@ -570,8 +599,6 @@ function ListPane({
           </StateLine>
         ))}
 
-        {on && seedelfs.length > 0 && <SeedelfSwitches seedelfs={seedelfs} onSwitched={onSwitched} />}
-
         {overview && overview.requests.length > 0 && (
           <div className="messages__group">
             <h2>{t("messages.requests", { count: overview.requests.length })}</h2>
@@ -621,6 +648,7 @@ function ListPane({
                     conversation={c}
                     contacts={contacts}
                     on={on}
+                    held={heldOf(overview)}
                     now={now}
                     current={open?.kind === "thread" && open.cid === c.cid}
                     onOpen={() => onOpen({ kind: "thread", cid: c.cid })}
@@ -631,11 +659,15 @@ function ListPane({
           </div>
         )}
 
-        {empty && (
+        {empty && !closed && (
           <p className="messages__none" data-testid="messages-none">
             {on ? t("messages.none") : t("messages.noneOff")}
           </p>
         )}
+        {/* The wallet's Seedelfs, under the requests and the conversations and folded into one row (the owner,
+            2026-11-24): a switch for each over the list put a conversation with unread messages off the screen of a
+            wallet that holds fifteen. */}
+        {on && seedelfs.length > 0 && <SeedelfsRow seedelfs={seedelfs} onSwitched={onSwitched} />}
         {/* What the page always says: when messages come and how long the server keeps them, and that the phrase
             doesn't bring conversations back (where the can't-place count was, W3). */}
         <p className="note messages__unlock" data-testid="messages-notes">
@@ -667,11 +699,66 @@ function StateLine({ text, testId, children }: { text: string; testId?: string; 
 }
 
 /**
+ * The Seedelfs' switches behind one row at the foot of the list (the owner, 2026-11-24): the row says how many of the
+ * wallet's Seedelfs take messages, and a press shows the switches under it, or hides them. It starts folded, but for a
+ * wallet none of whose Seedelfs takes messages (one restored from its phrase has every switch off): there it starts
+ * open, since nobody's first message would come and nothing would say why. The start is taken once, when the row first
+ * shows: read from the count at every draw, turning the first switch on would fold the row under the press, its
+ * waiting line and its error with it. Kept here and saved nowhere.
+ */
+function SeedelfsRow({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[]; onSwitched: (o: MessagingOverview) => void }) {
+  const t = useT();
+  const id = useId();
+  const taking = seedelfs.filter((s) => s.on).length;
+  const [open, setOpen] = useState(taking === 0);
+  // Opened by a press, the switches come into view: at the foot of a full list they'd open under its edge, and the
+  // press would seem to do nothing. Never at the first draw, which leaves the list where it is.
+  const fold = useRef<HTMLDivElement>(null);
+  const pressed = useRef(false);
+  useLayoutEffect(() => {
+    if (open && pressed.current) fold.current?.scrollIntoView({ block: "nearest" });
+  }, [open]);
+  return (
+    <div className="messages__seedelfs-fold" ref={fold}>
+      <button
+        type="button"
+        className="menu-row menu-row--plain messages__seedelfs-row"
+        aria-expanded={open}
+        aria-controls={open ? id : undefined}
+        onClick={() => {
+          pressed.current = true;
+          setOpen(!open);
+        }}
+        data-testid="messages-seedelfs-row"
+      >
+        <span className="menu-row__text">
+          <span>{t("messages.seedelfs")}</span>
+          <span className="menu-row__sub menu-row__sub--wrap" data-testid="messages-seedelfs-count">
+            {t("messages.seedelfsTaking", { on: taking, total: seedelfs.length })}
+          </span>
+        </span>
+        {open ? <ChevronDownIcon size={16} /> : <ChevronRightIcon size={16} />}
+      </button>
+      {open && <SeedelfSwitches boxId={id} seedelfs={seedelfs} onSwitched={onSwitched} />}
+    </div>
+  );
+}
+
+/**
  * The Seedelfs under the wallet's key and whether each takes first messages (W8): on for one this browser made, at the
  * register it put it under; off for any other until the user turns it on, since one someone else made under the key can
  * tie the user's Seedelfs to each other once it's answered at. Turning one on or off asks no server.
  */
-function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[]; onSwitched: (o: MessagingOverview) => void }) {
+function SeedelfSwitches({
+  boxId,
+  seedelfs,
+  onSwitched,
+}: {
+  /** What the row that opens them names as the box it controls. */
+  boxId: string;
+  seedelfs: MessagingSeedelf[];
+  onSwitched: (o: MessagingOverview) => void;
+}) {
   const t = useT();
   const id = useId();
   const press = usePress();
@@ -679,7 +766,16 @@ function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[
   const flip = (s: MessagingSeedelf) =>
     press.run(async () => onSwitched(await call("messaging-answer-at", { name: s.name, register: s.register, on: !s.on })), keyOf(s));
   return (
-    <div className="messages__seedelfs" data-testid="messages-seedelfs">
+    <div className="messages__seedelfs" id={boxId} data-testid="messages-seedelfs">
+      {/* Over the switches, where they're read before one is pressed: under fifteen of them, the second line was off
+          the screen (the 1.10.0 gate's blind reading). With none on, what that means, which the count alone didn't
+          say. */}
+      {!seedelfs.some((s) => s.on) && (
+        <p className="note" data-testid="messages-seedelfs-none">
+          {t("messages.seedelfsNone")}
+        </p>
+      )}
+      {seedelfs.some((s) => !s.made) && <p className="note">{t("messages.privacy.answerAtMade")}</p>}
       {seedelfs.map((s, i) => (
         <div className="setting-row" key={keyOf(s)} data-testid="messages-seedelf">
           <span className="stack-tight">
@@ -709,7 +805,6 @@ function SeedelfSwitches({ seedelfs, onSwitched }: { seedelfs: MessagingSeedelf[
           />
         </div>
       ))}
-      {seedelfs.some((s) => !s.made) && <p className="note">{t("messages.privacy.answerAtMade")}</p>}
       {press.error && (
         <p className="error" role="alert">
           {press.error}
@@ -735,6 +830,7 @@ function ConversationRow({
   conversation: c,
   contacts,
   on,
+  held,
   now,
   current,
   onOpen,
@@ -743,6 +839,8 @@ function ConversationRow({
   contacts: Contact[] | undefined;
   /** The switch: off, what's written waits, never "Sending…". */
   on: boolean;
+  /** What holds the network's messages back, the switch on: a waiting message's row says it, never "Sending…". */
+  held: Held | undefined;
   now: number;
   current: boolean;
   onOpen: () => void;
@@ -751,20 +849,28 @@ function ConversationRow({
   const title = conversationTitle(c, contacts);
   const seedelf = seedelfOf(c);
   const known = !!seedelf || !!c.name;
-  // A Seedelf no contact names goes by its tag, which anyone can mint: its name's last sixteen beside it, the part no
-  // one else can choose, so two Seedelfs tagged alike don't read as one. Its own, never the first thing cut (screens#4).
+  // A Seedelf no contact names goes by its tag, which anyone can mint: its name's last sixteen and its output index
+  // beside it, so two Seedelfs tagged alike don't read as one. The sixteen are bytes of the transaction its mint spent,
+  // which one minted from another output of it shares; the index tells those apart (seedelf-name.ts `seedelfIndex`).
+  // Its own, never the first thing cut (screens#4).
   const tail = conversationTail(c, contacts);
   // Started again and answered here since: live, so its last message says, never "Started again" (screens#2).
   const restarted = c.restartedAs !== undefined && !answeredAfterRestart(c);
+  // A last message of the user's that ended unsent (the server refused it, or the wallet couldn't seal it) is said, as
+  // its thread says it: its text alone read "You: …", as if it went (the 1.10.0 gate's blind reading).
   const state = c.unreadable
     ? t("messages.state.warn.unreadable")
     : restarted
       ? t("messages.state.restarted")
       : c.unreachable
         ? t("messages.state.warn.cantContinue")
-        : c.unanswered
-          ? t("messages.state.warn.noReply")
-          : undefined;
+        : c.last?.unsent === "refused"
+          ? t("messages.state.warn.notSent")
+          : c.unanswered
+            ? t("messages.state.warn.noReply")
+            : undefined;
+  // While one waits, what it waits for, as its thread says it (messaging.ts `rowWaiting`).
+  const waiting = rowWaiting(c, on, held);
   // The other side's text is only ever text: "You:" and a reveal's line are the wallet's, each in a style of its own,
   // so nothing a message says reads as either (screens#1, screens#13).
   const preview =
@@ -796,7 +902,7 @@ function ConversationRow({
               state ? "convo__preview convo__preview--state" : c.last?.dir === "out" && !c.outbox ? "convo__preview convo__preview--you" : "convo__preview"
             }
           >
-            {c.outbox > 0 ? t(on ? "messages.sending" : "messages.waiting") : (state ?? preview)}
+            {waiting ? t(waiting) : (state ?? preview)}
           </span>
           <Unread count={c.unread} />
         </span>
@@ -808,9 +914,9 @@ function ConversationRow({
 /**
  * A conversation's header: Back where the list isn't beside it, its mark and name, its §7 label; and, where the other
  * side's Seedelf is known (written to, or shown and verified), Copy and Save to contacts beside Rename and Delete. A name
- * that's a tag has its last sixteen beside it, as the list's row does (screens#3). Narrow, with Back, the name and the
- * label's lines go under the row of buttons, across the pane: beside four buttons they broke anywhere in a 112 px
- * column, and the sixteen had no room (screens#14).
+ * that's a tag has its last sixteen and its output index beside it, as the list's row does (screens#3). Narrow, with
+ * Back, the name and the label's lines go under the row of buttons, across the pane: beside four buttons they broke
+ * anywhere in a 112 px column, and the sixteen had no room (screens#14).
  */
 function PaneHead({
   title,
@@ -825,7 +931,7 @@ function PaneHead({
   onDelete,
 }: {
   title: string;
-  /** The last sixteen of a Seedelf the name is the tag of (`conversationTail`). */
+  /** The last sixteen and the output index of a Seedelf the name is the tag of (`conversationTail`). */
   tail?: string;
   known: boolean;
   detail: string[];
@@ -965,6 +1071,7 @@ function ThreadPane({
   cid,
   draft,
   on,
+  held,
   contacts,
   onContacts,
   titleOf,
@@ -976,6 +1083,8 @@ function ThreadPane({
   cid: string;
   draft?: Draft;
   on: boolean;
+  /** What holds the network's messages back, the switch on (the overview's): a waiting message says it. */
+  held: Held | undefined;
   contacts: Contact[] | undefined;
   onContacts: (contacts: Contact[]) => void;
   titleOf: (cid: string) => string | undefined;
@@ -987,6 +1096,8 @@ function ThreadPane({
 }) {
   const t = useT();
   const network = useNetwork();
+  // Not open here: the conversation is read, named and deleted, and nothing is written in it (the worker refuses too).
+  const closed = !messagingOpen(network);
   const [thread, setThread] = useState<MessagingThread>();
   const [error, setError] = useState<string>();
   const [again, setAgain] = useState(false);
@@ -1136,6 +1247,7 @@ function ThreadPane({
       <MessageList
         messages={thread.messages}
         on={on}
+        held={held}
         contacts={contacts}
         busy={pressing !== undefined}
         checking={pressing?.kind === "check"}
@@ -1184,6 +1296,7 @@ function ThreadPane({
               setAgain(true);
               setKept(undefined);
             }}
+            disabled={closed}
           >
             {t("messages.startAgain")}
           </button>
@@ -1208,7 +1321,7 @@ function ThreadPane({
         </div>
       )}
       {/* Once answered, where this wallet wrote first: its Seedelf, proved to the other side alone (§19). */}
-      {!dead && !restarting && thread.seedelfs && (
+      {!dead && !restarting && !closed && thread.seedelfs && (
         <div className="thread__actions">
           <button type="button" className="link" onClick={() => setRevealing(true)} data-testid="thread-reveal">
             {t("messages.reveal.button")}
@@ -1226,6 +1339,7 @@ function ThreadPane({
           // A share used up has no room to count down: its line above says to wait for a reply.
           maxBytes={restarting || usedUp ? undefined : thread.maxTextBytes}
           off={!on}
+          closed={closed}
           disabled={usedUp && !restarting}
           onSend={send}
         />
@@ -1316,6 +1430,9 @@ function RevealSeedelf({
           value={name}
           onChange={setName}
           testId="messages-reveal-pick"
+          // The one place the user chooses WHICH Seedelf to show: each name whole, on as many lines as it takes. Cut to
+          // one line, it lost its last sixteen and its index, which tell two tagged alike apart.
+          wrap
           options={seedelfs.map((s) => ({ value: s, label: ownShown(s), icon: <ShieldIcon size={16} /> }))}
         />
         <Callout tone="privacy">{t("messages.privacy.reveal")}</Callout>
@@ -1414,6 +1531,7 @@ function NameConversation({ cid, name, onClose }: { cid: string; name?: string; 
 function MessageList({
   messages,
   on,
+  held,
   before,
   contacts,
   busy = false,
@@ -1424,6 +1542,7 @@ function MessageList({
 }: {
   messages: MessagingEntry[];
   on: boolean;
+  held?: Held;
   before?: ReactNode;
   contacts?: Contact[];
   /** A press on one of them is under way. */
@@ -1501,6 +1620,7 @@ function MessageList({
                     <SentState
                       entry={m}
                       on={on}
+                      held={held}
                       now={now}
                       waitsForReply={waitsForReply}
                       busy={busy}
@@ -1577,25 +1697,24 @@ function RevealNotice({
   );
 }
 
-/** A wait as a clock: 2:14, or 1:02:14 past an hour. */
-function clockOf(ms: number): string {
-  const all = Math.max(0, Math.ceil(ms / 1000));
-  const [h, m, sec] = [Math.floor(all / 3600), Math.floor(all / 60) % 60, all % 60];
-  const two = (n: number) => String(n).padStart(2, "0");
-  return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
-}
-
 /**
  * A sent message's state: being prepared (its stamp, solved with the switch off too), waiting for a reply (the
  * writer's share of first messages used up), sending, or waiting for the switch; "sent, expires at …" (never
  * "delivered"), and "sent" once that's past; or not sent, by the server (with Send again where its bytes are kept) or
  * by the wallet itself. While its proof of work is solved, about how long that takes; while the relay has asked this
- * message's size, or every post, to wait, how long until it's tried again (the owner, 2026-11-22). The countdown isn't
- * read out each second (screens#14).
+ * message's size, or every post, to wait, in how long it's tried again (the owner, 2026-11-22), in words a time of day
+ * can't be read into ("sending in 3 min", as a declined site's wait is said: "2:14" read as a clock's). It isn't read
+ * out as it changes (screens#14).
+ *
+ * What holds the whole network back comes first (`held`), so no message counts down beside the notice that says the
+ * server is asked again in an hour (the 1.10.0 gate's blind reading). Paused, nothing is solved or posted: every
+ * waiting message says so. With no answer from the server, one being posted waits for it; one still being prepared
+ * goes on being prepared. The conversation's row says the same (messaging.ts `rowWaiting`).
  */
 function SentState({
   entry,
   on,
+  held,
   now,
   waitsForReply,
   busy,
@@ -1604,6 +1723,7 @@ function SentState({
 }: {
   entry: MessagingEntry;
   on: boolean;
+  held?: Held;
   now: number;
   waitsForReply: boolean;
   busy: boolean;
@@ -1614,7 +1734,10 @@ function SentState({
   const t = useT();
   // Under 2 s of work isn't worth a number.
   const seconds = entry.working && entry.working.seconds >= 2 ? entry.working.seconds : undefined;
-  const countdown = entry.sent === "pending" && on && seconds === undefined && entry.nextTry !== undefined && entry.nextTry > now;
+  const paused = on && held === "paused";
+  const offline = on && held === "offline";
+  const countdown =
+    entry.sent === "pending" && on && !paused && !offline && seconds === undefined && entry.nextTry !== undefined && entry.nextTry > now;
   const byServer = entry.sent === "refused" && entry.refusedBy !== "wallet";
   const text =
     entry.sent === "posted"
@@ -1623,19 +1746,23 @@ function SentState({
         : t("messages.sent.postedNoTime")
       : entry.sent === "refused"
         ? t(byServer ? "messages.sent.warn.refused" : "messages.sent.warn.refusedWallet")
-        : entry.sent === "queued"
-          ? seconds !== undefined
-            ? t("messages.sent.preparing", { seconds })
-            : waitsForReply
-              ? t("messages.sent.waitsForReply")
-              : t("messages.sent.queued")
-          : !on
-            ? t("messages.sent.waiting")
-            : seconds !== undefined
-              ? t("messages.sent.working", { seconds })
-              : countdown
-                ? t("messages.sent.nextTry", { time: clockOf(entry.nextTry! - now) })
-                : t("messages.sent.pending");
+        : paused
+          ? t("messages.sent.waitingPaused")
+          : entry.sent === "queued"
+            ? seconds !== undefined
+              ? t("messages.sent.preparing", { seconds })
+              : waitsForReply
+                ? t("messages.sent.waitsForReply")
+                : t("messages.sent.queued")
+            : !on
+              ? t("messages.sent.waiting")
+              : offline
+                ? t("messages.sent.waitingServer")
+                : seconds !== undefined
+                  ? t("messages.sent.working", { seconds })
+                  : countdown
+                    ? t("messages.sent.nextTry", { time: waitText(entry.nextTry! - now) })
+                    : t("messages.sent.pending");
   return (
     <span
       className={entry.sent === "refused" ? "bubble__state bubble__state--refused" : "bubble__state"}
@@ -1676,6 +1803,8 @@ function RequestPane({
 }) {
   const t = useT();
   const network = useNetwork();
+  // Not open here: the request is read and deleted, never accepted or answered (the worker refuses both too).
+  const closed = !messagingOpen(network);
   const [messages, setMessages] = useState<MessagingEntry[]>();
   const [error, setError] = useState<string>();
   // Accept, or a reply (which accepts first): one at a time, so the request is never accepted twice; Accept says it's
@@ -1745,7 +1874,13 @@ function RequestPane({
       {messages ? <MessageList messages={messages} on={on} /> : <div className="thread__scroll">{error ? null : <p className="note center">{t("messages.loading")}</p>}</div>}
       <div className="thread__state thread__state--request">
         <span>{t("messages.privacy.request")}</span>
-        <button type="button" className="secondary" onClick={() => void accept()} disabled={busy !== undefined} data-testid="request-accept">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => void accept()}
+          disabled={busy !== undefined || closed}
+          data-testid="request-accept"
+        >
           <PressLabel waits={acceptWaits}>{t("messages.accept")}</PressLabel>
         </button>
       </div>
@@ -1754,7 +1889,15 @@ function RequestPane({
           {error}
         </p>
       )}
-      <Composer text={text} onText={setText} placeholder={t("messages.reply")} off={!on} disabled={busy === "accept"} onSend={reply} />
+      <Composer
+        text={text}
+        onText={setText}
+        placeholder={t("messages.reply")}
+        off={!on}
+        closed={closed}
+        disabled={busy === "accept"}
+        onSend={reply}
+      />
       {deleting && (
         <DeleteConversation
           cid={cid}
@@ -1783,6 +1926,7 @@ function NewMessagePane({
   onStarted: (cid: string) => void;
 }) {
   const t = useT();
+  const closed = !messagingOpen(useNetwork());
   const [to, setTo] = useState("");
   const [found, setFound] = useState<Found>({ state: "idle" });
   const [text, setText] = useState("");
@@ -1833,7 +1977,15 @@ function NewMessagePane({
         )}
         <p className="note">{t("messages.firstTakes")}</p>
       </div>
-      <Composer text={text} onText={setText} placeholder={t("messages.firstMessage")} off={!on} disabled={!ready} onSend={start} />
+      <Composer
+        text={text}
+        onText={setText}
+        placeholder={t("messages.firstMessage")}
+        off={!on}
+        closed={closed}
+        disabled={!ready}
+        onSend={start}
+      />
     </div>
   );
 }
@@ -1855,6 +2007,7 @@ export function Composer({
   placeholder,
   maxBytes,
   off,
+  closed,
   disabled,
   onSend,
 }: {
@@ -1865,6 +2018,12 @@ export function Composer({
   placeholder: string;
   maxBytes?: number;
   off: boolean;
+  /**
+   * Messages isn't open on this network (networks.ts `MESSAGING_NETWORKS`): nothing is written from here, whatever a
+   * development build left to write in, and the box says where Messages is, in the list's own words. The worker
+   * refuses it too (1.10.0's second review).
+   */
+  closed?: boolean;
   disabled?: boolean;
   onSend: (text: string) => Promise<boolean>;
 }) {
@@ -1877,7 +2036,7 @@ export function Composer({
   const bytes = utf8Length(text);
   const over = maxBytes !== undefined && bytes > maxBytes;
   const near = maxBytes !== undefined && bytes > maxBytes * 0.8;
-  const can = !!text.trim() && !over && !busy && !disabled;
+  const can = !!text.trim() && !over && !busy && !disabled && !closed;
 
   useLayoutEffect(() => {
     const el = box.current;
@@ -1906,10 +2065,16 @@ export function Composer({
 
   return (
     <div className="composer-wrap">
-      {off && (
-        <p className="note composer__off" data-testid="composer-off">
-          {t("messages.offWaits")}
+      {closed ? (
+        <p className="note composer__off" data-testid="composer-closed">
+          {openOn(t)}
         </p>
+      ) : (
+        off && (
+          <p className="note composer__off" data-testid="composer-off">
+            {t("messages.offWaits")}
+          </p>
+        )
       )}
       {error && (
         <p className="error" role="alert" data-testid="composer-error">
@@ -1938,6 +2103,7 @@ export function Composer({
           aria-label={placeholder}
           aria-invalid={over || undefined}
           spellCheck={false}
+          disabled={closed || undefined}
           data-testid="composer"
         />
         <button

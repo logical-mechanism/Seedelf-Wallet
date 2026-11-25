@@ -23,6 +23,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { dateLocale, type I18nKey, joinSentences, t, useT } from "../../i18n";
 
 import { entrySession, type ActivityEntry } from "../../shared/rpc";
+import { isSeedelfShort } from "../../shared/seedelf-name";
 import {
   activityAmount as amount,
   activityCsv,
@@ -338,7 +339,11 @@ export function Activity({
             {open.fee && <Row label={t("activity.row.fee")} value={`${formatAda(open.fee)}\u00a0₳`} />}
             {/* Who was paid, or who paid: a public Send's recipient was labelled "Seedelf", and a payment read from the
                 chain named no one (chunk 23's review, A-1). */}
-            {openDetail && <Row label={t(detailLabel(open))} value={openDetail} />}
+            {/* A Seedelf's saved short form "and 2 more" is a sentence, under its label: beside it, it broke after the
+                short form's "…" (the 1.10.0 gate's second review). */}
+            {openDetail && (
+              <Row label={t(detailLabel(open))} value={openDetail} stack={!!open.more && isSeedelfShort(open.detail ?? "")} />
+            )}
             {open.staking && poolOf(open.staking) && (
               <Row label={t("activity.row.pool")} value={poolOf(open.staking)!} title={open.staking.pool} />
             )}
@@ -417,6 +422,9 @@ export function EntryNote({ note }: { note: string }) {
   );
 }
 
+/** Where a Seedelf's saved short form may break: after its prefix, its "…" and the first eight of its sixteen. */
+const SHORT_BREAK = "5eed0e1f…".length + 8;
+
 /** Where "and 2 more" is cut around the name: no translation holds it. */
 const NAME_AT = "\u0000";
 
@@ -428,17 +436,30 @@ const NAME_AT = "\u0000";
  */
 export function Who({ name, more }: { name: string; more?: number }) {
   const t = useT();
-  // A tag or a $handle is short and said whole; an address or a Seedelf's name has no spaces and runs long. It's cut to
-  // parts nobody else can choose, and goes to a line of its own rather than give way: squeezed into the line, an
+  // A tag or a $handle is short and said whole; an address or a Seedelf's name has no spaces and runs long. It's cut as
+  // `shortCounterparty` cuts them, and goes to a line of its own rather than give way: squeezed into the line, an
   // address kept as few as three first letters and its checksum, which anyone can solve for (chunk 51, gap-g10#2).
-  const shown =
-    name.length > 24 && !/\s/.test(name) ? (
-      <span className="activity__who" title={name} data-value={name}>
-        {shortCounterparty(name)}
-      </span>
-    ) : (
-      <span>{name}</span>
-    );
+  //
+  // A Seedelf with no tag that a private Send paid, or one removed, comes already cut: the worker saved its short form
+  // (seedelf-name.ts `seedelfShort`), 28 to 30 characters with a no-break space before its index. It's the same part,
+  // said as it is and never cut again: as a plain span it could neither wrap nor shrink, and the line clipped its end,
+  // the index, beside most amounts at 360 px (the 1.10.0 gate's second review). Where the line has no room for it
+  // whole (beside "… and 1 token" in the side panel), it breaks after its "…" or in the middle of its sixteen: left to
+  // break anywhere, "#1" went to a line of its own. What an entry saved before that (twelve and six) is short, and
+  // stays a plain span.
+  const shown = isSeedelfShort(name) ? (
+    <span className="activity__who">
+      {name.slice(0, SHORT_BREAK)}
+      <wbr />
+      {name.slice(SHORT_BREAK)}
+    </span>
+  ) : name.length > 24 && !/\s/.test(name) ? (
+    <span className="activity__who" title={name} data-value={name}>
+      {shortCounterparty(name)}
+    </span>
+  ) : (
+    <span>{name}</span>
+  );
   if (!more) return shown;
   const [before, after] = t("activity.andMore", { first: NAME_AT, count: more }).split(NAME_AT);
   return (

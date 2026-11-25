@@ -90,7 +90,9 @@ describe("the runner keeps off the lanes and the ticks (round 5, fix item 5)", {
       if (e.kind === "sessions") return;
       const syncs =
         e.kind === "alarm"
-          ? p.messaging.syncAll(["preprod"])
+          ? // The alarm's own run, said so, as sw.ts's alarm says it (1.10.0's second review, F1): a tick is served only
+            // by its own run. Plain, it was taken for the alarm's only because any lane near a tick served it: the bug.
+            p.messaging.syncAll(["preprod"], { alarm: true })
           : p.messaging.sync("preprod", { page: e.kind, kind: e.view ? "view" : "grid" });
       await syncs.catch(() => undefined);
     };
@@ -136,28 +138,35 @@ describe("the runner keeps off the lanes and the ticks (round 5, fix item 5)", {
     // Every step's call: none from TAKE_MARGIN_MS before a tick until its lane started (or, for the sessions' alarm,
     // TICK_GRACE_MS past it), none in a lane; and at every tick's first page no step running.
     // The runner's own: what a lane does is the lane's (`expectLanesClean` above).
-    const inLane = new Set(lanesOf(x.a).flatMap((lane) => Array.from({ length: lane.to - lane.from + 1 }, (_, i) => x.a.log[lane.from + i]!)));
-    const steps = (entries: LogEntry[]) => entries.filter((l) => !inLane.has(l) && ["get", "set", "remove", "open", "receive", "step-start"].includes(l.what));
-    // A page's first sync is as it's shown: off the grid (the residual's "a page's own sync as it's shown"), and the first
-    // page's starts the grid. Every tick after is one the worker expects.
-    let prev = started;
-    let checked = 0;
-    for (const m of marks.a!) {
-      if (!m.view) {
-        // A tick no lane serves is waited for until it's TICK_GRACE_MS past, and no longer.
-        const until = m.kind === "sessions" ? x.a.log.findIndex((l, i) => i >= m.index && l.at >= m.at + TICK_GRACE_MS) : m.index;
-        const window = x.a.log.slice(prev, until < 0 ? x.a.log.length : until).filter((l) => l.at >= m.at - TAKE_MARGIN_MS);
-        expect(steps(window), `the runner's calls in the margin before ${m.kind} at +${(m.at - base) / 1000} s`).toEqual([]);
-        checked++;
+    // For B as for A (1.10.0's second review: the margin was looked at for A alone, and B's own first phase after a lane
+    // is the runner's work as much as A's take).
+    for (const [key, p, from] of [
+      ["a", x.a, started],
+      ["b", x.b, 0],
+    ] as const) {
+      const inLane = new Set(lanesOf(p).flatMap((lane) => Array.from({ length: lane.to - lane.from + 1 }, (_, i) => p.log[lane.from + i]!)));
+      const steps = (entries: LogEntry[]) => entries.filter((l) => !inLane.has(l) && ["get", "set", "remove", "open", "receive", "step-start"].includes(l.what));
+      // A page's first sync is as it's shown: off the grid (the residual's "a page's own sync as it's shown"), and the
+      // first page's starts the grid. Every tick after is one the worker expects.
+      let prev = from;
+      let checked = 0;
+      for (const m of marks[key]!) {
+        if (!m.view) {
+          // A tick no lane serves is waited for until it's TICK_GRACE_MS past, and no longer.
+          const until = m.kind === "sessions" ? p.log.findIndex((l, i) => i >= m.index && l.at >= m.at + TICK_GRACE_MS) : m.index;
+          const window = p.log.slice(prev, until < 0 ? p.log.length : until).filter((l) => l.at >= m.at - TAKE_MARGIN_MS);
+          expect(steps(window), `${key}: the runner's calls in the margin before ${m.kind} at +${(m.at - base) / 1000} s`).toEqual([]);
+          checked++;
+        }
+        prev = m.index;
       }
-      prev = m.index;
-    }
-    expect(checked).toBe(events.length - 2);
-    let depth = 0;
-    for (const l of x.a.log) {
-      if (l.what === "step-start") depth++;
-      else if (l.what === "step-end") depth--;
-      else if (l.what === "lane-start") expect(depth, "a step running as a lane starts").toBe(0);
+      expect(checked).toBe(events.length - 2);
+      let depth = 0;
+      for (const l of p.log) {
+        if (l.what === "step-start") depth++;
+        else if (l.what === "step-end") depth--;
+        else if (l.what === "lane-start") expect(depth, `${key}: a step running as a lane starts`).toBe(0);
+      }
     }
     // The backlog was taken between the ticks: every envelope opened, over many of them.
     const opens = x.a.log.filter((l) => l.what === "open");
@@ -201,7 +210,8 @@ describe("the runner keeps off the lanes and the ticks (round 5, fix item 5)", {
     // The tick: its lane runs, then the step's write.
     clock.now = tickAt;
     await x.a.wallet.touch();
-    await x.a.messaging.syncAll(["preprod"]);
+    // The alarm's own run, said so (F1, as in (a)).
+    await x.a.messaging.syncAll(["preprod"], { alarm: true });
     await x.a.messaging.whenIdle();
     const wrote = x.a.log.findIndex((l, i) => i > after && l.what === "set" && l.name === record);
     const ended = x.a.log.findIndex((l, i) => i >= lane && l.what === "lane-end");

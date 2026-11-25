@@ -71,10 +71,12 @@ function timeParty(p: Party, crate: number[]): Timing {
       t.receives.push(performance.now() - s);
     }
   };
-  const wallet = p.wallet as unknown as Record<string, (task: (k: unknown) => unknown) => Promise<unknown>>;
+  const wallet = p.wallet as unknown as Record<string, (task: (k: unknown) => unknown, admit?: unknown) => Promise<unknown>>;
   for (const kind of ["withKeys", "withStoreKey"]) {
     const real = wallet[kind]!.bind(p.wallet);
-    wallet[kind] = (task) =>
+    // The worker's admit check is handed on (1.10.0's second review: a wrapper that took the task alone ran this file's
+    // worker with the check off, so a call could run inside a lane here that the shipped wallet turns away).
+    wallet[kind] = (task, admit) =>
       real(async (k: unknown) => {
         const s = performance.now();
         try {
@@ -82,7 +84,7 @@ function timeParty(p: Party, crate: number[]): Timing {
         } finally {
           t.holds.push({ kind, ms: performance.now() - s });
         }
-      });
+      }, admit);
   }
   const push = Array.prototype.push;
   p.trace.push = function (this: string[], ...items: string[]) {

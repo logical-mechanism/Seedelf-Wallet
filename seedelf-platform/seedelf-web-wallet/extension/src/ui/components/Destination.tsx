@@ -212,8 +212,9 @@ export function DestinationField({
           <p className="note">
             {t("destination.found")}{" "}
             {read.seedelf.label && <><strong>{read.seedelf.label}</strong>{" ·\u00a0"}</>}
-            {/* Cut to parts no one else can choose: its prefix and its last sixteen (chunk 51, gap-g10#2). */}
-            <code title={read.seedelf.name}>{shortCounterparty(read.seedelf.name)}</code>
+            {/* Cut to its prefix, its last sixteen and its output index, which tells it from a Seedelf minted from
+                another output of the same transaction (chunk 51, gap-g10#2; the 1.10.0 gate). Whole, on one line. */}
+            <code className="note-part" title={read.seedelf.name}>{shortCounterparty(read.seedelf.name)}</code>
             {/* Your own isn't offered to Contacts, as your own address isn't (below), nor your own Seedelf on
                 Transfer's field. */}
             {(savedAs || !read.seedelf.own) && saveLink}

@@ -304,6 +304,132 @@ fn a_reveal_is_bound_to_its_conversation_name_and_register() {
     }
 }
 
+/// Cross-protocol (docs/joint-security.md, B5). A reveal holds two Schnorr
+/// transcripts under the key x, with one share c₁ and one response z₁:
+/// (T₁, c₁, z₁) on (p₀, A), and (T₁′, c₁, z₁) on the Seedelf's own register
+/// (g_S, u_S), as it stands on chain. Each passes a spending verifier only if
+/// that verifier's own challenge is c₁. What this shows, of three reveals
+/// (the initiator's, made with x, and two the reader makes itself, whose
+/// branch 1 is simulated, of the same Seedelf and of one neither side holds):
+///
+/// - **The share's shape**, which is what keeps them apart. c₁ = c − c₂ with
+///   c₂ not 0, so the share isn't the reveal's challenge itself; and as an
+///   integer it's 2²²⁴ or more, where the chain's challenge, a blake2b-224,
+///   is below it: so for these reveals no vkh and no [d] of the register
+///   makes the chain's challenge c₁. (One reveal in 2³⁰ has a share below
+///   2²²⁴, and then each try is one chance in 2²²⁴: B5's count.) A reveal
+///   whose share were the chain's challenge, a spending proof handed over as
+///   a reveal, fails here.
+/// - **The verifiers, run:** seedelf-crypto's, the chain's among them and
+///   Lovejoin's owner proof, refuse each transcript for its register and for
+///   two [d] of it with [d]T, under three vkhs, while taking a spending proof
+///   made with x for the same registers.
+///
+/// What it doesn't show: anything of the reveal's own challenge, its hash,
+/// label or what it covers. With that hash changed this still passes, as it
+/// should (1.10.0's second review tried SHA-256 of one byte): c₁ stays a
+/// share spread over the whole field. The reveal's challenge is held by
+/// `a_reveal_is_bound_to_its_conversation_name_and_register` and by the
+/// vectors (`reveal_vectors_match_the_file`).
+#[test]
+fn the_spending_verifiers_refuse_a_reveals_transcripts_and_its_share_is_none_of_their_challenges() {
+    use super::support::test_scalar;
+    use seedelf_crypto::lovejoin::{SchnorrProof, verify_schnorr};
+    use seedelf_crypto::schnorr::{create_proof, fiat_shamir_heuristic, prove};
+    let p = parties("reveal cross protocol");
+    let mut draw = Seeded::new("reveal cross protocol, the reader's own");
+    let shown = alices_seedelf();
+    let carols = seedelf(&seedelf_name("carol"), seedelf_register("carol"));
+    let hex_point = |point: &G1Projective| hex(point.to_compressed());
+    let vkhs = ["00".repeat(28), "11".repeat(28), "5eed".repeat(14)];
+
+    // The chain's verifier is asked as a spend asks it: a spending proof
+    // made with x for either register passes.
+    let (base, initiator) = (p.a.first.base.into(), p.a.first.initiator.into());
+    let (g_s, u_s) = (
+        shown.register().generator(),
+        shown.register().public_value(),
+    );
+    for (g, u) in [(g_s, u_s), (base, initiator)] {
+        let register = seedelf_crypto::register::Register::new(hex_point(&g), hex_point(&u));
+        let (z, t) = create_proof(register, p.alice.scalar(), vkhs[0].clone()).unwrap();
+        assert!(prove(&hex_point(&g), &hex_point(&u), &z, &t, &vkhs[0]).unwrap());
+    }
+
+    // Drawn from the test's own source, so the shares are the same every run.
+    let reveals = [
+        p.a.reveal_with(&p.alice, &shown, &mut draw).unwrap(),
+        forge(&p.b, &p.bob.scalar(), &shown, &mut draw).0,
+        forge(&p.b, &p.bob.scalar(), &carols, &mut draw).0,
+    ];
+    // The chain's challenges are below this: 2²²⁴, big-endian.
+    let mut chain_space = [0u8; 32];
+    chain_space[3] = 1;
+    for reveal in reveals {
+        assert_eq!(p.b.verify_reveal(&reveal), Ok(()));
+        // The commitments as anyone holding the reveal works them out:
+        // T₁ = [z₁]p₀ − [c₁]A and T₁′ = [z₁]g_S − [c₁]u_S.
+        let statement = Statement::of(&p.b, reveal.seedelf());
+        let commitments = statement.commitments_of(&reveal.proof);
+        let (c1, z1) = (reveal.proof.c1, reveal.proof.z1);
+        // The share: part of the reveal's challenge, never all of it, and
+        // outside the chain's challenge space.
+        let c = scalar_mod_q(&statement.challenge(&commitments));
+        assert_eq!(c1 + reveal.proof.c2, c);
+        assert_ne!(reveal.proof.c2, Scalar::from(0u64));
+        assert_ne!(c1, c);
+        assert!(
+            c1.to_bytes_be() >= chain_space,
+            "a share below 2²²⁴: one reveal in 2³⁰ has one, so draw under another label"
+        );
+        let register = reveal.register();
+        let transcripts = [
+            (
+                register.generator(),
+                register.public_value(),
+                commitments.t1_seedelf,
+            ),
+            (base, initiator, commitments.t1),
+        ];
+        for (g, u, t) in transcripts {
+            let t = G1Projective::from(t);
+            // A transcript under the share c₁: all a verifier's own
+            // challenge would have to be for (T, z₁) to pass it.
+            assert_eq!(g * z1, t + u * c1);
+            for d in [Scalar::from(1u64), test_scalar("d1"), test_scalar("d2")] {
+                let (gd, ud, td) = (g * d, u * d, t * d);
+                for vkh in &vkhs {
+                    // The chain's challenge: blake2b-224 of g ‖ T ‖ u ‖ vkh,
+                    // as an integer.
+                    let challenge = fiat_shamir_heuristic(
+                        hex_point(&gd),
+                        hex_point(&td),
+                        hex_point(&ud),
+                        vkh.clone(),
+                    );
+                    assert_ne!(
+                        format!("{:0>64}", challenge.unwrap()),
+                        hex(c1.to_bytes_be())
+                    );
+                    let spends = prove(
+                        &hex_point(&gd),
+                        &hex_point(&ud),
+                        &hex(z1.to_bytes_be()),
+                        &hex_point(&td),
+                        vkh,
+                    );
+                    assert!(!spends.unwrap());
+                }
+                let lovejoin = SchnorrProof {
+                    t: td.to_compressed(),
+                    z: z1.to_bytes_be(),
+                };
+                assert!(!verify_schnorr(&gd, &ud, &lovejoin, b"any ctx"));
+            }
+        }
+    }
+}
+
 #[test]
 fn no_single_bit_changed_reads_as_a_reveal() {
     let p = parties("reveal bits");

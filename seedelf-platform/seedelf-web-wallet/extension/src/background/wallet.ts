@@ -206,6 +206,17 @@ export interface WalletDeps {
   /** Replaces a WebAssembly instance that trapped with a fresh one (wasm.ts `freshWasm`). */
   fresh?: () => void;
   /**
+   * Overwrites what calls left on WebAssembly's stack (`stackScrub`): called once after a lock's keys are freed, and
+   * once after keys are derived. A wallet without one locks and unlocks as it did before there was one.
+   */
+  scrub?: () => void;
+  /**
+   * Replaces the WebAssembly instance with a fresh one and overwrites the old one's whole memory with zeros (wasm.ts
+   * `renewWasm`): called once after a lock's keys are freed and the stack scrubbed, since a call can have copied a
+   * key's bytes from the stack into the heap, where neither reaches. A wallet without one locks as it did before.
+   */
+  renew?: () => void;
+  /**
    * Which public account the wallet works on: the user's choice
    * (preferences.ts `AccountChoice`). Read at every key use, so a switch
    * needs nothing else — the next use re-derives (`load`). Account 0 without
@@ -261,6 +272,15 @@ export function phrasePin(phrase?: string): PhrasePin {
   };
 }
 
+/**
+ * The module's scrub of its own stack, as a wallet's `scrub` (the worker wires it, sw.ts): `scrubStack` overwrites the
+ * top 512 KiB of WebAssembly's stack, where calls leave copies of the keys they worked with and of what the keys were
+ * derived from (wasm/src/lib.rs `scrub_stack`). A module built before it has none, and then this does nothing.
+ */
+export function stackScrub(wasm: typeof Wasm): () => void {
+  return () => (wasm as { scrubStack?: () => void }).scrubStack?.();
+}
+
 export class Wallet {
   private keys: Keys | undefined;
   /**
@@ -277,8 +297,21 @@ export class Wallet {
    * clears it. The Unlock screen says so (Status `lockedBy`).
    */
   private lockedBy: "trap" | undefined;
+  /**
+   * How many times this worker's wallet has been opened: an unlock, a create, a restore (`opened`, read with no turn
+   * of the queue). A call asked under one count that finds another was asked of an unlock that has ended, a lock in
+   * between or another phrase restored: Seedelf Messaging reads and writes nothing more for it (messaging.ts
+   * `admitted`). A lock alone doesn't move it, since a locked wallet refuses by itself; nor does a worker Chrome
+   * starts while unlocked, which opens nothing: whatever was asked of the last worker went with it.
+   */
+  private opens = 0;
 
   constructor(private readonly deps: WalletDeps) {}
+
+  /** How many times this worker's wallet has been opened (`opens`): for a caller to keep, and look at again. */
+  get opened(): number {
+    return this.opens;
+  }
 
   /**
    * The current state. Also applies auto-lock, so the alarm just calls this. `admit`: looked at as its turn comes;
@@ -598,6 +631,7 @@ export class Wallet {
           cardano = this.deps.wasm.CardanoAccount.fromEntropy(entropy, index);
         } finally {
           entropy.fill(0);
+          this.scrub();
         }
         this.others.set(index, cardano);
       }
@@ -727,6 +761,8 @@ export class Wallet {
   }
 
   private async open(entropy: Uint8Array): Promise<void> {
+    // First: whatever was asked of the last unlock finds another count from here on (`opened`).
+    this.opens++;
     this.lockedBy = undefined;
     this.free();
     this.keys = this.derive(entropy, await this.active());
@@ -737,16 +773,33 @@ export class Wallet {
     await this.deps.autoLock.start();
   }
 
+  /**
+   * The keys of `entropy`. The derivations leave what the keys come from on WebAssembly's stack (the BIP39 seed, the
+   * master key, the keys between), where the next call that builds something could copy bytes of it into the heap
+   * before a lock's scrub: so the stack is scrubbed as soon as they're done.
+   */
   private derive(entropy: Uint8Array, account: number): Keys {
     const { wasm } = this.deps;
-    const seedelf = wasm.SeedelfKey.fromEntropy(entropy, 0);
+    let seedelf: Wasm.SeedelfKey | undefined;
     let cardano: Wasm.CardanoAccount | undefined;
     try {
+      seedelf = wasm.SeedelfKey.fromEntropy(entropy, 0);
       cardano = wasm.CardanoAccount.fromEntropy(entropy, account);
       return { seedelf, cardano, account, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
     } catch (e) {
       freeQuietly(seedelf, cardano);
       throw e;
+    } finally {
+      this.scrub();
+    }
+  }
+
+  /** Scrubs WebAssembly's stack, in its own try: an instance that trapped refuses it, and nothing fails for it. */
+  private scrub(): void {
+    try {
+      this.deps.scrub?.();
+    } catch {
+      // Its instance is broken, and refuses this as it refuses free(): freshWasm drops it, memory and all.
     }
   }
 
@@ -789,7 +842,10 @@ export class Wallet {
     return Object.keys(sends).length ? sends : undefined;
   }
 
-  /** Drops the keys, freeing each one it can: never throws, and never keeps one. */
+  /**
+   * Drops the keys, freeing each one it can, then scrubs what their calls left on WebAssembly's stack: never throws,
+   * and never keeps one.
+   */
   private free(): void {
     const keys = this.keys;
     const others = [...this.others.values()];
@@ -799,6 +855,16 @@ export class Wallet {
     this.others.clear();
     freeQuietly(...others);
     if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime);
+    // Only after keys were held: with none there's nothing of theirs to scrub, as at every look at a locked wallet.
+    if (keys || others.length) {
+      this.scrub();
+      // Then the whole instance goes, memory and all. In its own try, as the scrub is: a lock never fails for it.
+      try {
+        this.deps.renew?.();
+      } catch {
+        // The instance stays, scrubbed: storage is cleared and the keys are freed all the same.
+      }
+    }
   }
 
   /**
@@ -836,9 +902,13 @@ export class Wallet {
 }
 
 /**
- * Frees each of `objects` in its own try: free() overwrites the secrets
- * inside WebAssembly before releasing them, and an instance that trapped
- * refuses it, for one object or for all.
+ * Frees each of `objects` in its own try: free() overwrites each key where
+ * WebAssembly keeps it, in an allocation of its own, before releasing it
+ * (wasm/src/lib.rs, `Wiped`), and an instance that trapped refuses it, for
+ * one object or for all. A copy a call left on WebAssembly's stack isn't
+ * reached by free(): a lock scrubs the stack's top 512 KiB after it
+ * (`stackScrub`), and until a lock such a copy stays until later calls
+ * overwrite it.
  */
 function freeQuietly(...objects: Array<{ free(): void } | undefined>): void {
   for (const object of objects) {

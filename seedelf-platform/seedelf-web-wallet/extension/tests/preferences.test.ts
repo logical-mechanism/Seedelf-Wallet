@@ -55,10 +55,15 @@ describe("preferences", () => {
     });
     expect(await prefs.lockAfterMs()).toBe(60 * 60_000);
 
-    // Messages' switches: one network's at a time, the other kept, and only ever a boolean.
+    // Messages' switches: one network's at a time, the other kept, and only ever a boolean. Mainnet's stays off:
+    // Messages isn't open there yet (networks.ts `MESSAGING_NETWORKS`; messaging-open.test.ts).
+    await prefs.set({ messaging: { preprod: true } as never });
+    expect((await prefs.get()).messaging).toEqual({ preprod: true, mainnet: false });
     await prefs.set({ messaging: { mainnet: true } as never });
-    expect((await prefs.get()).messaging).toEqual({ preprod: false, mainnet: true });
+    expect((await prefs.get()).messaging).toEqual({ preprod: true, mainnet: false });
     await prefs.set({ messaging: { preprod: "yes", mainnet: false } as never });
+    expect((await prefs.get()).messaging).toEqual({ preprod: true, mainnet: false });
+    await prefs.set({ messaging: { preprod: false } as never });
     expect((await prefs.get()).messaging).toEqual({ preprod: false, mainnet: false });
 
     // Nothing it can't be: 7 minutes, a currency the wallet doesn't offer, a string for a switch.

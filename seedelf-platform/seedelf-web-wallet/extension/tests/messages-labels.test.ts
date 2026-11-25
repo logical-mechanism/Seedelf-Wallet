@@ -15,9 +15,11 @@ import {
   conversationTail,
   conversationTitle,
   expiresOf,
+  heldOf,
   initialOf,
   ownShown,
   revealVerifiedText,
+  rowWaiting,
   seedelfOf,
   seedelfShown,
   shareUsedUp,
@@ -54,20 +56,20 @@ describe("§7's labels, each row of its table", () => {
   it("names a Seedelf the user wrote to by its tag, with its last sixteen beside it, and by a contact as Send does", () => {
     expect(label({ role: "initiator", handle: ALICE })).toEqual({
       title: "alice",
-      tail: "…0123456789abcdef",
-      detail: ["5eed0e1f…0123456789abcdef"],
+      tail: "…0123456789abcdef\u00a0#0",
+      detail: ["5eed0e1f…0123456789abcdef\u00a0#0"],
     });
     // A contact's name only for the contact's own Seedelf, and said to be one; no tail, which marks a tag.
     expect(label({ role: "initiator", handle: ALICE }, CONTACTS)).toEqual({
       title: "Alice B",
       tail: undefined,
-      detail: ["Your contact · 5eed0e1f…0123456789abcdef"],
+      detail: ["Your contact · 5eed0e1f…0123456789abcdef\u00a0#0"],
     });
     // The user's own name stands over the label, which is still said under it.
     expect(label({ role: "initiator", handle: ALICE, name: "Work" })).toEqual({
       title: "Work",
       tail: undefined,
-      detail: ["alice", "5eed0e1f…0123456789abcdef"],
+      detail: ["alice", "5eed0e1f…0123456789abcdef\u00a0#0"],
     });
   });
 
@@ -77,12 +79,12 @@ describe("§7's labels, each row of its table", () => {
     // The same text in the name's place: the tag is "Alice B", as is the contact.
     expect(stranger.title).toBe(contact.title);
     // But the tag carries its last sixteen and no "your contact"; the contact's line says it's one.
-    expect(stranger.tail).toBe("…aaaabbbbccccdddd");
+    expect(stranger.tail).toBe("…aaaabbbbccccdddd\u00a0#0");
     expect(contact.tail).toBeUndefined();
-    expect(stranger.detail).toEqual(["Verified Seedelf 5eed0e1f…aaaabbbbccccdddd", "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444)"]);
+    expect(stranger.detail).toEqual(["Verified Seedelf 5eed0e1f…aaaabbbbccccdddd\u00a0#0", "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444\u00a0#0)"]);
     expect(contact.detail).toEqual([
-      "Verified Seedelf 5eed0e1f…0123456789abcdef · your contact",
-      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444)",
+      "Verified Seedelf 5eed0e1f…0123456789abcdef\u00a0#0 · your contact",
+      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444\u00a0#0)",
     ]);
     // And the shared name is flagged, for the stranger's alone.
     expect(tagShared(LOOKALIKE, CONTACTS, [])).toBe(true);
@@ -104,7 +106,7 @@ describe("§7's labels, each row of its table", () => {
     expect(label({ role: "responder", to: MINE })).toEqual({
       title: "Unknown sender",
       tail: undefined,
-      detail: ["Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444)"],
+      detail: ["Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444\u00a0#0)"],
     });
     expect(seedelfOf({ role: "responder" })).toBeUndefined();
     expect(initialOf("Unknown sender", false)).toBe("?");
@@ -113,7 +115,7 @@ describe("§7's labels, each row of its table", () => {
   it("says 'Continues' only of a verified continuation, and 'Says it continues … (unverified)' of a claim", () => {
     expect(label({ role: "responder", continues: { cid: "old", verified: true } }).detail).toEqual(["Continues Old one"]);
     expect(label({ role: "responder", to: MINE, continues: { cid: "old", verified: false } }).detail).toEqual([
-      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444)",
+      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444\u00a0#0)",
       "Says it continues Old one (unverified)",
     ]);
     // A request's one line says what it continues first, where the rest would cut it off (screens#14).
@@ -132,19 +134,19 @@ describe("§7's labels, each row of its table", () => {
     expect(continuedName({ role: "responder" }, undefined)).toBeUndefined();
     expect(continuedName({ role: "responder", name: "Bea" }, undefined)).toBe("Bea");
     expect(continuedName({ role: "initiator", handle: ALICE }, CONTACTS)).toBe("Alice B");
-    expect(continuedName({ role: "initiator", handle: BARE }, undefined)).toBe("5eed0e1f…0123456789abcdef");
+    expect(continuedName({ role: "initiator", handle: BARE }, undefined)).toBe("5eed0e1f…0123456789abcdef\u00a0#0");
   });
 });
 
 describe("a verified reveal's line (protocol.md §19.5)", () => {
   it("says which it is, as Send does: a contact, a tag as a tag, or the short name alone", () => {
     expect(revealVerifiedText(ALICE, CONTACTS)).toBe(
-      "Showed you their Seedelf, your contact Alice B (5eed0e1f…0123456789abcdef), verified on the chain",
+      "Showed you their Seedelf, your contact Alice B (5eed0e1f…0123456789abcdef\u00a0#0), verified on the chain",
     );
     expect(revealVerifiedText(LOOKALIKE, CONTACTS)).toBe(
-      "Showed you their Seedelf tagged “Alice B” (5eed0e1f…aaaabbbbccccdddd), verified on the chain",
+      "Showed you their Seedelf tagged “Alice B” (5eed0e1f…aaaabbbbccccdddd\u00a0#0), verified on the chain",
     );
-    expect(revealVerifiedText(BARE, undefined)).toBe("Showed you their Seedelf 5eed0e1f…0123456789abcdef, verified on the chain");
+    expect(revealVerifiedText(BARE, undefined)).toBe("Showed you their Seedelf 5eed0e1f…0123456789abcdef\u00a0#0, verified on the chain");
   });
 
   it("never says 'Seedelf Seedelf' for an untagged one, in any language (i18n#2)", async () => {
@@ -159,11 +161,11 @@ describe("a verified reveal's line (protocol.md §19.5)", () => {
   it("says in Spanish and Japanese whose Seedelf it is: the other side's own (i18n#3)", async () => {
     await i18n.changeLanguage("es");
     expect(revealVerifiedText(LOOKALIKE, CONTACTS)).toBe(
-      "Te mostró su Seedelf con la etiqueta “Alice B” (5eed0e1f…aaaabbbbccccdddd), verificado en la cadena",
+      "Te mostró su Seedelf con la etiqueta “Alice B” (5eed0e1f…aaaabbbbccccdddd\u00a0#0), verificado en la cadena",
     );
     expect(revealVerifiedText(ALICE, CONTACTS)).toContain("tu contacto Alice B");
     await i18n.changeLanguage("ja");
-    expect(revealVerifiedText(BARE, undefined)).toBe("相手が自分の Seedelf 5eed0e1f…0123456789abcdef を見せました。チェーン上で検証済みです");
+    expect(revealVerifiedText(BARE, undefined)).toBe("相手が自分の Seedelf 5eed0e1f…0123456789abcdef\u00a0#0 を見せました。チェーン上で検証済みです");
     expect(revealVerifiedText(LOOKALIKE, CONTACTS)).toContain("タグ「Alice B」");
     await i18n.changeLanguage("en");
   });
@@ -182,11 +184,11 @@ describe("a verified reveal's line (protocol.md §19.5)", () => {
 
 describe("the names under a Seedelf", () => {
   it("cut a name to its prefix and its last sixteen, and read a tag as the list does", () => {
-    expect(seedelfShown(ALICE, undefined)).toEqual({ short: "5eed0e1f…0123456789abcdef", tail: "0123456789abcdef", tag: "alice" });
+    expect(seedelfShown(ALICE, undefined)).toEqual({ short: "5eed0e1f…0123456789abcdef\u00a0#0", tail: "0123456789abcdef\u00a0#0", tag: "alice" });
     expect(seedelfShown(ALICE, CONTACTS)).toMatchObject({ contact: "Alice B", tag: "alice" });
-    expect(seedelfShown(BARE, undefined)).toEqual({ short: "5eed0e1f…0123456789abcdef", tail: "0123456789abcdef" });
-    expect(ownShown(MINE)).toBe("web-wallet (5eed0e1f…1111222233334444)");
-    expect(ownShown(BARE)).toBe("5eed0e1f…0123456789abcdef");
+    expect(seedelfShown(BARE, undefined)).toEqual({ short: "5eed0e1f…0123456789abcdef\u00a0#0", tail: "0123456789abcdef\u00a0#0" });
+    expect(ownShown(MINE)).toBe("web-wallet (5eed0e1f…1111222233334444\u00a0#0)");
+    expect(ownShown(BARE)).toBe("5eed0e1f…0123456789abcdef\u00a0#0");
   });
 });
 
@@ -226,5 +228,39 @@ describe("times and the clock", () => {
     expect(clockHoursOf(2.5)).toBe("2.5");
     expect(clockHoursOf(-0.6)).toBe("0.6");
     expect(clockHoursOf(-3)).toBe("3");
+  });
+});
+
+// The 1.10.0 gate's blind reading: a waiting message's row said "Sending…" whatever held it, beside a thread that
+// said otherwise. The row's words, by what holds the message (the thread's line is Messages.tsx `SentState`'s, and
+// messages-screen.test.ts draws the two from one state).
+describe("what a conversation's row says while a message of the user's waits", () => {
+  const waiting = { outbox: 1, last: { dir: "out" as const, text: "hello" } };
+
+  it("is what holds it: the pause first, then a reply awaited, the switch, the server; else that it's on its way", () => {
+    expect(rowWaiting(waiting, true, undefined)).toBe("messages.sending");
+    expect(rowWaiting(waiting, false, undefined)).toBe("messages.waiting");
+    expect(rowWaiting(waiting, true, "paused")).toBe("messages.waitingPaused");
+    expect(rowWaiting(waiting, true, "offline")).toBe("messages.waitingServer");
+    const forReply = { outbox: 2, last: { dir: "out" as const, text: "hello", unsent: "reply" as const } };
+    expect(rowWaiting(forReply, true, undefined)).toBe("messages.waitingReply");
+    // Awaiting a reply whether the switch is on or the server answers: as the thread says of each such message.
+    expect(rowWaiting(forReply, false, undefined)).toBe("messages.waitingReply");
+    expect(rowWaiting(forReply, true, "offline")).toBe("messages.waitingReply");
+    // Paused, nothing goes, awaited or not.
+    expect(rowWaiting(forReply, true, "paused")).toBe("messages.waitingPaused");
+  });
+
+  it("is nothing where none waits: a refused one is the row's state, its text's place", () => {
+    expect(rowWaiting({ outbox: 0, last: { dir: "out", text: "hello", unsent: "refused" } }, true, undefined)).toBeUndefined();
+    expect(rowWaiting({ outbox: 0 }, true, "paused")).toBeUndefined();
+  });
+
+  it("reads the hold from the overview: the pause over no answer, none with neither", () => {
+    expect(heldOf(undefined)).toBeUndefined();
+    expect(heldOf({})).toBeUndefined();
+    expect(heldOf({ offline: true })).toBe("offline");
+    expect(heldOf({ paused: true })).toBe("paused");
+    expect(heldOf({ paused: true, offline: true })).toBe("paused");
   });
 });

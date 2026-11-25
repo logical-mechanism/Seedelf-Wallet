@@ -46,8 +46,9 @@ import { PoolDiscovery, serviceDeps } from "./lovejoin-pools";
 import { chromeArea } from "./storage";
 import { guardedConnector, keepStorageFromSites } from "./storage-access";
 import { serveUi } from "./ui-port";
-import { hasEntropy, noteStart, Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
+import { hasEntropy, noteStart, stackScrub, Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
 import { freshWasm, isTrap, loadWasm } from "./wasm";
+import { renewWasm } from "./wasm";
 
 const extensionOrigin = chrome.runtime.getURL("");
 
@@ -186,6 +187,10 @@ function getContext(): Promise<Worker> {
       // writes the choice and the next use follows it (accounts.ts).
       activeAccount: () => activeAccount(local),
       fresh: freshWasm,
+      // A lock's scrub of WebAssembly's stack, after its keys are freed (wallet.ts `free`).
+      scrub: stackScrub(wasm),
+      // Then the instance itself: a fresh one in its place, the old one's memory zeroed (wasm.ts).
+      renew: renewWasm,
       changed: () => {
         broadcast(STATE_CHANGED);
         // Sites waiting for an unlock go on. A swap that runs itself, and
@@ -319,7 +324,13 @@ function getContext(): Promise<Worker> {
         const [messages, runs] = await Promise.all([chrome.alarms.get(MESSAGING_ALARM), chrome.alarms.get(SESSIONS_ALARM)]);
         return [...(messages ? [{ at: messages.scheduledTime, lane: true }] : []), ...(runs ? [{ at: runs.scheduledTime, lane: false }] : [])];
       },
-      // Any call to Chrome resets the idle timer, which would otherwise stop the worker partway through a stamp.
+      // Chrome's pattern for a bounded task ("Keep a service worker alive until a long-running operation is
+      // finished"): any call to Chrome resets the idle timer, which would otherwise stop the worker partway through a
+      // post's or a first message's work, lost with it. Messages calls it between that work's slices, at most every
+      // 10 s, and only while the work is still wanted (messaging.ts `solve`): no timer of its own, so it ends with the
+      // solve, at a lock and at Remove wallet, and for a post's work at the switch turned off too (a first message's
+      // work asks only that the wallet is still unlocked). The continuous keep-alive is another thing, and not used
+      // (below).
       keepAlive: () => chrome.runtime.getPlatformInfo().then(() => undefined),
       changed: (n) => broadcast({ ...MESSAGING_CHANGED, network: n }),
       alarm: messagingAlarm,
@@ -400,6 +411,15 @@ const applyKept = () => {
 };
 chrome.runtime.onInstalled.addListener(applyKept);
 chrome.runtime.onStartup.addListener(applyKept);
+
+// This worker is never kept alive. Chrome stops it about 30 seconds after its last activity, the wallet still
+// unlocked, and the minute's alarm, or a page, starts it again: a restarted worker finds the unlock in session storage
+// and derives the keys again (wallet.ts). So what must outlive a stop belongs in storage, never in memory alone.
+// Chrome allows a continuous keep-alive on managed enterprise or education devices only ("It is not allowed in other
+// cases and the Chrome extension team reserves the right to take action against those extensions in the future", its
+// guide to service workers): no timer here calls an extension API to reset the idle timer, and none may come back
+// (tests/worker-messaging-wiring.test.ts holds it). The one call that does reset it is `keepAlive` above, the same
+// guide's pattern for one long operation, made by that operation alone.
 
 // The network changed (Settings' switch, or a test harness before the wallet
 // starts): every open page follows, and what sites were asking on the network
@@ -511,8 +531,9 @@ chrome.windows.onRemoved.addListener(() => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === MESSAGING_ALARM) {
+    // The alarm's own run, said so: it alone serves the alarm's tick for Messages' gate (messaging.ts `live`).
     void getContext()
-      .then((ctx) => ctx.messaging.syncAll(ctx.networks).catch(lockOnTrap(ctx)))
+      .then((ctx) => ctx.messaging.syncAll(ctx.networks, { alarm: true }).catch(lockOnTrap(ctx)))
       .catch(() => undefined);
     return;
   }

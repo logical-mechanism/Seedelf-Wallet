@@ -113,6 +113,23 @@ describe("Seedelf activity", () => {
     expect(entry!.assets).toEqual([{ ...TUSDM, quantity: "-3" }]);
   });
 
+  // The 1.10.0 gate: the worker cut a tagless Seedelf's name its own way (twelve and six). It's the one short form now
+  // (seedelf-name.ts `seedelfShort`), its output index in it, which tells two minted from one transaction apart.
+  it("names a Seedelf with no tag by its short form, its output index in it", async () => {
+    const t = await unlocked();
+    const paid = async (to: string, txHash: string) => {
+      const pending = { kind: "transfer" as const, network: "preprod" as const, txHash, submittedAt: 1, confirmations: null };
+      await t.activity.sent("preprod", pending, { fee: { total: "300000" }, payments: [{ to, lovelace: "5000000", tokens: [] }] });
+      return (await t.activity.seedelf("preprod")).find((e) => e.txHash === txHash)!.detail;
+    };
+    // Minted from outputs 0 and 1 of one transaction: the same last sixteen, bytes of that transaction's id.
+    const tx = "cfb7f7ed50c0d5ea614b7616eb63a4b4b8" + "9d".repeat(15);
+    const [zero, one] = ["00", "01"].map((index) => ("5eed0e1f" + index + tx).slice(0, 64)) as [string, string];
+    expect(zero.slice(-16)).toBe(one.slice(-16));
+    expect(await paid(zero, "c1".repeat(32))).toBe(`5eed0e1f…${zero.slice(-16)}\u00a0#0`);
+    expect(await paid(one, "c2".repeat(32))).toBe(`5eed0e1f…${one.slice(-16)}\u00a0#1`);
+  });
+
   it("keeps the tokens that arrived, and what a move-in brought in", async () => {
     const t = await unlocked();
     await t.balances.get("preprod");

@@ -28,7 +28,7 @@ import { Modal } from "../components/Modal";
 import { RefreshRow } from "../components/RefreshRow";
 import { ReviewRows, Row } from "../components/ReviewRows";
 import { Screen } from "../components/Screen";
-import { shortHex, tokenKey, whenOf } from "../format";
+import { shortCounterparty, shortHex, tokenKey, whenOf } from "../format";
 import { useAmounts } from "../preferences";
 import { useNetwork } from "../network";
 import { searchTokens, sortTokens, viewToken } from "../tokens";
@@ -360,7 +360,7 @@ export function UtxoDetails({
               label={t("utxos.seedelfName")}
               copyLabel={t("utxos.copySeedelfName")}
               value={utxo.seedelf.name}
-              display={shortHex(utxo.seedelf.name, 14, 8)}
+              display={shortCounterparty(utxo.seedelf.name)}
               testId="utxo-seedelf-name"
             />
           </>
