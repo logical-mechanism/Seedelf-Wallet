@@ -10,7 +10,11 @@
 // eight first messages (the crate's 256 KiB of requests), B none. Each has a
 // page open. What runs between a read's first and second page request is
 // asserted the same for both, and no reload is among it; the gap's time is
-// logged, and asserted only within a margin far past what load moves. The
+// logged, and asserted only within a margin far past what load moves, at its
+// lower decile: load only adds time, and on a runner busy with the rest of
+// the suite it splits 32-envelope rounds into two groups about 25 ms apart,
+// so a median of 20 lands in either (PR #417's CI: A 59, B 38). The fault this
+// guards slowed every round (at 48480cf8 A's gap was 96 to 201 ms). The
 // harness's own wait (a setImmediate) and the worker's (a setTimeout of 0)
 // both.
 import { performance } from "node:perf_hooks";
@@ -279,7 +283,7 @@ describe("C2's overview face: a page's reload after 'changed' never goes in fron
     expect(r.between.a).not.toContain(`get ${INBOX}`);
     expect(r.between.b).not.toContain(`get ${INBOX}`);
     // No reload, nothing of the inbox between two pages: A and B alike, within the load's noise.
-    expect(r.gap.a.median).toBeLessThan(r.gap.b.median + 10);
+    expect(r.gap.a.p10).toBeLessThan(r.gap.b.p10 + 10);
   });
 
   it("a page open, its call back one turn of the event loop later, one envelope a page", async () => {
@@ -293,7 +297,7 @@ describe("C2's overview face: a page's reload after 'changed' never goes in fron
     expect(r.between.a).not.toContain(`get ${INBOX}`);
     expect(r.between.a).toEqual(r.between.b);
     expect(r.reloadBefore).toEqual({ a: 0, b: 0 });
-    expect(r.gap.a.median).toBeLessThan(r.gap.b.median + 20);
+    expect(r.gap.a.p10).toBeLessThan(r.gap.b.p10 + 20);
   });
 
   it("a page open, its call back 5 ms later, the first page 32 well-formed envelopes nobody's, the harness's wait (a setImmediate)", async () => {
@@ -314,7 +318,7 @@ describe("C2's overview face: a page's reload after 'changed' never goes in fron
       expect(r.reloadBefore).toEqual({ a: 0, b: 0 });
       expect(r.between.a).not.toContain(`get ${INBOX}`);
       expect(r.between.a).toEqual(r.between.b);
-      expect(r.gap.a.median).toBeLessThan(r.gap.b.median + 20);
+      expect(r.gap.a.p10).toBeLessThan(r.gap.b.p10 + 20);
     } finally {
       x.a.onWait = x.b.onWait = undefined;
     }
@@ -326,6 +330,6 @@ describe("C2's overview face: a page's reload after 'changed' never goes in fron
     const r = await rounds(x, ROUNDS, 32, true);
     console.log(`[c2 overview, closed, 32 well formed a page] ${JSON.stringify(r)}`);
     expect(r.between.a).not.toContain(`get ${INBOX}`);
-    expect(Math.abs(r.gap.a.median - r.gap.b.median)).toBeLessThan(Math.max(10, 0.5 * r.gap.b.median));
+    expect(Math.abs(r.gap.a.p10 - r.gap.b.p10)).toBeLessThan(Math.max(10, 0.5 * r.gap.b.p10));
   });
 });
