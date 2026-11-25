@@ -12,6 +12,7 @@ import {
   type StakeInfo,
   type TokenAmount,
 } from "../shared/rpc";
+import { seedelfShort } from "../shared/seedelf-name";
 
 /** An integer amount with `decimals` places, grouped and with trailing zeros trimmed: "1,234.5". */
 export function formatQuantity(quantity: string, decimals: number): string {
@@ -157,16 +158,18 @@ export function shortHex(hex: string, head = 8, tail = 4): string {
 const BECH32_ADDRESS = /^[a-z_]+1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{20,}$/;
 
 /**
- * An address or a Seedelf's name shortened to parts no one else can choose. An address keeps ten characters of its data
- * after its prefix, which are its header and its payment part, each one past those taking some 32 keys to match, and
- * its last six; a Seedelf's name keeps its prefix and its last sixteen, eight bytes of the transaction that minted it.
- * The last six of an address are its checksum, which anyone can solve for, and the start of a name is a prefix and a
- * tag anyone can copy: Activity cut an address to as few as three first characters and those six, and the lists cut a
- * name to its prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2). Anything else as `shortHex`.
+ * An address or a Seedelf's name shortened to parts that are costly to match. An address keeps ten characters of its
+ * data after its prefix, which are its header and its payment part, each one past those taking some 32 keys to match,
+ * and its last six. A Seedelf's name keeps its prefix, its last sixteen and its output index (`seedelfShort`): the
+ * sixteen are eight bytes of the transaction its mint spent, which a Seedelf minted from another output of that
+ * transaction shares, and the index tells those two apart (the 1.10.0 gate: a live run made such a pair, which read
+ * alike). The last six of an address are its checksum, which anyone can solve for, and the start of a name is a prefix
+ * and a tag anyone can copy: Activity cut an address to as few as three first characters and those six, and the lists
+ * cut a name to its prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2). Anything else as `shortHex`.
  */
 export function shortCounterparty(text: string): string {
   if (BECH32_ADDRESS.test(text)) return shortHex(text, text.lastIndexOf("1") + 11, 6);
-  if (/^5eed0e1f[0-9a-f]{40,}$/i.test(text)) return shortHex(text, 8, 16);
+  if (/^5eed0e1f[0-9a-f]{40,}$/i.test(text)) return seedelfShort(text);
   return shortHex(text, 12, 6);
 }
 

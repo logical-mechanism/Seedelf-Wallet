@@ -11,11 +11,12 @@
 //! the logic can be tested natively; the wrappers only convert errors into
 //! JavaScript exceptions.
 
+use std::mem::MaybeUninit;
+
 use blstrs::Scalar;
-use ff::Field;
 use seedelf_crypto::{cardano, derivation, register, schnorr};
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 pub mod cip30;
 pub mod decode;
@@ -32,6 +33,7 @@ pub fn start() {}
 
 /// Plain-Rust implementations behind the exports, testable off-wasm.
 pub mod api {
+    use std::borrow::Borrow;
     use std::collections::HashMap;
 
     use anyhow::{Result, anyhow, bail};
@@ -532,9 +534,10 @@ pub mod api {
     /// signed with that path's payment key, inside this module.
     pub fn move_in(
         account: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: MoveInRequest,
     ) -> Result<MoveInResult> {
+        let sk = sk.borrow();
         let network_flag = network_flag(&request.network)?;
         let params = ProtocolParameters::from_koios(&request.params)?;
         let paths = check_paths(account, network_flag, &request.utxos)?;
@@ -542,7 +545,7 @@ pub mod api {
         let picked = picked_of(&request.tokens)?;
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-        let owner = Register::create(sk)?;
+        let owner = Register::create(*sk)?;
         let payee = Payee::Seedelf {
             owner: &owner,
             wallet_addr: &wallet,
@@ -1359,7 +1362,7 @@ pub mod api {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn merged_return(
         accounts: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         chain: &Chain,
         index: u32,
         rows: &[UtxoResponse],
@@ -1367,13 +1370,14 @@ pub mod api {
         merge: &[UtxoResponse],
         known: &[seedelf_core::eval::Resolved],
     ) -> Result<(BuiltTransaction, build::FinalSpend)> {
+        let sk = sk.borrow();
         check_spendable(sk, chain, merge)?;
         if merge.len() > MAX_MERGE {
             bail!("A return merges into at most {MAX_MERGE} of the funding's UTxOs");
         }
         let key = accounts.key_hash(Role::Receive, index)?;
-        let owner = Register::create(sk)?;
-        let one_time = one_time_key(&sk, &new_seed());
+        let owner = Register::create(*sk)?;
+        let one_time = one_time_key(sk, &new_seed());
         let spend = ScriptSpend::new(chain, merge, &owner, key_hash(&one_time))?
             .with_account(key, rows, collateral)?;
         let built = prove_with(sk, spend)?.measure_locally(known)?;
@@ -1401,9 +1405,10 @@ pub mod api {
     /// session's payment key; it signs inside this module.
     pub fn session_return(
         accounts: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: SessionReturnRequest,
     ) -> Result<SessionReturnResult> {
+        let sk = sk.borrow();
         let network_flag = network_flag(&request.network)?;
         let params = ProtocolParameters::from_koios(&request.params)?;
         if request.utxos.is_empty() {
@@ -1481,11 +1486,12 @@ pub mod api {
     /// funding's change where `plan` says so, a sweep otherwise.
     fn planned_return(
         accounts: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &SessionReturnRequest,
         params: &ProtocolParameters,
         plan: &ReturnPlan,
     ) -> Result<SessionReturnResult> {
+        let sk = sk.borrow();
         let network_flag = network_flag(&request.network)?;
         let key = accounts.key_hash(Role::Receive, request.index)?;
         let (total, tokens) = utxo_assets(plan.taken.clone())?;
@@ -1516,7 +1522,7 @@ pub mod api {
         }
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-        let owner = Register::create(sk)?;
+        let owner = Register::create(*sk)?;
         let (tx, fee) = build::external_sweep(params, &plan.taken, &owner, &wallet, key)?;
         let signed = tx
             .sign(
@@ -2545,7 +2551,12 @@ pub mod api {
     /// take each (`seedelf_core::eval::refusal`): not one holding a reference
     /// script. The worker leaves those out of what a spend may pay with, so
     /// the balance, Max and coin control agree.
-    fn check_spendable(sk: Scalar, chain: &Chain, utxos: &[UtxoResponse]) -> Result<()> {
+    fn check_spendable(
+        sk: impl Borrow<Scalar>,
+        chain: &Chain,
+        utxos: &[UtxoResponse],
+    ) -> Result<()> {
+        let sk = sk.borrow();
         let policy = &chain.config.contract.seedelf_policy_id;
         for utxo in utxos {
             if !at_wallet_contract(chain.network_flag, utxo)? {
@@ -2556,7 +2567,7 @@ pub mod api {
                 );
             }
             let owned = extract_bytes_with_logging(&utxo.inline_datum)
-                .map(|register| register.is_owned(sk).unwrap_or(false))
+                .map(|register| register.is_owned(*sk).unwrap_or(false))
                 .unwrap_or(false);
             if !owned {
                 bail!(
@@ -2581,8 +2592,9 @@ pub mod api {
     }
 
     /// Proves every input of `spend` with `sk`, bound to its one-time key.
-    fn prove_with(sk: Scalar, spend: ScriptSpend) -> Result<ScriptSpend> {
-        spend.proven(|register, vkh| schnorr::create_proof(register.clone(), sk, vkh.to_string()))
+    fn prove_with(sk: impl Borrow<Scalar>, spend: ScriptSpend) -> Result<ScriptSpend> {
+        let sk = sk.borrow();
+        spend.proven(|register, vkh| schnorr::create_proof(register.clone(), *sk, vkh.to_string()))
     }
 
     fn draft_of(spend: &ScriptSpend, seed: &[u8; 32]) -> Result<SpendDraft> {
@@ -2633,16 +2645,17 @@ pub mod api {
     }
 
     fn mint_spend(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &MintRequest,
         seed: &[u8; 32],
     ) -> Result<(ScriptSpend, build::SeedelfMint)> {
+        let sk = sk.borrow();
         let chain = chain_of(&request.network, &request.params)?;
         check_label(&request.label)?;
         check_spendable(sk, &chain, &request.utxos)?;
-        let owner = Register::create(sk)?;
+        let owner = Register::create(*sk)?;
         let seedelf = owner.clone().rerandomize()?;
-        let signer = key_hash(&one_time_key(&sk, seed));
+        let signer = key_hash(&one_time_key(sk, seed));
         let mut minted = build::mint_apart(
             &chain,
             &request.utxos,
@@ -2670,7 +2683,8 @@ pub mod api {
 
     /// Step 1 of creating a seedelf: picks the UTxOs, proves them, and drafts
     /// the transaction for Ogmios to evaluate, under a new one-time key.
-    pub fn draft_mint(sk: Scalar, request: MintRequest) -> Result<SpendDraft> {
+    pub fn draft_mint(sk: impl Borrow<Scalar>, request: MintRequest) -> Result<SpendDraft> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let (spend, _) = mint_spend(sk, &request, &seed)?;
         draft_of(&spend, &seed)
@@ -2678,7 +2692,8 @@ pub mod api {
 
     /// Step 2: the same mint, finished with the budgets Ogmios measured on the
     /// draft. `request` is the draft's, plus its `seed` and the `evaluation`.
-    pub fn finish_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
+    pub fn finish_mint(sk: impl Borrow<Scalar>, request: MintRequest) -> Result<MintResult> {
+        let sk = sk.borrow();
         let (seed, budgets) =
             finishing("mint", request.seed.as_deref(), request.evaluation.as_ref())?;
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
@@ -2686,7 +2701,8 @@ pub mod api {
     }
 
     /// Creating a seedelf in one step, measured in the wallet ([`measured`]).
-    pub fn build_mint(sk: Scalar, request: MintRequest) -> Result<MintResult> {
+    pub fn build_mint(sk: impl Borrow<Scalar>, request: MintRequest) -> Result<MintResult> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let (spend, minted) = mint_spend(sk, &request, &seed)?;
         mint_result(&request, &spend, &minted, &measured(&spend)?, &seed)
@@ -2943,7 +2959,8 @@ pub mod api {
     /// keeping histories apart as a stealth mint does, proves them under a new
     /// one-time key, measures the scripts in the wallet and finishes it. The
     /// pool it makes is checked from the finished bytes before it's returned.
-    pub fn build_launch(sk: Scalar, request: LaunchRequest) -> Result<LaunchResult> {
+    pub fn build_launch(sk: impl Borrow<Scalar>, request: LaunchRequest) -> Result<LaunchResult> {
+        let sk = sk.borrow();
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         let terms = launch_terms(
@@ -2952,8 +2969,8 @@ pub mod api {
             &request.max_fee,
         )?;
         let seed = new_seed();
-        let owner = Register::create(sk)?;
-        let signer = key_hash(&one_time_key(&sk, &seed));
+        let owner = Register::create(*sk)?;
+        let signer = key_hash(&one_time_key(sk, &seed));
         let launch = seedelf_core::lovejoin::launch_apart(
             &chain,
             &request.utxos,
@@ -3060,9 +3077,10 @@ pub mod api {
 
     fn account_mint_plan(
         account: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &AccountMintRequest,
     ) -> Result<(build::AccountMint, Paths, Staking)> {
+        let sk = sk.borrow();
         let chain = chain_of(&request.network, &request.params)?;
         check_label(&request.label)?;
         let mut paths = check_paths(account, chain.network_flag, &request.utxos)?;
@@ -3075,7 +3093,7 @@ pub mod api {
         }
         let available: Vec<UtxoResponse> = request.utxos.iter().map(|p| p.utxo.clone()).collect();
         let collateral = request.collateral.as_ref().map(|c| &c.utxo);
-        let seedelf = Register::create(sk)?.rerandomize()?;
+        let seedelf = Register::create(*sk)?.rerandomize()?;
         let change = account.base_address(chain.network_flag, Role::Receive, 0)?;
         let rewards = withdrawing(account, chain.network_flag, request.withdrawal.as_deref())?;
         let mint = build::account_mint(
@@ -3095,9 +3113,10 @@ pub mod api {
     /// UTxOs and the collateral, and drafts the transaction for Ogmios.
     pub fn draft_account_mint(
         account: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: AccountMintRequest,
     ) -> Result<AccountMintDraft> {
+        let sk = sk.borrow();
         let (mint, _, _) = account_mint_plan(account, sk, &request)?;
         Ok(AccountMintDraft {
             draft_cbor: hex::encode(&mint.draft()?.tx_bytes.0),
@@ -3111,9 +3130,10 @@ pub mod api {
     /// key and the collateral's, inside this module.
     pub fn finish_account_mint(
         account: &CardanoAccount,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: AccountMintRequest,
     ) -> Result<AccountMintResult> {
+        let sk = sk.borrow();
         let evaluation = request
             .evaluation
             .as_ref()
@@ -3306,10 +3326,11 @@ pub mod api {
     }
 
     fn transfer_plan(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &TransferRequest,
         seed: &[u8; 32],
     ) -> Result<TransferPlan> {
+        let sk = sk.borrow();
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         check_recipients(request.payments.len())?;
@@ -3318,7 +3339,7 @@ pub mod api {
         let mut paid = Vec::with_capacity(request.payments.len());
         for p in &request.payments {
             let register = recipient_register(&chain, &p.to, &p.recipient)?;
-            let to_self = register.is_owned(sk).unwrap_or(false);
+            let to_self = register.is_owned(*sk).unwrap_or(false);
             let tokens = assets_of(&p.tokens)?;
             let minimum = build::minimum_seedelf_payment(&chain.params, &tokens)?;
             let lovelace = match &p.lovelace {
@@ -3349,8 +3370,8 @@ pub mod api {
             payments,
             paid,
             max,
-            owner: Register::create(sk)?,
-            signer: key_hash(&one_time_key(&sk, seed)),
+            owner: Register::create(*sk)?,
+            signer: key_hash(&one_time_key(sk, seed)),
         })
     }
 
@@ -3361,10 +3382,11 @@ pub mod api {
     /// (`build::max_inputs`), and pays everything but the fee and what the
     /// tokens that stay need (`build::transfer_most`).
     fn transfer_spend(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &TransferRequest,
         plan: &TransferPlan,
     ) -> Result<(ScriptSpend, usize)> {
+        let sk = sk.borrow();
         let TransferPlan {
             chain,
             payments,
@@ -3409,7 +3431,8 @@ pub mod api {
     /// Step 1 of paying a seedelf: checks the recipient, picks the UTxOs,
     /// proves them, and drafts the transaction for Ogmios, under a new
     /// one-time key.
-    pub fn draft_transfer(sk: Scalar, request: TransferRequest) -> Result<SpendDraft> {
+    pub fn draft_transfer(sk: impl Borrow<Scalar>, request: TransferRequest) -> Result<SpendDraft> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let plan = transfer_plan(sk, &request, &seed)?;
         let (spend, _) = transfer_spend(sk, &request, &plan)?;
@@ -3419,7 +3442,11 @@ pub mod api {
     /// Step 2: the same transfer, finished with the budgets Ogmios measured
     /// on the draft. `request` is the draft's, plus its `seed` and the
     /// `evaluation`.
-    pub fn finish_transfer(sk: Scalar, request: TransferRequest) -> Result<TransferResult> {
+    pub fn finish_transfer(
+        sk: impl Borrow<Scalar>,
+        request: TransferRequest,
+    ) -> Result<TransferResult> {
+        let sk = sk.borrow();
         let (seed, budgets) = finishing(
             "transfer",
             request.seed.as_deref(),
@@ -3438,7 +3465,11 @@ pub mod api {
     /// before the amount is refused ([`measured_or_more`]), so what's refused
     /// is what the review's own fee can't pay, and an amount up to Max's goes
     /// (blind test T05).
-    pub fn build_transfer(sk: Scalar, request: TransferRequest) -> Result<TransferResult> {
+    pub fn build_transfer(
+        sk: impl Borrow<Scalar>,
+        request: TransferRequest,
+    ) -> Result<TransferResult> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let plan = transfer_plan(sk, &request, &seed)?;
         let (spend, left, built) = match transfer_spend(sk, &request, &plan) {
@@ -3787,13 +3818,14 @@ pub mod api {
 
     /// The withdrawal, proven, and how many UTxOs Max left out.
     fn withdraw_spend(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &WithdrawRequest,
         chain: &Chain,
         what: &Withdrawing,
         signer: Hash<28>,
     ) -> Result<(ScriptSpend, usize)> {
-        let owner = Register::create(sk)?;
+        let sk = sk.borrow();
+        let owner = Register::create(*sk)?;
         if request.carry {
             // A part of a payment in a chain: exactly the UTxOs given, its payments with their least, the rest carried.
             let payments: Vec<AddressPayment> = match what {
@@ -3850,18 +3882,23 @@ pub mod api {
 
     /// Step 1 of a withdrawal: checks the addresses, picks the UTxOs, proves
     /// them, and drafts the transaction for Ogmios, under a new one-time key.
-    pub fn draft_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<SpendDraft> {
+    pub fn draft_withdraw(sk: impl Borrow<Scalar>, request: WithdrawRequest) -> Result<SpendDraft> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         let what = withdrawal_of(&chain, &request)?;
-        let signer = key_hash(&one_time_key(&sk, &seed));
+        let signer = key_hash(&one_time_key(sk, &seed));
         let (spend, _) = withdraw_spend(sk, &request, &chain, &what, signer)?;
         draft_of(&spend, &seed)
     }
 
     /// Step 2: the same withdrawal, finished with the budgets Ogmios measured.
-    pub fn finish_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+    pub fn finish_withdraw(
+        sk: impl Borrow<Scalar>,
+        request: WithdrawRequest,
+    ) -> Result<WithdrawResult> {
+        let sk = sk.borrow();
         let (seed, budgets) = finishing(
             "withdrawal",
             request.seed.as_deref(),
@@ -3870,7 +3907,7 @@ pub mod api {
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         let what = withdrawal_of(&chain, &request)?;
-        let signer = key_hash(&one_time_key(&sk, &seed));
+        let signer = key_hash(&one_time_key(sk, &seed));
         let (spend, left) = withdraw_spend(sk, &request, &chain, &what, signer)?;
         let built = spend.finalize(&budgets)?;
         withdraw_result(&request, &chain, &spend, left, what, &built, &seed)
@@ -3881,12 +3918,16 @@ pub mod api {
     /// the largest UTxOs before they're refused, as a transfer's are
     /// ([`build_transfer`], [`measured_or_more`]); not a session's funding,
     /// whose picking keeps another session's money out.
-    pub fn build_withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+    pub fn build_withdraw(
+        sk: impl Borrow<Scalar>,
+        request: WithdrawRequest,
+    ) -> Result<WithdrawResult> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let chain = chain_of(&request.network, &request.params)?;
         check_spendable(sk, &chain, &request.utxos)?;
         let what = withdrawal_of(&chain, &request)?;
-        let signer = key_hash(&one_time_key(&sk, &seed));
+        let signer = key_hash(&one_time_key(sk, &seed));
         let (spend, left, built) = match withdraw_spend(sk, &request, &chain, &what, signer) {
             Ok((spend, left)) => {
                 let built = measured(&spend)?;
@@ -3901,7 +3942,7 @@ pub mod api {
                 let needed = to_pay
                     .iter()
                     .try_fold(Assets::new(), |all, p| all.merge(p.tokens.clone()))?;
-                let owner = Register::create(sk)?;
+                let owner = Register::create(*sk)?;
                 let (spend, built) =
                     measured_or_more(short, &chain, &request.utxos, &needed, |inputs| {
                         let spend = build::sweep_many_from(&chain, inputs, to_pay, &owner, signer)?;
@@ -5321,9 +5362,10 @@ pub mod api {
     /// in parts ([`in_parts`]); Max takes every UTxO ([`max_in_parts`]). Several Seedelfs at once go in one
     /// transaction, as before.
     pub fn build_transfer_parts(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: TransferRequest,
     ) -> Result<Vec<TransferResult>> {
+        let sk = sk.borrow();
         let carried = Carried::default();
         let with = |utxos: Vec<UtxoResponse>,
                     lovelace: Option<u64>,
@@ -5455,9 +5497,10 @@ pub mod api {
     /// funding's order first ([`Worth`]); the payments after it (the one-time account's collateral, an output of ADA
     /// alone) in the first part.
     pub fn build_withdraw_parts(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: WithdrawRequest,
     ) -> Result<Vec<WithdrawResult>> {
+        let sk = sk.borrow();
         let funding = request.funding.is_some();
         let carried = Carried::default();
         let with = |utxos: Vec<UtxoResponse>,
@@ -5741,10 +5784,11 @@ pub mod api {
     }
 
     fn remove_spend(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: &RemoveRequest,
         seed: &[u8; 32],
     ) -> Result<(ScriptSpend, Vec<u8>)> {
+        let sk = sk.borrow();
         let chain = chain_of(&request.network, &request.params)?;
         let utxo = &request.utxo;
         // Only a UTxO at the contract's script can be spent (chunk 51, x2#2).
@@ -5752,13 +5796,13 @@ pub mod api {
             bail!("That Seedelf isn't in the Seedelf Wallet contract");
         }
         let owned = extract_bytes_with_logging(&utxo.inline_datum)
-            .is_some_and(|register| register.is_owned(sk).unwrap_or(false));
+            .is_some_and(|register| register.is_owned(*sk).unwrap_or(false));
         if !owned {
             bail!("That Seedelf isn't this wallet's");
         }
         let name = build::seedelf_in(&chain, utxo)?;
-        let signer = key_hash(&one_time_key(&sk, seed));
-        let mut spend = build::remove(&chain, utxo, &Register::create(sk)?, signer)?;
+        let signer = key_hash(&one_time_key(sk, seed));
+        let mut spend = build::remove(&chain, utxo, &Register::create(*sk)?, signer)?;
         if let Some(to) = &request.to {
             spend = spend.change_to(&payable_address(chain.network_flag, to)?);
         }
@@ -5767,14 +5811,16 @@ pub mod api {
 
     /// Step 1 of removing a seedelf: checks it's this wallet's, proves its
     /// UTxO, and drafts the burn for Ogmios, under a new one-time key.
-    pub fn draft_remove(sk: Scalar, request: RemoveRequest) -> Result<SpendDraft> {
+    pub fn draft_remove(sk: impl Borrow<Scalar>, request: RemoveRequest) -> Result<SpendDraft> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let (spend, _) = remove_spend(sk, &request, &seed)?;
         draft_of(&spend, &seed)
     }
 
     /// Step 2: the same removal, finished with the budgets Ogmios measured.
-    pub fn finish_remove(sk: Scalar, request: RemoveRequest) -> Result<RemoveResult> {
+    pub fn finish_remove(sk: impl Borrow<Scalar>, request: RemoveRequest) -> Result<RemoveResult> {
+        let sk = sk.borrow();
         let (seed, budgets) = finishing(
             "removal",
             request.seed.as_deref(),
@@ -5786,7 +5832,8 @@ pub mod api {
     }
 
     /// Removing a seedelf in one step, measured in the wallet ([`measured`]).
-    pub fn build_remove(sk: Scalar, request: RemoveRequest) -> Result<RemoveResult> {
+    pub fn build_remove(sk: impl Borrow<Scalar>, request: RemoveRequest) -> Result<RemoveResult> {
+        let sk = sk.borrow();
         let seed = new_seed();
         let (spend, name) = remove_spend(sk, &request, &seed)?;
         let built = measured(&spend)?;
@@ -5897,20 +5944,22 @@ pub mod api {
 
     /// Signs a finished script spend: checks giveme.my's signature over the
     /// transaction, then adds it and the one-time key's own.
-    pub fn sign_script_spend(sk: Scalar, request: SignRequest) -> Result<SignResult> {
+    pub fn sign_script_spend(sk: impl Borrow<Scalar>, request: SignRequest) -> Result<SignResult> {
+        let sk = sk.borrow();
         sign_with_collateral_key(sk, request, PublicKey::from(COLLATERAL_PUBLIC_KEY))
     }
 
     /// [`sign_script_spend`] against any collateral key, so tests can sign
     /// with a stand-in for giveme.my's.
     pub fn sign_with_collateral_key(
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         request: SignRequest,
         collateral_key: PublicKey,
     ) -> Result<SignResult> {
+        let sk = sk.borrow();
         let bytes =
             hex::decode(&request.tx_cbor).map_err(|e| anyhow!("the transaction isn't hex: {e}"))?;
-        let key = one_time_key(&sk, &seed_from_hex(&request.seed)?);
+        let key = one_time_key(sk, &seed_from_hex(&request.seed)?);
         let hash = build::tx_id(&bytes)?;
         if !build::required_signers(&bytes)?.contains(&key_hash(&key)) {
             bail!("This transaction wasn't built with that one-time key");
@@ -6824,11 +6873,114 @@ pub struct WasmProof {
     pub g_r: String,
 }
 
-/// The wallet's Seedelf secret key `x`. It stays inside WebAssembly memory;
-/// call `free()` from JavaScript to drop it (the scalar is overwritten on drop).
+/// A secret in a heap allocation of its own, overwritten there when it's
+/// dropped.
+///
+/// wasm-bindgen's `free()` moves an exported object out of its cell before
+/// dropping it. A `Drop` that overwrites a field then overwrites the moved
+/// copy, and the cell is released as it was, the secret still in it (the
+/// 1.10.0 gate's review found the Seedelf key there after a lock). Behind
+/// this pointer a move copies the pointer alone, and `Drop` overwrites the
+/// one allocation that holds the secret, with the volatile writes `zeroize`
+/// makes, before releasing it.
+///
+/// **What isn't promised.** A copy a call left on the WebAssembly stack (a
+/// scalar passed by value into another crate, a key derived from an account,
+/// what a library worked with) isn't reached by this: it stays until a later
+/// call reaches as deep, or until [`scrub_stack`], which the worker calls
+/// after a lock's `free()`s. Nor is JavaScript's own memory this module's to
+/// wipe.
+struct Wiped<T>(Box<MaybeUninit<T>>);
+
+impl<T> Wiped<T> {
+    fn new(secret: T) -> Self {
+        Wiped(Box::new(MaybeUninit::new(secret)))
+    }
+}
+
+impl<T> std::ops::Deref for Wiped<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        // SAFETY: `new` initialized it, and only `drop` takes it away.
+        unsafe { self.0.assume_init_ref() }
+    }
+}
+
+impl<T> Drop for Wiped<T> {
+    fn drop(&mut self) {
+        // The secret's own drop where it lies, then every byte of it: a
+        // library's own wipe may be a plain write, which a compiler can
+        // leave out before the memory is released.
+        // SAFETY: initialized since `new`, and never read again.
+        unsafe { self.0.assume_init_drop() };
+        self.0.zeroize();
+    }
+}
+
+/// How much of the WebAssembly stack [`scrub_stack`] overwrites: 512 KiB,
+/// the top half of it.
+const SCRUB_DEPTH: usize = 512 * 1024;
+
+/// Overwrites the top [`SCRUB_DEPTH`] bytes of the WebAssembly stack with
+/// zeros: the copies earlier calls left there of the keys they worked with
+/// and of what the keys came from (after an unlock, the BIP39 seed and the
+/// master key among them), which no `free()` reaches (see `Wiped`). The
+/// worker calls it after a lock's `free()`s, from JavaScript with no other
+/// call running. It takes no key and returns nothing.
+///
+/// - **The stack** is 1 MiB (1,048,576 bytes: rust-lld's size for
+///   wasm32-unknown-unknown, which `build.sh` leaves as it is), the first
+///   mebibyte of linear memory, and grows down from its top. A call from
+///   JavaScript with no other running starts at the top, so this function's
+///   frame is the stack's top half.
+/// - **The margin** is the other half: called so, it can't run the stack
+///   out. Called from 512 KiB deep or more it would reach past the stack's
+///   end, and trap at its first write, out of the memory's bounds.
+/// - **The depth** is nearly ten times what any call has been seen to use.
+///   The deepest the module's own tests take the stack is 54,088 bytes (a
+///   Lovejoin chain); a transfer or a withdrawal takes about 51,500, a
+///   messaging call 16,600 and a key's derivation 6,900.
+///
+/// The writes are volatile, one word at a time, with `zeroize`'s fence after
+/// them, so a compiler can neither drop them as writes nobody reads nor
+/// shrink what they cover. The frame holds those words and nothing else: a
+/// slot of its own above them, as `black_box` takes, would be the stack's
+/// top bytes left as they were. `tests/free_wipes_key.test.mjs` holds the
+/// built module to it: every byte of the top 512 KiB, and none below.
+#[wasm_bindgen(js_name = scrubStack)]
+#[inline(never)]
+pub fn scrub_stack() {
+    const WORDS: usize = SCRUB_DEPTH / size_of::<u64>();
+    let mut frame = MaybeUninit::<[u64; WORDS]>::uninit();
+    let first = frame.as_mut_ptr().cast::<u64>();
+    for word in 0..WORDS {
+        // SAFETY: within `frame`, which is this function's to write and
+        // aligned for a u64.
+        unsafe { std::ptr::write_volatile(first.add(word), 0) };
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The wallet's Seedelf secret key `x`. It stays inside WebAssembly memory,
+/// in an allocation of its own (`Wiped`): `free()` from JavaScript
+/// overwrites the scalar there before releasing it. Copies a call left on
+/// the WebAssembly stack aren't reached by that (see `Wiped`).
 #[wasm_bindgen]
 pub struct SeedelfKey {
-    sk: Scalar,
+    sk: Wiped<Scalar>,
+}
+
+impl SeedelfKey {
+    fn of(sk: Scalar) -> SeedelfKey {
+        SeedelfKey { sk: Wiped::new(sk) }
+    }
+
+    /// The scalar where it's kept. The builders and the messaging calls
+    /// take this reference, so the key isn't copied into their frames.
+    fn scalar(&self) -> &Scalar {
+        &self.sk
+    }
 }
 
 #[wasm_bindgen]
@@ -6836,9 +6988,7 @@ impl SeedelfKey {
     /// A fresh random key. For development and tests only: wallets use
     /// `fromPhrase`.
     pub fn random() -> SeedelfKey {
-        SeedelfKey {
-            sk: schnorr::random_scalar(),
-        }
+        SeedelfKey::of(schnorr::random_scalar())
     }
 
     /// The wallet's key: v1 derivation from a 12-, 15- or 24-word recovery
@@ -6849,7 +6999,7 @@ impl SeedelfKey {
     pub fn from_phrase(phrase: String, account: u32) -> Result<SeedelfKey, JsError> {
         let phrase = Zeroizing::new(phrase);
         derivation::seedelf_key_v1(&phrase, account)
-            .map(|sk| SeedelfKey { sk })
+            .map(SeedelfKey::of)
             .map_err(js_error)
     }
 
@@ -6861,7 +7011,7 @@ impl SeedelfKey {
     pub fn from_entropy(entropy: Vec<u8>, account: u32) -> Result<SeedelfKey, JsError> {
         let entropy = Zeroizing::new(entropy);
         derivation::seedelf_key_v1_from_entropy(&entropy, account)
-            .map(|sk| SeedelfKey { sk })
+            .map(SeedelfKey::of)
             .map_err(js_error)
     }
 
@@ -6870,7 +7020,7 @@ impl SeedelfKey {
     #[wasm_bindgen(js_name = fromHex)]
     pub fn from_hex(sk_hex: &str) -> Result<SeedelfKey, JsError> {
         api::scalar_from_hex(sk_hex)
-            .map(|sk| SeedelfKey { sk })
+            .map(SeedelfKey::of)
             .map_err(js_error)
     }
 
@@ -6878,7 +7028,7 @@ impl SeedelfKey {
     /// it is never written to chain as-is.
     #[wasm_bindgen(js_name = baseRegister)]
     pub fn base_register(&self) -> Result<WasmRegister, JsError> {
-        register::Register::create(self.sk)
+        register::Register::create(*self.sk)
             .map(WasmRegister::from)
             .map_err(js_error)
     }
@@ -6887,7 +7037,7 @@ impl SeedelfKey {
     #[wasm_bindgen(js_name = isOwned)]
     pub fn is_owned(&self, register: &WasmRegister) -> Result<bool, JsError> {
         register::Register::from(register)
-            .is_owned(self.sk)
+            .is_owned(*self.sk)
             .map_err(js_error)
     }
 
@@ -6895,20 +7045,9 @@ impl SeedelfKey {
     /// blake2b-224 hash (28 bytes, hex) of the transaction's one-time signing key.
     #[wasm_bindgen(js_name = createProof)]
     pub fn create_proof(&self, register: &WasmRegister, vkh: &str) -> Result<WasmProof, JsError> {
-        schnorr::create_proof(register.into(), self.sk, vkh.to_string())
+        schnorr::create_proof(register.into(), *self.sk, vkh.to_string())
             .map(|(z, g_r)| WasmProof { z, g_r })
             .map_err(js_error)
-    }
-}
-
-impl Drop for SeedelfKey {
-    fn drop(&mut self) {
-        // Overwrite the scalar before the memory is released. A volatile
-        // write, as `zeroize` makes, so the compiler can't drop it as a
-        // store nobody reads.
-        // SAFETY: `self.sk` is a valid, aligned `Scalar` we own.
-        unsafe { std::ptr::write_volatile(&mut self.sk, Scalar::ZERO) };
-        std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -6929,11 +7068,15 @@ impl Network {
 
 /// The wallet's Cardano account: standard CIP-1852 keys from the recovery
 /// phrase, so the same phrase shows the same account in Lace, Eternl or
-/// Yoroi. The private keys stay inside WebAssembly memory; call `free()` to
-/// drop them.
+/// Yoroi. The account's extended private key (64 bytes of key, 32 of chain
+/// code) stays inside WebAssembly memory, in an allocation of its own
+/// (`Wiped`): `free()` overwrites all 96 bytes there before releasing it.
+/// Every other key is derived from it at each use and dropped after it,
+/// with its library's own wipe, a plain write: those copies, on the
+/// WebAssembly stack, aren't reached by `free()` (see `Wiped`).
 #[wasm_bindgen(js_name = CardanoAccount)]
 pub struct WasmCardanoAccount {
-    inner: cardano::CardanoAccount,
+    inner: Wiped<cardano::CardanoAccount>,
 }
 
 #[wasm_bindgen(js_class = CardanoAccount)]
@@ -6946,7 +7089,9 @@ impl WasmCardanoAccount {
     pub fn from_phrase(phrase: String, account: u32) -> Result<WasmCardanoAccount, JsError> {
         let phrase = Zeroizing::new(phrase);
         cardano::CardanoAccount::from_phrase(&phrase, account)
-            .map(|inner| WasmCardanoAccount { inner })
+            .map(|inner| WasmCardanoAccount {
+                inner: Wiped::new(inner),
+            })
             .map_err(js_error)
     }
 
@@ -6957,7 +7102,9 @@ impl WasmCardanoAccount {
     pub fn from_entropy(entropy: Vec<u8>, account: u32) -> Result<WasmCardanoAccount, JsError> {
         let entropy = Zeroizing::new(entropy);
         cardano::CardanoAccount::from_entropy(&entropy, account)
-            .map(|inner| WasmCardanoAccount { inner })
+            .map(|inner| WasmCardanoAccount {
+                inner: Wiped::new(inner),
+            })
             .map_err(js_error)
     }
 
@@ -7071,10 +7218,13 @@ impl WasmCardanoAccount {
 /// (`cardano::ONE_TIME_ACCOUNT`), payment key `0/i` and stake key `2/i` for
 /// session `i`, both its own. A separate type from the
 /// public account's, so nothing that pays or shows the public account can be
-/// handed these keys. They never leave WebAssembly; call `free()` to drop them.
+/// handed these keys. They never leave WebAssembly: the account's extended
+/// private key is in an allocation of its own (`Wiped`), and `free()`
+/// overwrites all 96 bytes there before releasing it, as for
+/// `CardanoAccount`.
 #[wasm_bindgen(js_name = OneTimeAccounts)]
 pub struct WasmOneTimeAccounts {
-    inner: cardano::CardanoAccount,
+    inner: Wiped<cardano::CardanoAccount>,
 }
 
 #[wasm_bindgen(js_class = OneTimeAccounts)]
@@ -7085,7 +7235,9 @@ impl WasmOneTimeAccounts {
     pub fn from_phrase(phrase: String) -> Result<WasmOneTimeAccounts, JsError> {
         let phrase = Zeroizing::new(phrase);
         cardano::CardanoAccount::from_phrase(&phrase, cardano::ONE_TIME_ACCOUNT)
-            .map(|inner| WasmOneTimeAccounts { inner })
+            .map(|inner| WasmOneTimeAccounts {
+                inner: Wiped::new(inner),
+            })
             .map_err(js_error)
     }
 
@@ -7096,7 +7248,9 @@ impl WasmOneTimeAccounts {
     pub fn from_entropy(entropy: Vec<u8>) -> Result<WasmOneTimeAccounts, JsError> {
         let entropy = Zeroizing::new(entropy);
         cardano::CardanoAccount::from_entropy(&entropy, cardano::ONE_TIME_ACCOUNT)
-            .map(|inner| WasmOneTimeAccounts { inner })
+            .map(|inner| WasmOneTimeAccounts {
+                inner: Wiped::new(inner),
+            })
             .map_err(js_error)
     }
 
@@ -7145,7 +7299,7 @@ pub fn build_session_return(
     request: &str,
 ) -> Result<String, JsError> {
     let request: api::SessionReturnRequest = from_json(request)?;
-    to_json(&api::session_return(&accounts.inner, key.sk, request).map_err(js_error)?)
+    to_json(&api::session_return(&accounts.inner, key.scalar(), request).map_err(js_error)?)
 }
 
 /// Reads an output for a session's order check: whether it's a DEX order
@@ -7219,7 +7373,7 @@ pub fn build_collateral_mix(
     request: &str,
 ) -> Result<String, JsError> {
     to_json(
-        &lovejoin::collateral_mix(&accounts.inner, key.sk, from_json(request)?)
+        &lovejoin::collateral_mix(&accounts.inner, key.scalar(), from_json(request)?)
             .map_err(js_error)?,
     )
 }
@@ -7286,7 +7440,7 @@ pub fn build_lovejoin_chain(
         return to_json(
             &lovejoin::chain_across_pools(
                 &accounts.inner,
-                key.sk,
+                key.scalar(),
                 from_json(request)?,
                 &across,
                 width,
@@ -7297,7 +7451,7 @@ pub fn build_lovejoin_chain(
     to_json(
         &lovejoin::chain_at(
             &accounts.inner,
-            key.sk,
+            key.scalar(),
             from_json(request)?,
             named.pool_ref.as_ref(),
             width,
@@ -7347,7 +7501,7 @@ pub fn build_lovejoin_from_account(
     to_json(
         &lovejoin::chain_from_account_at(
             &account.inner,
-            key.sk,
+            key.scalar(),
             from_json(request)?,
             named.pool_ref.as_ref(),
             width,
@@ -7371,7 +7525,7 @@ pub fn build_lovejoin_again_from_account(
     to_json(
         &lovejoin::again_from_account_at(
             &account.inner,
-            key.sk,
+            key.scalar(),
             from_json(request)?,
             named.pool_ref.as_ref(),
             width,
@@ -7411,7 +7565,7 @@ pub fn declared_covers(tx_cbor: &str, answer: &str) -> Result<String, JsError> {
 pub fn lovejoin_owned(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
     to_json(
-        &lovejoin::owned_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+        &lovejoin::owned_in(key.scalar(), from_json(request)?, named.pool_ref.as_ref())
             .map_err(js_error)?,
     )
 }
@@ -7462,7 +7616,7 @@ pub fn lovejoin_usable(request: &str) -> Result<String, JsError> {
 /// `signScriptSpend`.
 #[wasm_bindgen(js_name = buildLovejoinLaunch)]
 pub fn build_lovejoin_launch(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
-    to_json(&api::build_launch(key.sk, from_json(request)?).map_err(js_error)?)
+    to_json(&api::build_launch(key.scalar(), from_json(request)?).map_err(js_error)?)
 }
 
 /// Starting a Lovejoin pool paid by the public account, measured in the
@@ -7498,7 +7652,7 @@ pub fn build_lovejoin_withdraw_paid(
     to_json(
         &lovejoin::withdraw_paid_in(
             &account.inner,
-            key.sk,
+            key.scalar(),
             from_json(request)?,
             named.pool_ref.as_ref(),
         )
@@ -7516,7 +7670,7 @@ pub fn build_lovejoin_withdraw_paid(
 pub fn build_lovejoin_withdraw_private(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
     to_json(
-        &lovejoin::withdraw_private_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+        &lovejoin::withdraw_private_in(key.scalar(), from_json(request)?, named.pool_ref.as_ref())
             .map_err(js_error)?,
     )
 }
@@ -7528,7 +7682,7 @@ pub fn build_lovejoin_withdraw_private(key: &SeedelfKey, request: &str) -> Resul
 pub fn build_lovejoin_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let named: lovejoin::PoolNamed = from_json(request)?;
     to_json(
-        &lovejoin::withdraw_in(key.sk, from_json(request)?, named.pool_ref.as_ref())
+        &lovejoin::withdraw_in(key.scalar(), from_json(request)?, named.pool_ref.as_ref())
             .map_err(js_error)?,
     )
 }
@@ -7673,7 +7827,7 @@ pub fn build_move_in(
 ) -> Result<String, JsError> {
     let request: api::MoveInRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad move-in request: {e}")))?;
-    let result = api::move_in(&account.inner, key.sk, request).map_err(js_error)?;
+    let result = api::move_in(&account.inner, key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7749,7 +7903,7 @@ pub fn slot_at(network: Network, unix_ms: f64) -> Result<f64, JsError> {
 pub fn build_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::MintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
-    let result = api::build_mint(key.sk, request).map_err(js_error)?;
+    let result = api::build_mint(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7761,7 +7915,7 @@ pub fn build_mint(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
 pub fn build_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::TransferRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
-    let result = api::build_transfer(key.sk, request).map_err(js_error)?;
+    let result = api::build_transfer(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7771,7 +7925,7 @@ pub fn build_transfer(key: &SeedelfKey, request: &str) -> Result<String, JsError
 pub fn build_transfer_parts(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::TransferRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad transfer request: {e}")))?;
-    let parts = api::build_transfer_parts(key.sk, request).map_err(js_error)?;
+    let parts = api::build_transfer_parts(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&serde_json::json!({ "parts": parts }))
         .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -7788,7 +7942,8 @@ pub fn draft_account_mint(
 ) -> Result<String, JsError> {
     let request: api::AccountMintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
-    let result = api::draft_account_mint(&account.inner, key.sk, request).map_err(js_error)?;
+    let result =
+        api::draft_account_mint(&account.inner, key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7803,7 +7958,8 @@ pub fn finish_account_mint(
 ) -> Result<String, JsError> {
     let request: api::AccountMintRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad mint request: {e}")))?;
-    let result = api::finish_account_mint(&account.inner, key.sk, request).map_err(js_error)?;
+    let result =
+        api::finish_account_mint(&account.inner, key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7815,7 +7971,7 @@ pub fn finish_account_mint(
 pub fn build_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::WithdrawRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
-    let result = api::build_withdraw(key.sk, request).map_err(js_error)?;
+    let result = api::build_withdraw(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7825,7 +7981,7 @@ pub fn build_withdraw(key: &SeedelfKey, request: &str) -> Result<String, JsError
 pub fn build_withdraw_parts(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::WithdrawRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad withdrawal request: {e}")))?;
-    let parts = api::build_withdraw_parts(key.sk, request).map_err(js_error)?;
+    let parts = api::build_withdraw_parts(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&serde_json::json!({ "parts": parts }))
         .map_err(|e| JsError::new(&e.to_string()))
 }
@@ -7848,7 +8004,7 @@ pub fn check_payable_address(address: &str, network: Network) -> Result<(), JsEr
 pub fn build_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::RemoveRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad removal request: {e}")))?;
-    let result = api::build_remove(key.sk, request).map_err(js_error)?;
+    let result = api::build_remove(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -7859,7 +8015,7 @@ pub fn build_remove(key: &SeedelfKey, request: &str) -> Result<String, JsError> 
 pub fn sign_script_spend(key: &SeedelfKey, request: &str) -> Result<String, JsError> {
     let request: api::SignRequest = serde_json::from_str(request)
         .map_err(|e| JsError::new(&format!("bad signing request: {e}")))?;
-    let result = api::sign_script_spend(key.sk, request).map_err(js_error)?;
+    let result = api::sign_script_spend(key.scalar(), request).map_err(js_error)?;
     serde_json::to_string(&result).map_err(|e| JsError::new(&e.to_string()))
 }
 
@@ -8036,14 +8192,14 @@ fn to_secret_json<T: serde::Serialize>(value: &T) -> Result<js_sys::JsString, Js
 #[wasm_bindgen(js_name = messagingScan)]
 pub fn messaging_scan(key: &SeedelfKey, envelopes: &str) -> Result<String, JsError> {
     let envelopes: Vec<String> = from_json(envelopes)?;
-    messaging::scan(key.sk, &envelopes).map_err(js_error)
+    messaging::scan(key.scalar(), &envelopes).map_err(js_error)
 }
 
 /// Opens an envelope, hex, and says which conversation it's for, and
 /// nothing secret (`messaging::open`).
 #[wasm_bindgen(js_name = messagingOpen)]
 pub fn messaging_open(key: &SeedelfKey, envelope: &str) -> Result<String, JsError> {
-    to_json(&messaging::open(key.sk, envelope).map_err(js_error)?)
+    to_json(&messaging::open(key.scalar(), envelope).map_err(js_error)?)
 }
 
 /// Takes an envelope under protocol.md §5 and §6's rules, with the records
@@ -8052,7 +8208,7 @@ pub fn messaging_open(key: &SeedelfKey, envelope: &str) -> Result<String, JsErro
 pub fn messaging_receive(key: &SeedelfKey, request: String) -> Result<js_sys::JsString, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::ReceiveRequest = from_json(&request)?;
-    to_secret_json(&messaging::receive(key.sk, request).map_err(js_error)?)
+    to_secret_json(&messaging::receive(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Starts a conversation with a Seedelf's owner, before its stamp
@@ -8060,7 +8216,7 @@ pub fn messaging_receive(key: &SeedelfKey, request: String) -> Result<js_sys::Js
 #[wasm_bindgen(js_name = messagingStart)]
 pub fn messaging_start(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
     let request: messaging::StartRequest = from_json(request)?;
-    to_secret_json(&messaging::start(key.sk, request).map_err(js_error)?)
+    to_secret_json(&messaging::start(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Starts a conversation continuing an old one, with its identities
@@ -8072,7 +8228,7 @@ pub fn messaging_start_continuing(
 ) -> Result<js_sys::JsString, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::ContinueRequest = from_json(&request)?;
-    to_secret_json(&messaging::start_continuing(key.sk, request).map_err(js_error)?)
+    to_secret_json(&messaging::start_continuing(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Sets a conversation's first-contact stamp
@@ -8098,7 +8254,7 @@ pub fn messaging_send(request: String) -> Result<js_sys::JsString, JsError> {
 #[wasm_bindgen(js_name = messagingAccept)]
 pub fn messaging_accept(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
     let request: messaging::RequestOf = from_json(request)?;
-    to_secret_json(&messaging::accept(key.sk, request).map_err(js_error)?)
+    to_secret_json(&messaging::accept(key.scalar(), request).map_err(js_error)?)
 }
 
 /// A request's texts, decrypted in memory to show them
@@ -8109,7 +8265,7 @@ pub fn messaging_read_request(
     request: &str,
 ) -> Result<js_sys::JsString, JsError> {
     let request: messaging::RequestOf = from_json(request)?;
-    to_secret_json(&messaging::read_request(key.sk, request).map_err(js_error)?)
+    to_secret_json(&messaging::read_request(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Deletes a conversation or a request, keeping a tombstone
@@ -8145,7 +8301,7 @@ pub fn messaging_conversation_info(record: String) -> Result<String, JsError> {
 pub fn messaging_reveal(key: &SeedelfKey, request: String) -> Result<String, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::RevealRequest = from_json(&request)?;
-    to_json(&messaging::reveal(key.sk, request).map_err(js_error)?)
+    to_json(&messaging::reveal(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Checks a reveal the other side sent: it parses and its proof verifies,

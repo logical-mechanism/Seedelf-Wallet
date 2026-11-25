@@ -11,12 +11,12 @@
 // takes first messages only once it's turned on (W8): each wallet here holds
 // one from the recorded contract, so each turns its own on first.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { relayFake, routeRelay } from "./relay";
-import { askWorker, chooseNetwork, expect, fakeKoios, launch, openApp, ownedUtxos, restore, test, transferPreprod, vector } from "./support";
+import { askWorker, chooseNetwork, dist, expect, fakeKoios, launch, openApp, ownedUtxos, restore, test, transferPreprod, vector } from "./support";
 
 /** vector(12)'s Seedelf, tagged "web-wallet", in the recorded contract. */
 const SEEDELF = ownedUtxos
@@ -95,8 +95,11 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   const toggle = page.getByTestId("messages-switch");
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(page.getByTestId("messages-none")).toContainText("Turn Messages on");
-  // Just the switch, with no line under it (the owner, 2026-11-22).
+  // The switch, and under it the one line about which wallet to test with (the owner, 2026-11-24): the Seedelf key is
+  // the same on every network.
   await expect(page.getByRole("switch", { name: "Turn on Messages" })).toBeVisible();
+  await expect(page.getByTestId("messages-test-wallet")).toHaveText("Messages are a test for now: use a wallet that isn't your mainnet wallet.");
+  await expect(page.getByTestId("messages-closed")).toHaveCount(0);
 
   // Never to one's own Seedelf.
   await page.getByTestId("messages-new").click();
@@ -124,22 +127,73 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   await expect(page.getByTestId("messages-switch")).toBeVisible();
 
   // On: the worker reads the pool at once. Its stamp for the waiting message may still be solving, about 7 s of the
-  // worker's and more on a busy runner, which the read shares the worker with.
+  // worker's and more on a busy runner, which the read shares the worker with. The press waits its turn in the worker
+  // meanwhile (the switch is busy until it answers), so it gets the stamp's time, not the default 5 s (1.10.0's second
+  // review: 2 of 4 runs under a 2-CPU load were still waiting at 5 s).
   await page.getByTestId("messages-switch").click();
-  await expect(page.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true", { timeout: 60_000 });
   await expect.poll(() => fake.calls.includes(`A GET ${ENVELOPES}`), { timeout: 60_000 }).toBe(true);
 
-  // A relay that doesn't answer is said; once it answers again, it isn't.
+  // A relay that doesn't answer is said; once it answers again, it isn't. A read asked while another runs joins it
+  // (the switch's first read may still be posting the waiting message on a slow runner), so the read that meets the
+  // relay as it now is may be the page's own next one, 10 s on: each line gets two of those.
   fake.relay.up = false;
   await askWorker(page, { type: "messaging-sync" });
-  await expect(page.getByTestId("messages-offline")).toBeVisible();
+  await expect(page.getByTestId("messages-offline")).toBeVisible({ timeout: 25_000 });
   fake.relay.up = true;
   await askWorker(page, { type: "messaging-sync" });
-  await expect(page.getByTestId("messages-offline")).toBeHidden();
+  await expect(page.getByTestId("messages-offline")).toBeHidden({ timeout: 25_000 });
 
   // Off again: nothing more.
   await page.getByTestId("messages-switch").click();
   await expect(page.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "false");
+  const asked = fake.calls.length;
+  await askWorker(page, { type: "messaging-sync" });
+  expect(fake.calls).toHaveLength(asked);
+  expect(fake.strays).toEqual([]);
+});
+
+test("1.10.0's Messages is on preprod only: mainnet's page says so with no switch, and names preprod's while they're on", async ({ context }) => {
+  const { host_permissions: hosts } = JSON.parse(readFileSync(join(dist, "manifest.json"), "utf8")) as { host_permissions: string[] };
+  test.skip(!hosts.includes("https://api.koios.rest/*"), "a preprod-only build has no mainnet to show");
+  test.setTimeout(120_000);
+  const fake = relayFake();
+  await routeRelay(context, fake, "A");
+  const page = await openApp(context);
+  await restore(page, vector(12).phrase);
+
+  // Preprod's Messages on: its pool is read.
+  await page.getByTestId("topbar-messages").click();
+  await page.getByTestId("messages-switch").click();
+  await expect(page.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true");
+  await expect.poll(() => fake.calls.includes(`A GET ${ENVELOPES}`), { timeout: 60_000 }).toBe(true);
+
+  // To mainnet, as Settings switches.
+  await page.getByRole("button", { name: "Settings" }).click();
+  const choice = page.getByRole("group", { name: "Cardano network" });
+  await choice.getByRole("button", { name: "Mainnet" }).click();
+  await page.getByRole("button", { name: "Switch to Mainnet" }).click();
+  await expect(page.getByTestId("network")).toHaveText("MAINNET");
+
+  // One line where the switch was, no switch, no line about the test, and nothing to write from.
+  await page.getByTestId("topbar-messages").click();
+  await expect(page.getByTestId("messages-closed")).toHaveText("For now, Messages are on Preprod only.");
+  await expect(page.getByTestId("messages-switch")).toHaveCount(0);
+  await expect(page.getByTestId("messages-test-wallet")).toHaveCount(0);
+  await expect(page.getByTestId("messages-new")).toBeDisabled();
+  await expect(page.getByTestId("messages-none")).toHaveCount(0);
+  // The worker refuses it too, in words, whoever asks.
+  const refused = await askWorker(page, { type: "messaging-switch", on: true });
+  expect(JSON.stringify(refused.reply)).toContain("Messages can't be turned on for Mainnet yet.");
+
+  // Preprod's are read whichever network the wallet shows (call 9): mainnet's page says so, and nothing is asked for
+  // mainnet's pool.
+  await expect(page.getByTestId("messages-also-on")).toContainText("Messages are also on for Preprod.");
+  await askWorker(page, { type: "messaging-sync" });
+  expect(fake.calls.filter((call) => call.includes("/mainnet/"))).toEqual([]);
+  // Turned off from here: nothing more is asked at all.
+  await page.getByTestId("messages-also-on").getByRole("button").click();
+  await expect(page.getByTestId("messages-also-on")).toHaveCount(0);
   const asked = fake.calls.length;
   await askWorker(page, { type: "messaging-sync" });
   expect(fake.calls).toHaveLength(asked);
@@ -169,13 +223,28 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
   await a.getByTestId("messages-switch").click();
   await expect(a.getByTestId("messages-pick")).toBeVisible();
   // A's Seedelf is the recorded contract's, not one this browser minted: off for first messages until A turns it on
-  // (W8), with the line that says to turn on only one you made.
+  // (W8), with the line that says to turn on only one you made. The Seedelfs' switches are behind one row at the foot
+  // of the list (the owner, 2026-11-24), which starts open here, none of A's taking messages yet.
+  const aRow = a.getByTestId("messages-seedelfs-row");
+  await expect(aRow).toHaveAttribute("aria-expanded", "true", { timeout: 30_000 });
+  await expect(a.getByTestId("messages-seedelfs-count")).toHaveText("taking messages: 0 of 1");
   const aSeedelf = a.getByTestId("messages-seedelf-switch");
   await expect(aSeedelf).toHaveCount(1, { timeout: 30_000 });
   await expect(aSeedelf).toHaveAttribute("aria-checked", "false");
   await expect(a.getByTestId("messages-seedelfs")).toContainText("Turn on only a Seedelf you made");
   await aSeedelf.click();
   await expect(aSeedelf).toHaveAttribute("aria-checked", "true");
+  // Turned on, the row counts it and stays open under the press. A press of the row hides the switch; the next shows
+  // it again, as it was left.
+  await expect(a.getByTestId("messages-seedelfs-count")).toHaveText("taking messages: 1 of 1");
+  await expect(aRow).toHaveAttribute("aria-expanded", "true");
+  await aRow.click();
+  await expect(aRow).toHaveAttribute("aria-expanded", "false");
+  await expect(aSeedelf).toHaveCount(0);
+  await aRow.click();
+  await expect(aSeedelf).toHaveAttribute("aria-checked", "true");
+  await aRow.click();
+  await expect(aSeedelf).toHaveCount(0);
 
   // B, another browser on the same chain and relay, writes first to A's Seedelf from a narrow side panel.
   const dir = mkdtempSync(join(tmpdir(), "seedelf-e2e-b-"));
@@ -193,11 +262,13 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await b.getByTestId("messages-switch").click();
     await expect(b.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true");
     // B's b-wallet came into the contract by another way than a mint here, so B turns it on too: only then can B's
-    // thread show it to A (W8).
+    // thread show it to A (W8). Its row is open too, none of B's taking messages yet.
+    await expect(b.getByTestId("messages-seedelfs-row")).toHaveAttribute("aria-expanded", "true", { timeout: 30_000 });
     const bSeedelf = b.getByTestId("messages-seedelf-switch");
     await expect(bSeedelf).toHaveCount(1, { timeout: 30_000 });
     await bSeedelf.click();
     await expect(bSeedelf).toHaveAttribute("aria-checked", "true");
+    await expect(b.getByTestId("messages-seedelfs-count")).toHaveText("taking messages: 1 of 1");
     await b.getByTestId("messages-new").click();
     // Narrow: the new message takes the list's place.
     await expect(b.getByTestId("messages-switch")).toBeHidden();
@@ -219,6 +290,12 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     // A: a stranger's request, counted on the top bar, until a reply accepts it.
     await expect(a.getByTestId("messages-requests")).toContainText("Unknown sender", { timeout: 30_000 });
     await expect(a.getByTestId("messages-requests")).toContainText("Wrote to your Seedelf web-wallet");
+    // The request is over the Seedelfs' row, which keeps to the foot of the list, the list's note under it.
+    const requestBox = (await a.getByTestId("messages-requests").boundingBox())!;
+    const rowBox = (await aRow.boundingBox())!;
+    const noteBox = (await a.getByTestId("messages-notes").boundingBox())!;
+    expect(requestBox.y + requestBox.height).toBeLessThanOrEqual(rowBox.y);
+    expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(noteBox.y);
     await expect(a.getByTestId("topbar-messages-unread")).toHaveText("1");
     await a.getByTestId("messages-requests").getByRole("button").click();
     await expect(a.getByTestId("request").getByTestId("bubble")).toHaveText(/hello from B/);
@@ -257,7 +334,7 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await expect(a.getByTestId("bubble-reveal")).toHaveText("Showed you a Seedelf, not checked on the chain yet", { timeout: 30_000 });
     await expect(a.getByTestId("reveal-notice")).not.toHaveClass(/\bbubble\b/);
     await a.getByTestId("reveal-check").click();
-    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf tagged “b-wallet” \(5eed0e1f…[0-9a-f]{16}\), verified on the chain$/, {
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf tagged “b-wallet” \(5eed0e1f…[0-9a-f]{16}\s#0\), verified on the chain$/, {
       timeout: 30_000,
     });
     await expect(a.getByTestId("reveal-check")).toHaveCount(0);
@@ -275,7 +352,7 @@ test("54f: two wallets write to each other: a stranger's request, accepted by a 
     await a.getByTestId("thread-save").click();
     await a.getByLabel("Name", { exact: true }).fill("Bea");
     await a.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf, your contact Bea \(5eed0e1f…[0-9a-f]{16}\), verified on the chain$/);
+    await expect(a.getByTestId("bubble-reveal")).toHaveText(/^Showed you their Seedelf, your contact Bea \(5eed0e1f…[0-9a-f]{16}\s#0\), verified on the chain$/);
     // Under A's name for it, the label says now that it's A's contact's.
     await expect(a.getByTestId("thread-detail").nth(1)).toContainText("your contact");
     await expect(a.getByTestId("thread-save")).toBeHidden();

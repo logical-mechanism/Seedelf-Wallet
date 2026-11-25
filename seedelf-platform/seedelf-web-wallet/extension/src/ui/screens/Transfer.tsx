@@ -519,8 +519,9 @@ export function SeedelfNameInput({
             {t("destination.found")}{" "}
             {/* Each "·" starts what it leads to, never ends a line (the visual review of pass two). */}
             {found.seedelf.label && <><strong>{found.seedelf.label}</strong>{" ·\u00a0"}</>}
-            {/* Cut to parts no one else can choose: its prefix and its last sixteen (chunk 51, gap-g10#2). */}
-            <code>{shortCounterparty(found.seedelf.name)}</code>
+            {/* Cut to its prefix, its last sixteen and its output index, which tells it from a Seedelf minted from
+                another output of the same transaction (chunk 51, gap-g10#2; the 1.10.0 gate). Whole, on one line. */}
+            <code className="note-part">{shortCounterparty(found.seedelf.name)}</code>
             {saved ? (
               <>{" ·\u00a0"}{t("destination.yourContact", { name: saved.name })}</>
             ) : (

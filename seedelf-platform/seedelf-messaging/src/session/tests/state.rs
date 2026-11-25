@@ -210,6 +210,62 @@ fn secrets_stay_out_of_debug_and_x_out_of_the_state() {
     assert!(!stored.windows(32).any(|w| w == x));
 }
 
+/// A state whose ratchet key is its own side's identity key holds x as that
+/// key's secret. Only a responder's scratch state does, inside
+/// `accept_with`, and control flow alone kept one from being written (the
+/// 1.10.0 gate's review). Now it's structural: such a state is told apart
+/// (`ratchet_key_is_identity`), so a caller that stores states refuses to
+/// write one; what `to_bytes` would write of it, x included, no reader
+/// takes; and `accept_with` returns none, whatever was drawn.
+#[test]
+fn a_state_whose_ratchet_key_is_its_identity_key_is_never_kept() {
+    use crate::session::ratchet::KeyPair;
+    use crate::session::secret::Secret32;
+    let p = pair("identity as ratchet key");
+    for (conversation, key) in [(&p.a, &p.alice), (&p.b, &p.bob)] {
+        // The states an exchange leaves aren't such states.
+        assert!(!conversation.ratchet_key_is_identity());
+        assert!(Conversation::from_bytes(&conversation.to_bytes()).is_ok());
+        // The same state with x as its ratchet key, as a scratch state has
+        // it: A's at the initiator, w₀'s at the responder.
+        let x = key.scalar().to_bytes_be();
+        let mut scratch = conversation.clone();
+        scratch.ratchet.dhs = KeyPair {
+            secret: Secret32::from_bytes(x),
+            public: match scratch.role {
+                Role::Initiator => scratch.first.initiator,
+                Role::Responder => scratch.responder,
+            },
+        };
+        assert!(scratch.ratchet_key_is_identity());
+        // Its bytes would hold x, and are a good state's but for that: the
+        // key's two halves agree, and nothing else was changed.
+        let stored = scratch.to_bytes();
+        assert!(stored.windows(32).any(|w| w == x));
+        assert_eq!(
+            Conversation::from_bytes(&stored).err(),
+            Some(Error::InvalidState)
+        );
+    }
+
+    // The one place a responder's state is made returns none: were x itself
+    // drawn as the new ratchet key (no source can, without x), the message
+    // that authenticated makes no state. Any other draw makes it.
+    let (alice, bob) = (key("alice"), key("bob"));
+    let mut draw = Seeded::new("identity drawn");
+    let mut a = start(&alice, &handle("bob", "h"), T, &mut draw);
+    let first = opened(&bob, &a.send_with(b"hello", &mut draw).unwrap());
+    let mut drawn = super::support::Stuck {
+        scalar: bob.scalar(),
+        aux: [0x5a; 32],
+    };
+    assert_eq!(
+        Conversation::accept_with(&bob, &[(&first, T)], &mut drawn).err(),
+        Some(Error::DecryptionFailed)
+    );
+    assert!(Conversation::accept_with(&bob, &[(&first, T)], &mut draw).is_ok());
+}
+
 /// The four sizes hold 366, 1,902, 8,046 and 32,622 inner bytes, each with
 /// the padding's marker (§9). A session message takes the size its text
 /// would as a first-contact message of its conversation, F and 97 bytes

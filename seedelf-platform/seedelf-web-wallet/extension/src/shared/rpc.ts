@@ -269,8 +269,13 @@ export interface MessagingConversation {
    * can't be shown (`messaging-thread` says why), and `messaging-delete` deletes it.
    */
   unreadable?: true;
-  /** Its last message, for the list: which way, and the start of its text (none for a kind this version can't show). */
-  last?: { dir: "in" | "out"; text?: string; reveal?: true };
+  /**
+   * Its last message, for the list: which way, and the start of its text (none for a kind this version can't show).
+   * `unsent`: what the row says of the user's own messages instead: `refused`, the last message is the user's and
+   * wasn't sent (the thread's "not sent: …"); `reply`, every message still waiting waits for a reply (the thread's
+   * "waiting for a reply").
+   */
+  last?: { dir: "in" | "out"; text?: string; reveal?: true; unsent?: "refused" | "reply" };
   /** The user's own name for it, on this device only (`messaging-name`): theirs, never a message's or a proof's. */
   name?: string;
   /**

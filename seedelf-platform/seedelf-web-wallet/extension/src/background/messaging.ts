@@ -201,7 +201,7 @@ import {
   RelayUnknown,
 } from "./relay";
 import { fromBase64, toBase64, type Area } from "./storage";
-import { type Admit, NotAdmitted, phrasePin, type PhrasePin, type Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
+import { type Admit, NotAdmitted, phrasePin, type PhrasePin, SESSION_UNLOCKED_AT, type Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** Envelopes scanned in one turn of the wallet's queue: about 0.2 s (protocol.md §8). */
@@ -364,6 +364,14 @@ export interface Inbox {
    */
   requestsAs?: string;
   /**
+   * A request an Accept may have left in `messagingRequests.<network>` beside its conversation (1.10.0's second
+   * review): set in the write that lists the conversation, before the record is written without the request. Stored,
+   * so a worker Chrome stops loses nothing of it; and no write of the record unsets it, whatever nonce that write
+   * notes: only the repair, once it has read the record (`repairRequests`), and the accept that set it, once its own
+   * write of the record went through with no earlier mark standing. None in an inbox a build before it wrote.
+   */
+  requestLeft?: true;
+  /**
    * What the list shows of each request, by cid, kept beside the record whenever a receive or an accept changes it:
    * neither an overview nor an envelope that isn't a request's has the module parse the record (W7).
    */
@@ -483,8 +491,13 @@ export interface Meta {
   unreachable?: true | number;
   /** Its record won't open, or the crate can't read it: it can't be shown, and can be deleted (W9). */
   unreadable?: true;
-  /** Its last message kept, for the list (`lastOf`): which way, and the start of its text, or that it's a reveal. */
-  last?: { dir: "in" | "out"; text?: string; reveal?: true };
+  /**
+   * Its last message kept, for the list (`lastOf`): which way, and the start of its text, or that it's a reveal.
+   * `unsent`: what the list's row must say of the user's own messages that the count of the outbox doesn't (the
+   * 1.10.0 gate's blind reading): `refused`, the last message is the user's and wasn't sent, by the server or by the
+   * wallet; `reply`, every message still waiting waits for a reply, none for its stamp or its post.
+   */
+  last?: { dir: "in" | "out"; text?: string; reveal?: true; unsent?: "refused" | "reply" };
   /** The user's own name for it, on this device only: never from a message, never sent (`rename`). */
   name?: string;
   /**
@@ -586,7 +599,7 @@ export interface MessagingDeps {
   local: Area;
   /** chrome.storage.session: when skipped keys and tombstones were last expired. Kept in memory without it. */
   session?: Area;
-  preferences: Pick<PreferencesService, "get" | "set">;
+  preferences: Pick<PreferencesService, "get" | "set" | "messagingOpen">;
   /** `seedelf.messaging`'s alarm, every minute while a switch is on and the wallet unlocked (sw.ts). */
   alarm?: { start(): Promise<void>; stop(): Promise<void> };
   /** Each network's relay (relay.ts). */
@@ -612,7 +625,10 @@ export interface MessagingDeps {
   now: () => number;
   /** A turn of the event loop between slices of work. */
   wait?: (ms: number) => Promise<void>;
-  /** A call to a Chrome API now and then while a stamp is solved, so Chrome doesn't stop the worker partway. */
+  /**
+   * A call to a Chrome API that does nothing else, made between a solve's slices at most every 10 seconds, so Chrome
+   * doesn't stop the worker partway through the work (`solve`). Only while a solve runs: never on a timer of its own.
+   */
   keepAlive?: () => Promise<void>;
   /** Tells open pages a network's messages changed. */
   changed?: (network: NetworkName) => void;
@@ -668,11 +684,14 @@ export interface MessagingDeps {
   /** A wait of `ms` (monotonic) for the gate, for tests: a timer otherwise. */
   sleep?: (ms: number) => Promise<void>;
   /**
-   * For tests only: told as each lane starts and ends, as each runner step starts and ends, as the gate lets a call
-   * into the wallet's queue through, and as a call its admit check turned away gives the queue back (`yield`). The
-   * worker never sets it.
+   * For tests only: told as each lane starts and ends, as each run of `syncAll` starts and ends (the alarm's, an
+   * unlock's), as each runner step starts and ends, as the gate lets a call into the wallet's queue through, and as a
+   * call its admit check turned away gives the queue back (`yield`). The worker never sets it.
    */
-  observe?: (event: "lane-start" | "lane-end" | "step-start" | "step-end" | "gate" | "yield", network?: NetworkName) => void;
+  observe?: (
+    event: "lane-start" | "lane-end" | "run-start" | "run-end" | "step-start" | "step-end" | "gate" | "yield",
+    network?: NetworkName,
+  ) => void;
 }
 
 /**
@@ -1276,6 +1295,11 @@ interface ReadOut {
   from?: string;
   cursor?: string;
   gap: boolean;
+  /**
+   * A page of the read held envelopes, whoever they are for (1.10.0's second review, F2): with the cursor and a gap,
+   * what decides whether the lane writes the read record. Never what the scan matched.
+   */
+  envelopes: boolean;
   /** The scan's mark was written: it's cleared at the lane's end. */
   marked: boolean;
   trapped: boolean;
@@ -1385,6 +1409,11 @@ function trimToShare(file: ConversationFile, meta: Meta, keep: number | undefine
 export class MessagingService {
   /** Every state change, one at a time (protocol.md §4.2). */
   private queue: Promise<unknown> = Promise.resolve();
+  /**
+   * The unlock the call running in the queue was asked under (`serial`): the wallet's count of its opens as it was
+   * asked. Everything it reads and writes belongs to that unlock alone (`admitted`). None between calls.
+   */
+  private task?: { opened: number | undefined };
   /** The sync running on each network, if one is: its read and its posts. One asked meanwhile is that one (`join`). */
   private syncs = new Map<NetworkName, Promise<void>>();
   /** The posting running on each network. */
@@ -1397,8 +1426,13 @@ export class MessagingService {
   /** Told as the last lane running ends, and as the next one starts. */
   private laneEnds: Array<() => void> = [];
   private laneStarts: Array<() => void> = [];
-  /** When the last lane started (monotonic ms): a tick a lane started at or after has been served. */
-  private laneStartedAt = Number.NEGATIVE_INFINITY;
+  /**
+   * The runs of `syncAll` under way (the alarm's, an unlock's), each from before its first await to its lanes' end
+   * (1.10.0's second review, F3): a lane, for the gate, the admit check and the held notices.
+   */
+  private runs = 0;
+  /** When the alarm's own run last began (monotonic ms): what serves an alarm's tick, and nothing else does (`live`). */
+  private alarmRunAt = Number.NEGATIVE_INFINITY;
   /** Each open page, by its ID, and when it was last heard from (monotonic ms, `notePage`). */
   private pages = new Map<string, number>();
   /**
@@ -1422,8 +1456,12 @@ export class MessagingService {
   private takeWrites = new Map<NetworkName, Promise<unknown>>();
   /** Each network's outbox record's writes, one after another: a press's append, a posting run's shrink. */
   private outboxWrites = new Map<NetworkName, Promise<unknown>>();
-  /** What a press couldn't append to the outbox record, by network (f4): posted all the same, from memory. */
-  private outboxNoted = new Map<NetworkName, Waiting[]>();
+  /**
+   * What a press couldn't append to the outbox record, by network (f4): posted all the same, from memory. Each with the
+   * phrase it was noted under (`phrasePin`'s ID; 1.10.0's second review): a posting run uses only the unlocked phrase's
+   * (`outboxNow`), so a wallet removed and another restored in the same worker posts nothing of the first's.
+   */
+  private outboxNoted = new Map<NetworkName, Array<Waiting & { phrase: string }>>();
   /** What this worker posted or the relay refused, by `keyOf` and the entry's id: never posted again, nor put back. */
   private postedHere = new Set<string>();
   /** The reads' envelopes in memory, by network, oldest first, waiting for the runner to save and take them. */
@@ -1576,6 +1614,11 @@ export class MessagingService {
    */
   async switch(network: NetworkName, on: boolean): Promise<void> {
     if ((await this.deps.wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+    // A network Messages isn't open on (networks.ts `MESSAGING_NETWORKS`): refused in words, changing nothing. The
+    // settings would write it off all the same (preferences.ts). Turning one off is always the user's.
+    if (on && !this.deps.preferences.messagingOpen(network)) {
+      throw new Error(t("worker.messaging.notOpenHere", { network: NETWORKS[network].label }));
+    }
     // This network's switch alone: the settings' writes are one at a time (preferences.ts `set`), the other kept.
     const switches = (await this.deps.preferences.set({ messaging: { [network]: on } as never })).messaging;
     // Whatever the relay did before the switch, the next read says again.
@@ -1825,6 +1868,8 @@ export class MessagingService {
    * first-contact stamp is then solved, about 7 s, and the message sealed and posted. Returns its cid.
    */
   async start(network: NetworkName, name: string, text: string, replacing?: string): Promise<string> {
+    // Before the chain read: on a network Messages isn't open on, no server is asked anything for it.
+    this.openHere(network);
     this.checkText(text);
     // The press's own chain read: its request, at once.
     const register = await this.deps.seedelfRegister(network, name);
@@ -1853,6 +1898,8 @@ export class MessagingService {
         trimmed: 0,
       };
       const inbox = await this.inbox(network);
+      // An ID the wallet holds already: refused before anything of this one is written, stamped or sealed (`refuseHeld`).
+      this.refuseHeld(inbox, started.cid, started.conversation);
       await this.addConversation(network, inbox, started.cid, file, {
         role: "initiator",
         handle: name,
@@ -1878,6 +1925,7 @@ export class MessagingService {
    * again as this one. Returns its cid.
    */
   async restart(network: NetworkName, cid: string, text: string): Promise<string> {
+    this.openHere(network);
     await this.gate();
     const inbox = await this.inbox(network);
     const meta = inbox.conversations[cid];
@@ -1890,6 +1938,7 @@ export class MessagingService {
    * other side still has it. The reader shows it as continuing the old one. Returns its cid.
    */
   async continueIn(network: NetworkName, cid: string, text: string): Promise<string> {
+    this.openHere(network);
     this.checkText(text);
     const next = await this.serial(async () => {
       const pin = phrasePin();
@@ -1915,6 +1964,8 @@ export class MessagingService {
         next: 1,
         trimmed: 0,
       };
+      // An ID the wallet holds already: refused before anything of this one is written, stamped or sealed (`refuseHeld`).
+      this.refuseHeld(inbox, started.cid, started.conversation);
       await this.addConversation(network, inbox, started.cid, file, {
         role: "initiator",
         ...(meta.handle ? { handle: meta.handle } : {}),
@@ -1941,6 +1992,7 @@ export class MessagingService {
    * counted (W17): in words, and nothing of it kept. Throws if locked.
    */
   async send(network: NetworkName, cid: string, text: string): Promise<void> {
+    this.openHere(network);
     this.checkText(text);
     await this.serial(async () => {
       const inbox = await this.inbox(network);
@@ -1980,6 +2032,7 @@ export class MessagingService {
    * as it is. Throws if locked.
    */
   async resend(network: NetworkName, cid: string, id: number): Promise<void> {
+    this.openHere(network);
     const again = await this.serial(async () => {
       const inbox = await this.inbox(network);
       const meta = inbox.conversations[cid];
@@ -2005,6 +2058,8 @@ export class MessagingService {
    * reader's check compares, and the read names no Seedelf. Throws if locked.
    */
   async reveal(network: NetworkName, cid: string, name: string): Promise<void> {
+    // Before the chain read: on a network Messages isn't open on, no server is asked anything for it.
+    this.openHere(network);
     // The press's own chain read: its request, at once.
     const own = await this.deps.ownSeedelfs(network, true);
     const register = own?.find((s) => s.name === name)?.register;
@@ -2053,9 +2108,31 @@ export class MessagingService {
     this.behind(this.post(network));
   }
 
-  /** Accepts a request: its conversation, with its messages, which the reply is then sent in. Throws if locked. */
-  accept(network: NetworkName, cid: string): Promise<void> {
-    return this.serial(async () => {
+  /**
+   * Accepts a request: its conversation, with its messages, which the reply is then sent in. Throws if locked.
+   *
+   * Its writes, in order (1.10.0's second review): the conversation's record; the inbox, which lists the conversation,
+   * no longer lists the request, marks it as left in its record (`requestLeft`) and no longer notes the requests'
+   * record's nonce (`requestsAs`); the requests' record without the request; the inbox again, with that record's new
+   * nonce and, where no earlier accept's mark stood, without the mark. So the request stays in its record until its
+   * conversation is listed, and a stop or a lock between any two leaves the first message readable:
+   *   - after the conversation's record alone: a record nothing lists, which the sweep deletes, and the request as it
+   *     was, in its record and in the list, to accept again;
+   *   - after the first inbox: the conversation, listed, and the request still in its record, which nothing lists. The
+   *     mark has the repair read that record (`repairRequests`), which drops from it a request whose conversation is
+   *     held, and never lists one: at a worker's or an unlock's first window, and before a take hands the crate the
+   *     record or anything is deleted (`settled`). Whatever writes the record meanwhile (Accept another, Delete a
+   *     request, a stranger's first message) notes its nonce, and leaves the mark;
+   *   - after the requests' record: all but the nonce and the mark, which the same repair sets right.
+   * A third or fourth write the browser refuses is the same stop, and accepted all the same. Chrome stops the worker
+   * about 30 seconds after its last activity, the wallet still unlocked: nothing of this waits in memory.
+   *
+   * A request whose conversation's ID a tombstone holds is refused (`deleted`), with nothing written: one left in its
+   * record by a stop above, listed again after its conversation was deleted, is never accepted a second time.
+   */
+  async accept(network: NetworkName, cid: string): Promise<void> {
+    this.openHere(network);
+    await this.serial(async () => {
       const pin = phrasePin();
       const inbox = await this.inbox(network);
       const info = inbox.requestsShown[cid];
@@ -2081,6 +2158,12 @@ export class MessagingService {
         ([r, a]) => isRecordRefusal(r) || isRecordRefusal(a),
       );
       if (isRefused(accepted)) throw new MessagingRefused(accepted.refused);
+      // One whose conversation was deleted here, its tombstone standing (1.10.0's second review): a request an Accept
+      // left in its record can be listed again once that conversation is deleted. Accepted, it would be a conversation
+      // neither side's messages reach; and under a random source that repeats, the first accept's own keys again, its
+      // first reply sealed under the first's key and nonce. Refused in the crate's word for a tombstone, before
+      // anything is listed or written: the request stays as it is, to be deleted.
+      if (this.tombstoned(inbox, cid, accepted.conversation)) throw new MessagingRefused("deleted");
       // Each message as it arrived; one that doesn't read now was refused when it came too, and isn't kept, nor is a
       // control kind this version doesn't know (W15).
       const history: Entry[] = isRefused(read)
@@ -2108,9 +2191,23 @@ export class MessagingService {
           ? { name: inbox.conversations[accepted.continues.cid]!.name }
           : {}),
       });
-      // The request goes as the conversation comes: its record before the inbox that no longer lists it.
-      await this.writeRequests(network, inbox, { ...held, requests: accepted.requests });
+      // The conversation is listed before the request leaves its record (above): a stop between the two loses neither.
+      // Until the record is written without it, the inbox marks it, in the very write that lists the conversation, and
+      // notes no nonce for the record: the repair reads it, whatever else writes the record first.
+      const marked = inbox.requestLeft;
+      inbox.requestLeft = true;
+      delete inbox.requestsAs;
       await this.writeInbox(network, inbox);
+      try {
+        await this.writeRequests(network, inbox, { ...held, requests: accepted.requests });
+        // The record as just written holds no accepted request, unless an earlier accept left one: its mark stands.
+        if (!marked) delete inbox.requestLeft;
+        await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      } catch (e) {
+        // Accepted all the same: its conversation is listed, and what's left is the repair's. A write the browser
+        // refuses, or a read of storage that fails, refuses nothing here; a lock or a trap is thrown as ever.
+        if (!(e instanceof MessagingFull) && !(e instanceof StorageFailed)) throw e;
+      }
       this.notify(network);
     });
   }
@@ -2137,12 +2234,22 @@ export class MessagingService {
    * Deletes a conversation or a request: its ID is kept as a tombstone until its `t` + 48 hours and 7 days. One whose
    * record won't open, or that the crate can't read (a development build's, a later version's), is deleted all the
    * same, with no tombstone: its F, and so its t, can't be read (W9, W17). Never refused for room: it only frees some.
-   * What it had waiting to be posted goes from the outbox record too, so the deletion holds across a restart. Throws if
-   * locked.
+   * Throws if locked.
+   *
+   * What a conversation has waiting to be posted goes first (1.10.0's second review): from the outbox record, which a
+   * posting run reads alone, and from what presses noted in memory; then the inbox stops listing it; then its record
+   * goes. From that first write no posting run of this worker posts it (`removed`). So a stop or a lock mid-deletion
+   * leaves it whole (still listed, its message still waiting, the outbox record written again from its record at the
+   * next first window: the user sees it, and deletes again) or gone with nothing to post. A write that fails before
+   * the inbox stops listing it is a deletion that failed: the press says so, the conversation stays, and what was
+   * dropped is noted in memory again, under the phrase unlocked now, so this worker posts it as it would have. But for
+   * a lock, which notes nothing: the next unlock's first window writes the outbox again from the records, and nothing
+   * noted can outlive its phrase.
    */
   remove(network: NetworkName, cid: string): Promise<void> {
     return this.serial(async () => {
-      const inbox = await this.inbox(network);
+      // A request an Accept left in its record leaves it first: its conversation deleted, it would be listed again.
+      const inbox = await this.settled(network);
       const meta = inbox.conversations[cid];
       // A request's deletion hands the crate the requests record; a conversation's never does (round 5).
       const request = !meta && inbox.requestsShown[cid] !== undefined;
@@ -2172,17 +2279,30 @@ export class MessagingService {
       delete inbox.requestsUnread[cid];
       delete inbox.requestsShown[cid];
       for (const other of Object.values(inbox.conversations)) if (other.restartedAs === cid) delete other.restartedAs;
-      if (held && (deleted.requests !== undefined || held.changed)) {
-        await this.writeRequests(network, inbox, { ...held, ...(deleted.requests !== undefined ? { requests: deleted.requests } : {}) });
+      // Nothing of it is posted, now or after a restart: held back from this worker's posting runs, and out of the
+      // outbox before anything stops listing it.
+      const key = keyOf(network, cid);
+      const holding = !this.removed.has(key);
+      this.removed.add(key);
+      let dropped: Waiting[] = [];
+      try {
+        if (meta) dropped = await this.dropFromOutbox(network, (w) => w.cid === cid);
+        if (held && (deleted.requests !== undefined || held.changed)) {
+          await this.writeRequests(network, inbox, { ...held, ...(deleted.requests !== undefined ? { requests: deleted.requests } : {}) });
+        }
+        await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      } catch (e) {
+        // Not deleted: as it was before the press, what it had waiting noted in memory, each once (`noteWaiting`). Not
+        // at a lock: the first window after the unlock writes the outbox again from the records (`repairOutbox`). And
+        // noting asks for the phrase unlocked then, a question that waits while a tick is near: whoever unlocked in
+        // that wait would answer it, another phrase restored included, and its posting run would send these.
+        if (holding) this.removed.delete(key);
+        if (!(e instanceof WalletLocked)) await this.noteWaiting(network, dropped);
+        throw e;
       }
-      await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      // Unlisted from here: the record nothing lists goes now, or at the next sweep.
       if (meta?.id) await this.deps.store.remove(conversationRecord(network, meta.id));
-      this.removed.add(keyOf(network, cid));
       this.inboxBehind.get(network)?.delete(cid);
-      // Nothing of it is posted, now or after a restart.
-      await this.dropFromOutbox(network, (w) => w.cid === cid).catch((e: unknown) => {
-        if (e instanceof WalletLocked) throw e;
-      });
       // Room, maybe: the next take says again.
       this.full.delete(network);
       this.blocked.delete(network);
@@ -2292,6 +2412,8 @@ export class MessagingService {
       markRecord(network, "take"),
     ];
     await this.serial(async () => {
+      // Asked of this unlock's Messages: never another's, restored while it waited here (`mine`).
+      this.mine();
       const records = await this.deps.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS + network + ".");
       await this.deps.local.remove(...names.map((n) => PRIVATE_PREFIX + n), trapKey(network), ...records);
     });
@@ -2413,21 +2535,31 @@ export class MessagingService {
    * the wallet is locked or no switch is on, and the unlock starts it again. A network whose switch is off is tidied
    * by the runner with no request: what only a sync cleans up (skipped keys past their 48 hours, tombstones past their
    * t + 48 hours and 7 days, a record a stop left behind) goes all the same (worker-state#12).
+   *
+   * The run is marked as it begins, before its first await (`runStart`; 1.10.0's second review, F3): it reads the
+   * settings and the wallet's state before any lane of its starts, and that state's read waits its turn in the wallet's
+   * queue, behind another feature's long task where there is one. Marked, nothing gated is admitted meanwhile, however
+   * long that takes. `from.alarm`: the alarm's own run (sw.ts), which alone serves the alarm's tick (`live`, F1); an
+   * unlock's run serves none. The mark goes as the run ends, whatever it found to read.
    */
-  async syncAll(networks: readonly NetworkName[]): Promise<void> {
-    const switches = (await this.deps.preferences.get()).messaging;
-    const unlocked = (await this.deps.wallet.state()) === "unlocked";
-    const on = networks.filter((n) => switches[n]);
-    if (!on.length || !unlocked) await this.deps.alarm?.stop();
-    else {
-      await this.deps.alarm?.start();
-      // The reads first, at the tick, each network's lane marked before its first await, so the runner and the screens'
-      // work keep off them: nothing of another network's comes before them but its own lane's fixed reads (W13, round 5).
-      await Promise.all(on.map((n) => this.sync(n).catch(rethrowTrap)));
-    }
-    if (unlocked) {
-      for (const n of networks) if (!switches[n]) this.dueRest(n, { sweep: true, expire: true });
-      this.wake();
+  async syncAll(networks: readonly NetworkName[], from: { alarm?: boolean } = {}): Promise<void> {
+    this.runStart(from.alarm === true);
+    try {
+      const switches = (await this.deps.preferences.get()).messaging;
+      const unlocked = (await this.deps.wallet.state()) === "unlocked";
+      const on = networks.filter((n) => switches[n]);
+      if (!on.length || !unlocked) await this.deps.alarm?.stop();
+      else {
+        await this.deps.alarm?.start();
+        // The reads first, at the tick, each network's lane marked before its first await, so the runner and the
+        // screens' work keep off them: nothing of another network's comes before them but its own lane's fixed reads
+        // (W13, round 5).
+        await Promise.all(on.map((n) => this.sync(n).catch(rethrowTrap)));
+      }
+      if (unlocked) for (const n of networks) if (!switches[n]) this.dueRest(n, { sweep: true, expire: true });
+    } finally {
+      // The run's end wakes the runner, as a lane's end does: its lanes' own ends didn't, the run still marked.
+      this.runEnd();
     }
   }
 
@@ -2448,7 +2580,7 @@ export class MessagingService {
     const pin = phrasePin();
     await this.laneKey((_key, keys) => pin(keys));
     const epoch = this.epochOf(network);
-    const out: ReadOut = { found: [], gap: false, marked: false, trapped: false };
+    const out: ReadOut = { found: [], gap: false, envelopes: false, marked: false, trapped: false };
     const held = await this.readFor(network, pin);
     out.from = held.cursor;
     try {
@@ -2475,9 +2607,11 @@ export class MessagingService {
   /**
    * The end of a sync's lane: the scan's mark cleared where the read made one and nothing trapped; then, unless a
    * rewind or Messages started again since the lane began (its epoch moved), the read record moved to where the pages
-   * ended, with what the read found owed, and written, where it changed: whether it's written depends on the pages
-   * alone, since a match always moves the cursor. The batch, and that the take should look at the Seedelfs again, go
-   * to the runner. A lane overtaken by a rewind drops its batch and writes no cursor.
+   * ended, with what the read found owed, and written, where the pages moved it: whether it's written depends on the
+   * pages alone (the cursor moved, a page held envelopes, or a gap), never on whether the scan matched (1.10.0's second
+   * review, F2: a relay that isn't §17's can serve envelopes and leave the cursor where it was, and a write made only
+   * for a match would then say which wallet they were for). The batch, and that the take should look at the Seedelfs
+   * again, go to the runner. A lane overtaken by a rewind drops its batch and writes no cursor.
    */
   private async laneDone(network: NetworkName, epoch: number, pin: PhrasePin, held: ReadHeld, out: ReadOut): Promise<void> {
     if (out.marked && !out.trapped) await this.setMark(network, "scan", undefined, undefined, true).catch(() => undefined);
@@ -2485,7 +2619,7 @@ export class MessagingService {
     // A rewind since the lane began, or one being written now: this lane's read goes, and the next reads from the oldest.
     const fresh = this.epochOf(network) === epoch && this.readRecords.get(network) === held && !this.rewinding.has(network);
     if (!fresh) return;
-    const moved = out.cursor !== undefined && (out.cursor !== out.from || out.found.length > 0 || out.gap);
+    const moved = out.cursor !== undefined && (out.cursor !== out.from || out.envelopes || out.gap);
     if (moved) {
       held.cursor = out.cursor;
       held.owed += out.found.length;
@@ -2620,24 +2754,30 @@ export class MessagingService {
   }
 
   /**
-   * The read record for a lane (round 5): as held, under this phrase, in this unlock, or, where a write of it failed, in
-   * any unlock of this phrase; otherwise one read of it, its one fixed size. Nothing else a read needs is read.
+   * The read record for a lane (round 5): as held, under this phrase, in this unlock; otherwise one read of it, its one
+   * fixed size, after which memory's copy is still the one kept where a write of it failed or was never made, in any
+   * unlock of this phrase (F4). Nothing else a read needs is read.
    * `outside`: a press's or the runner's (`readHeld`), each of its calls into the wallet's queue admitted.
    */
   private async readFor(network: NetworkName, pin: PhrasePin, outside = false): Promise<ReadHeld> {
     const phrase = await (outside ? this.withKey((_key, keys) => pin(keys)) : this.laneKey((_key, keys) => pin(keys)));
     const at = await (outside ? this.stampNow() : this.unlockStamp());
     const held = this.readRecords.get(network);
-    if (held && held.phrase === phrase && (held.at === at || held.dirty)) {
-      held.at = at;
-      return held;
-    }
+    if (held && held.phrase === phrase && held.at === at) return held;
     let stored: StoredRead | undefined;
     try {
       stored = await (outside ? this.got<StoredRead>(readRecord(network)) : this.rawGot<StoredRead>(readRecord(network)));
     } catch (e) {
       // One that won't open holds nothing a read can't bring back: the read goes from the pool's oldest.
       if (!(e instanceof UnreadableRecordError)) throw e;
+    }
+    // Memory's copy from an earlier unlock with a write still to make (what's owed lowered as a lock came, or a write
+    // the browser refused): the newer of the two, so it's kept. The sealed read above was made all the same (1.10.0's
+    // second review, F4): only a wallet that was taking something lowers what's owed, so a lane that skipped its
+    // record's read after such a lock would say so.
+    if (held && held.dirty && held.phrase === phrase && this.readRecords.get(network) === held) {
+      held.at = at;
+      return held;
     }
     const now: ReadHeld = { ...readFromStored(stored), at, phrase, dirty: false };
     this.readRecords.set(network, now);
@@ -2721,6 +2861,8 @@ export class MessagingService {
         const answering = this.offline.delete(network);
         if ((await this.endStop(network)) || answering) this.notify(network);
         this.prices.set(network, page.prices);
+        // What the page held, before anything is stepped over or scanned: the page's alone (F2).
+        if (page.envelopes.length) out.envelopes = true;
         const asked = cursor;
         const envelopes = skip.size ? page.envelopes.filter((e) => !skip.has(envelopeHash(e))) : page.envelopes;
         if (envelopes.length && this.scansAlone(network, asked, page.cursor)) {
@@ -2900,7 +3042,7 @@ export class MessagingService {
         if (this.removed.has(key) || this.postedHere.has(`${key}:${id}`)) continue;
         let answer: Exclude<PostAnswer, { kind: "price" }> | "unknown" | "stopped" | undefined;
         try {
-          answer = await this.postOne(relay, network, envelope, digest, (bits) => {
+          answer = await this.postOne(relay, network, envelope, digest, pin, (bits) => {
             this.work.set(key, { entry: id, bits });
             this.notify(network);
           });
@@ -3010,6 +3152,9 @@ export class MessagingService {
   private async savePostRuns(network: NetworkName, runs: PostRuns): Promise<void> {
     const session = this.deps.session;
     if (!session) return;
+    // Only into the unlock the runs were kept under: a run that outlived it (a lock, the wallet removed and another
+    // restored) leaves the session's copy, the next unlock's by then, as it is.
+    if ((await this.unlockStamp()) !== runs.at) return;
     let kept: Partial<Record<NetworkName, StoredPostRuns>> | undefined;
     try {
       kept = await session.get<Partial<Record<NetworkName, StoredPostRuns>>>(SESSION_POSTS);
@@ -3051,6 +3196,8 @@ export class MessagingService {
     network: NetworkName,
     envelope: string,
     digest: string,
+    /** The run's phrase (`postNow`): the post goes only while that phrase is the one unlocked (`mayAsk`). */
+    pin: PhrasePin,
     /** Told the price before its work is solved. */
     onSolve?: (bits: number) => void,
   ): Promise<Exclude<PostAnswer, { kind: "price" }> | "unknown" | "stopped" | undefined> {
@@ -3065,7 +3212,7 @@ export class MessagingService {
       // retry-after, counted before any work is checked), or names its price if that's passed meanwhile.
       let nonce: number;
       try {
-        nonce = bits === 0 ? 0 : await this.workFor(digest, bits, network, onSolve);
+        nonce = bits === 0 ? 0 : await this.workFor(digest, bits, network, () => this.mayAsk(network, pin), onSolve);
       } catch (e) {
         // The relay stopped while it was solved (fix A): given up, the message still waiting.
         if (e instanceof StopMet) return "stopped";
@@ -3076,8 +3223,9 @@ export class MessagingService {
       const body = this.wasmCall(() => this.deps.wasm.messagingPostBody(JSON.stringify({ nonce, envelope })));
       let answer: PostAnswer;
       try {
-        // Asked again right before it goes: a switch turned off, a lock or the relay's stop while it was solved stops it.
-        answer = await relay.post(body, async () => (await this.mayAsk(network)) && !(await this.stopOf(network)));
+        // Asked again right before it goes: a switch turned off, a lock or the relay's stop while it was solved stops
+        // it, and so does another phrase unlocked meanwhile (the wallet removed, another restored, its switch turned on).
+        answer = await relay.post(body, async () => (await this.mayAsk(network, pin)) && !(await this.stopOf(network)));
       } catch (e) {
         if (e instanceof RelayStopped) {
           await this.setStop(network);
@@ -3108,11 +3256,18 @@ export class MessagingService {
    * A nonce with at least `bits` of work over a post's `digest`: the one found before for it when that had as many,
    * else searched for from where that one was found. Every nonce before it failed a lower price, so it fails this one.
    */
-  private async workFor(digest: string, bits: number, network: NetworkName, onSolve?: (bits: number) => void): Promise<number> {
+  private async workFor(
+    digest: string,
+    bits: number,
+    network: NetworkName,
+    /** Whether the post may still go (`mayAsk`): asked while its work is solved (`solve`). */
+    wanted: () => Promise<boolean>,
+    onSolve?: (bits: number) => void,
+  ): Promise<number> {
     const kept = this.solved.get(digest);
     if (kept && kept.bits >= bits) return kept.nonce;
     onSolve?.(bits);
-    const nonce = await this.solve(digest, bits, kept?.nonce ?? 0, network);
+    const nonce = await this.solve(digest, bits, kept?.nonce ?? 0, network, wanted);
     this.solved.set(digest, { bits, nonce });
     return nonce;
   }
@@ -3121,8 +3276,19 @@ export class MessagingService {
    * A nonce from `start` on whose work over `digest` is at least `bits`, found in slices with a turn of the event loop
    * between. For `network`'s relay: memory's copy of its stop is looked at between slices, and one met gives up
    * (StopMet, fix A).
+   *
+   * The worker is kept alive while this runs, and only then (1.10.0's second review). Chrome stops a worker 30 seconds
+   * after its last event or call to an extension API, and a solve makes neither: a post's work, 26 bits at most, runs
+   * about 30 seconds on average, a first message's 24 bits about 7, and one stopped partway starts again from nothing.
+   * So between slices, at most every 10 seconds, one call that does nothing else is made (`keepAlive`): the pattern
+   * Chrome's guide gives for a bounded task ("Keep a service worker alive until a long-running operation is
+   * finished"). It's no timer of its own: this loop makes the call, so every way out of the loop ends it, a nonce
+   * found, the crate's refusal, a throw, the relay's stop. And `wanted` is asked right before each call: a lock, the
+   * wallet removed, or for a post its switch turned off or another phrase unlocked, gives the work up there (StopMet),
+   * within 10 seconds and a slice. Nothing keeps the worker alive between solves: the continuous keep-alive is
+   * allowed on managed devices only, and not used (sw.ts).
    */
-  private async solve(digest: string, bits: number, start = 0, network?: NetworkName): Promise<number> {
+  private async solve(digest: string, bits: number, start = 0, network?: NetworkName, wanted?: () => Promise<boolean>): Promise<number> {
     // On the monotonic clock (W14, clock#8): a device clock stepped back mid-solve never skips the keep-alive.
     let lastKept = this.mono();
     for (let from = start; ; from += STAMP_SLICE) {
@@ -3137,16 +3303,32 @@ export class MessagingService {
       if (ns > 0) this.attemptNs = 0.8 * this.attemptNs + 0.2 * ns;
       await this.wait();
       if (network && this.stoppedNow(network)) throw new StopMet();
-      if (this.deps.keepAlive && this.mono() - lastKept > 10_000) {
+      if (this.mono() - lastKept > 10_000) {
         lastKept = this.mono();
-        await this.deps.keepAlive().catch(() => undefined);
+        // No longer wanted: given up, and no call made for it. A look that fails says nothing, and the work goes on.
+        if (wanted && !(await wanted().catch(() => true))) throw new StopMet();
+        await this.deps.keepAlive?.().catch(() => undefined);
       }
     }
   }
 
   /**
+   * Whether a wallet is unlocked now, by the stamp an unlock leaves in session storage and a lock clears: no turn of
+   * the wallet's queue, so a first message's solve, outside a lane, asks it between slices (`solve`'s `wanted`). True
+   * where it can't be read.
+   */
+  private async unlockedNow(): Promise<boolean> {
+    const session = this.deps.session;
+    if (!session) return true;
+    return typeof (await session.get<unknown>(SESSION_UNLOCKED_AT)) === "number";
+  }
+
+  /**
    * What's waiting to be posted, for a posting run: the outbox record, one read in the lane (the user's own envelopes,
    * whose size nothing a match sets), and what a press noted in memory where its append failed, each once, in order.
+   * Of what's noted, only the unlocked phrase's (1.10.0's second review): another's is dropped here, unposted, so a
+   * wallet removed and another restored while the worker lives posts nothing of the first's. Where nothing is noted,
+   * which is nearly always, the keys aren't asked for.
    */
   private async outboxNow(network: NetworkName): Promise<Waiting[]> {
     let stored: StoredOutbox | undefined;
@@ -3157,8 +3339,13 @@ export class MessagingService {
       if (!(e instanceof UnreadableRecordError)) throw e;
     }
     const waiting = outboxFromStored(stored);
+    if (!this.outboxNoted.get(network)?.length) return waiting;
+    const phrase = await this.laneKey((_key, keys) => phrasePin()(keys));
+    const mine = (this.outboxNoted.get(network) ?? []).filter((w) => w.phrase === phrase);
+    if (mine.length) this.outboxNoted.set(network, mine);
+    else this.outboxNoted.delete(network);
     const have = new Set(waiting.map((w) => `${w.cid}:${w.id}`));
-    for (const w of this.outboxNoted.get(network) ?? []) if (!have.has(`${w.cid}:${w.id}`)) waiting.push(w);
+    for (const { cid, id, envelope } of mine) if (!have.has(`${cid}:${id}`)) waiting.push({ cid, id, envelope });
     return waiting;
   }
 
@@ -3200,17 +3387,52 @@ export class MessagingService {
     const next = kept.waiting.filter((w) => !gone(w));
     if (next.length === kept.waiting.length) return;
     if (!next.length) {
+      // A removal needs no key: outside a lane, the look a seal makes in its own turn is made here (`admitted`).
+      if (admit && !admit()) throw new NotAdmitted();
       await this.deps.store.remove(outboxRecord(network));
       return;
     }
     await this.rawPut(network, outboxRecord(network), outboxToStored(next), "fixed", 0, undefined, false, admit);
   }
 
-  /** Drops what `gone` picks from the outbox record and from what presses noted: a deletion, which holds across a restart. */
-  private async dropFromOutbox(network: NetworkName, gone: (w: Waiting) => boolean): Promise<void> {
-    const noted = this.outboxNoted.get(network);
-    if (noted) this.outboxNoted.set(network, noted.filter((w) => !gone(w)));
-    await this.chained(this.outboxWrites, network, (admit) => this.shrunk(network, gone, undefined, admit));
+  /**
+   * Drops what `gone` picks from the outbox record and from what presses noted: a deletion's first write, which holds
+   * across a restart. Returns what it dropped, from either, each once. A write of it that fails throws, with what was
+   * noted back in its place: nothing is half-dropped (1.10.0's second review).
+   */
+  private async dropFromOutbox(network: NetworkName, gone: (w: Waiting) => boolean): Promise<Waiting[]> {
+    const noted = this.outboxNoted.get(network) ?? [];
+    const fromNoted = noted.filter(gone);
+    if (fromNoted.length) this.outboxNoted.set(network, noted.filter((w) => !gone(w)));
+    try {
+      const fromRecord = await this.chained(this.outboxWrites, network, async (admit) => {
+        const kept = await this.outboxStored(network, (name) => this.rawGot<StoredOutbox>(name, admit));
+        await this.shrunk(network, gone, undefined, admit);
+        return kept.waiting.filter(gone);
+      });
+      const have = new Set(fromRecord.map((w) => `${w.cid}:${w.id}`));
+      return [...fromRecord, ...fromNoted.filter((w) => !have.has(`${w.cid}:${w.id}`))];
+    } catch (e) {
+      if (fromNoted.length) this.outboxNoted.set(network, [...(this.outboxNoted.get(network) ?? []), ...fromNoted]);
+      throw e;
+    }
+  }
+
+  /**
+   * Notes `waiting` in memory beside what presses couldn't append to the outbox record (`outboxNoted`), each once, under
+   * the phrase unlocked now (1.10.0's second review): a posting run posts them from there, and only under that phrase
+   * (`outboxNow`). Locked, or the keys not to be had: nothing is noted, and the next first window writes the outbox
+   * again from the records (`repairOutbox`), so nothing is lost.
+   */
+  private async noteWaiting(network: NetworkName, waiting: readonly Waiting[]): Promise<void> {
+    if (!waiting.length) return;
+    const phrase = await this.withKey((_key, keys) => phrasePin()(keys)).catch(() => undefined);
+    if (phrase === undefined) return;
+    const noted = this.outboxNoted.get(network) ?? [];
+    const have = new Set(noted.map((w) => `${w.cid}:${w.id}`));
+    const fresh = waiting.filter((w) => !have.has(`${w.cid}:${w.id}`));
+    const tagged = fresh.map(({ cid, id, envelope }) => ({ cid, id, envelope, phrase }));
+    if (tagged.length) this.outboxNoted.set(network, [...noted, ...tagged]);
   }
 
   /**
@@ -3234,8 +3456,9 @@ export class MessagingService {
   // The gate: when anything but a lane may use the wallet's queue (round 5)
   // -------------------------------------------------------------------------
 
-  /** Whether any network's lane runs. */
+  /** Whether any network's lane runs, or a run of `syncAll` on its way to its lanes. */
   private laneRunning(): boolean {
+    if (this.runs > 0) return true;
     for (const n of this.lanes.values()) if (n > 0) return true;
     return false;
   }
@@ -3243,9 +3466,36 @@ export class MessagingService {
   private laneStart(network: NetworkName): void {
     this.deps.observe?.("lane-start", network);
     this.lanes.set(network, (this.lanes.get(network) ?? 0) + 1);
-    this.laneStartedAt = this.mono();
     const told = this.laneStarts.splice(0);
     for (const r of told) r();
+  }
+
+  /**
+   * A run of `syncAll` begins (1.10.0's second review, F3): marked before its first await, as a lane is before its own,
+   * so nothing gated is admitted while it reads the settings and the wallet's state on its way to its lanes, however
+   * long another feature's task holds the wallet's queue meanwhile. `alarm`: the alarm's own run, which alone serves
+   * the alarm's tick (`live`).
+   */
+  private runStart(alarm: boolean): void {
+    this.deps.observe?.("run-start");
+    this.runs++;
+    if (alarm) this.alarmRunAt = this.mono();
+    const told = this.laneStarts.splice(0);
+    for (const r of told) r();
+  }
+
+  /**
+   * The run ended, whatever it found to read (nothing, where every switch is off, the wallet is locked or its network
+   * stopped): as a lane's end, so no mark of it is left to hold the gate shut.
+   */
+  private runEnd(): void {
+    this.runs--;
+    this.deps.observe?.("run-end");
+    if (this.laneRunning()) return;
+    const told = this.laneEnds.splice(0);
+    for (const r of told) r();
+    this.wake();
+    this.flushSoon();
   }
 
   /** A lane ended: once none runs, what waited for the gate looks again, the runner runs, and held notices go. */
@@ -3316,8 +3566,8 @@ export class MessagingService {
 
   /**
    * The ticks the worker expects next (monotonic ms): the pages' grid's next poll, while a page is heard from, and both
-   * alarms' next minute. An alarm's tick a lane started at, or past its margin, has been served, and the grid's a page's
-   * poll at it served (`notePage`); one TICK_GRACE_MS past isn't waited for.
+   * alarms' next minute. Messages' alarm's tick is served by the alarm's own run alone (`live`), and the grid's by a
+   * page's poll at it (`notePage`); one TICK_GRACE_MS past isn't waited for.
    */
   private async expected(): Promise<Tick[]> {
     const out = this.pageTicks();
@@ -3335,9 +3585,17 @@ export class MessagingService {
     return [{ at: grid.at + k * MESSAGING_SYNC_EVERY_MS, lane: true }];
   }
 
-  /** Whether a tick of the alarms is still to be waited for: not served by a lane, nor TICK_GRACE_MS past. */
+  /**
+   * Whether a tick of the alarms is still to be waited for: not served, nor TICK_GRACE_MS past. A tick is served only by
+   * the run made for it (THE RULE; 1.10.0's second review, F1): Messages' alarm's by the alarm's own run (`syncAll`
+   * told so, `alarmRunAt`), begun no earlier than GRID_EARLY_MS before it, as the pages' grid's is by a grid poll at it
+   * (`notePage`). A lane of any other kind (a page's own sync as it's shown, a press's posts, another tick's read) that
+   * starts inside the margin before a tick serves nothing: the gate, the admit check and the held notices stay shut
+   * across that tick until its own run has come and ended, or it is TICK_GRACE_MS past with no run. The sessions'
+   * alarm's tick is no run of Messages' (`lane` false): only its grace ends it.
+   */
   private live(t: Tick, now: number): boolean {
-    return t.at + TICK_GRACE_MS > now && !(t.lane && this.laneStartedAt >= t.at - this.margin());
+    return t.at + TICK_GRACE_MS > now && !(t.lane && this.alarmRunAt >= t.at - GRID_EARLY_MS);
   }
 
   /** The alarms' next ticks, as Chrome schedules them: read again once one has passed or been served, and now and then. */
@@ -3483,7 +3741,7 @@ export class MessagingService {
   private async runAll(): Promise<void> {
     let failed = 0;
     for (;;) {
-      if ((await this.admitted((admit) => this.deps.wallet.state(admit))) !== "unlocked") return;
+      if ((await this.admitted((admit) => this.deps.wallet.state(admit), undefined, true)) !== "unlocked") return;
       try {
         if (await this.firstPhases()) continue;
         let took = false;
@@ -3516,22 +3774,29 @@ export class MessagingService {
    * Each network's first phase after its lanes, before any take step: the posts' bookkeeping, each post a step; at a
    * worker's or an unlock's first window, the take record read back, what a stop lost counted, and the sweep's outbox
    * and requests repairs; the first-contact stamps still to solve; then each read's envelopes saved in the take record,
-   * a read a step. Whether it ran anything.
+   * a read a step. Whether one ran to its end.
+   *
+   * A network whose inbox won't open (W9) is held (1.10.0's second review): its first phase isn't run, and what its
+   * lanes left (the posts to mark, the reads' envelopes, in memory) waits for the inbox to open, or for Messages to be
+   * started again (`clear`). That drops the reads' envelopes with the read's cursor (`forget`), so the pool is read
+   * again from its oldest; the posts to mark stay, and the next first phase marks nothing for them, their conversations
+   * gone with the inbox (`markPosted`). It doesn't grow meanwhile: no lane reads that pool once the inbox is found
+   * (`syncNow`), and a worker that stops leaves the envelopes counted (`owed`). A first phase that throws for such a
+   * record didn't run: the runner goes on to the other network's phase, the takes and the tidy-up, and never round
+   * again for it alone.
    */
   private async firstPhases(): Promise<boolean> {
     let ran = false;
     for (const network of this.networks()) {
       const due = this.due.get(network);
       if (!due || (!due.posted.length && !due.batches.length && !due.own)) continue;
-      ran = true;
+      if (this.unopenable.has(network)) continue;
       try {
         await this.firstPhase(network, due);
+        ran = true;
       } catch (e) {
-        // An inbox that won't open (W9): what's due of that network waits for it to open, or for Messages started
-        // again; the other network's work goes on.
+        // An inbox found unopenable now: held from here, as above.
         if (!(e instanceof UnreadableRecordError)) throw e;
-        due.posted.splice(0);
-        delete due.own;
       }
     }
     return ran;
@@ -3546,17 +3811,24 @@ export class MessagingService {
     due.posted.unshift(...(this.postedLater.get(network) ?? []));
     this.postedLater.delete(network);
     const later: Posted[] = [];
-    while (due.posted.length) {
-      const done = due.posted.shift()!;
-      try {
-        await this.markPosted(network, done);
-      } catch (e) {
-        // No room for its bookkeeping, or a read of storage that failed under it: marked after the next lane.
-        if (!(e instanceof MessagingFull) && !(e instanceof StorageFailed)) throw e;
-        later.push(done);
+    try {
+      while (due.posted.length) {
+        // Still due until it's marked or put off: a throw past here (an inbox that won't open, a lock) leaves it, and
+        // the posts after it, to be marked once the phase runs again (1.10.0's second review).
+        const done = due.posted[0]!;
+        try {
+          await this.markPosted(network, done);
+        } catch (e) {
+          // No room for its bookkeeping, or a read of storage that failed under it: marked after the next lane.
+          if (!(e instanceof MessagingFull) && !(e instanceof StorageFailed)) throw e;
+          later.push(done);
+        }
+        due.posted.shift();
       }
+    } finally {
+      // What was put off is kept whatever ended the loop.
+      if (later.length) this.postedLater.set(network, later);
     }
-    if (later.length) this.postedLater.set(network, later);
     const pin = due.own ?? due.batches[0]?.pin;
     if (pin) {
       await this.firstWindow(network, pin);
@@ -3697,7 +3969,10 @@ export class MessagingService {
       const same = kept.waiting.length === waiting.length && kept.waiting.every((w, i) => w.cid === waiting[i]!.cid && w.id === waiting[i]!.id);
       if (same) return;
       if (!waiting.length) {
-        await this.onChain(this.outboxWrites, network, () => this.deps.store.remove(outboxRecord(network)));
+        await this.onChain(this.outboxWrites, network, async () => {
+          this.mine();
+          await this.deps.store.remove(outboxRecord(network));
+        });
         return;
       }
       const growth = sizeOf(outboxToStored(waiting)) - kept.bytes;
@@ -3706,6 +3981,7 @@ export class MessagingService {
       await this.chained(this.outboxWrites, network, async (admit) => {
         const left = waiting.filter((w) => !this.postedHere.has(`${keyOf(network, w.cid)}:${w.id}`) && !this.removed.has(keyOf(network, w.cid)));
         if (!left.length) {
+          if (!admit()) throw new NotAdmitted();
           await this.deps.store.remove(outboxRecord(network));
           return;
         }
@@ -3720,6 +3996,12 @@ export class MessagingService {
    * The requests' list set right from their record (W7, round 5): where the inbox's note of the record's nonce isn't the
    * record's own, a stop came between the record's write and the inbox's, and the list is made again from the record;
    * and an inbox a development build wrote has its requests moved into their own record (O6). No unseal otherwise.
+   * A request whose conversation the inbox holds is one an Accept left in the record (1.10.0's second review: a stop
+   * after the inbox listed the conversation, before the record was written without the request): it's never listed
+   * beside its conversation, and goes from the record here, with no key and no tombstone, since its conversation lives.
+   * The inbox's mark of one (`requestLeft`) has the record read whatever the nonces say: a write of the record that came
+   * before this (a press, a stranger's first message) noted its own nonce and settled nothing. The mark is unset here,
+   * the record read, and nowhere else but in the accept that set it.
    */
   private async repairRequests(network: NetworkName): Promise<void> {
     const inbox = await this.inbox(network);
@@ -3731,9 +4013,10 @@ export class MessagingService {
       return;
     }
     const nonce = await this.deps.store.sealedAs(requestsRecord(network));
-    if (nonce === inbox.requestsAs) return;
+    if (nonce === inbox.requestsAs && !inbox.requestLeft) return;
     const held = await this.requestsOf(network, inbox);
     const shown: Record<string, RequestShown> = {};
+    let rewritten = false;
     if (held.requests !== undefined) {
       let listed: RequestInfo[] | RecordRefused;
       try {
@@ -3748,13 +4031,53 @@ export class MessagingService {
         await this.writeInbox(network, inbox, { kind: "requests" });
         return;
       }
-      for (const info of listed) shown[info.cid] = inbox.requestsShown[info.cid]?.messages === info.arrivals.length ? inbox.requestsShown[info.cid]! : shownOf(info);
+      let record = held.requests;
+      for (const info of listed) {
+        if (inbox.conversations[info.cid] === undefined) {
+          shown[info.cid] = inbox.requestsShown[info.cid]?.messages === info.arrivals.length ? inbox.requestsShown[info.cid]! : shownOf(info);
+          continue;
+        }
+        // Accepted already: out of the record. The crate's answer names a tombstone too, which isn't kept.
+        const asked = JSON.stringify({ cid: info.cid, requests: record });
+        const without = this.tryOr(() => {
+          const answer = this.parse<{ requests: string }>(this.wasmCall(() => this.deps.wasm.messagingDelete(asked)));
+          return isRefused(answer) ? undefined : answer.requests;
+        }, undefined);
+        if (without !== undefined) record = without;
+      }
+      if (record !== held.requests) {
+        // Written before the inbox, as ever; it notes its own nonce on the inbox.
+        await this.writeRequests(network, inbox, { ...held, requests: record });
+        rewritten = true;
+      }
     }
     inbox.requestsShown = shown;
     for (const cid of Object.keys(inbox.requestsUnread)) if (!shown[cid]) delete inbox.requestsUnread[cid];
-    if (nonce === undefined) delete inbox.requestsAs;
-    else inbox.requestsAs = nonce;
+    delete inbox.requestLeft;
+    if (!rewritten) {
+      if (nonce === undefined) delete inbox.requestsAs;
+      else inbox.requestsAs = nonce;
+    }
     await this.writeInbox(network, inbox, { kind: "requests" });
+  }
+
+  /**
+   * `network`'s inbox, the requests' record set right first where the inbox marks a request an Accept left in it
+   * (`requestLeft`, 1.10.0's second review): before a take hands the crate that record beside the conversation's (the
+   * crate refuses one ID in both, and the other side's continuation was passed over), and before a deletion (its
+   * conversation gone, the request would be listed again). The mark is stored, so a worker stopped since the accept
+   * changes nothing; unmarked, one read of the inbox and no more. Where there's no room for the repair's writes, or
+   * storage fails under it, the inbox as it is, still marked: the next asks again. No request, no read of the chain.
+   */
+  private async settled(network: NetworkName): Promise<Inbox> {
+    const inbox = await this.inbox(network);
+    if (!inbox.requestLeft) return inbox;
+    try {
+      await this.repairRequests(network);
+    } catch (e) {
+      if (!(e instanceof MessagingFull) && !(e instanceof StorageFailed)) throw e;
+    }
+    return this.inbox(network);
   }
 
   /** Solves the first-contact stamp of every conversation still waiting for one, each in the background (a step). */
@@ -3940,11 +4263,12 @@ export class MessagingService {
 
   /** Whether the keys there now are another phrase's than `pin`'s: false while locked. The runner's: admitted. */
   private async anotherPhrase(pin: PhrasePin): Promise<boolean> {
+    // Of the keys as they are now (`admitted`'s `now`): a lock and an unlock of the same phrase since isn't another's.
     try {
-      await this.withKey((_key, keys) => pin(keys));
+      await this.admitted((admit) => this.laneKey((_key, keys) => pin(keys), admit), undefined, true);
       return false;
     } catch {
-      return (await this.admitted((admit) => this.deps.wallet.state(admit))) === "unlocked";
+      return (await this.admitted((admit) => this.deps.wallet.state(admit), undefined, true)) === "unlocked";
     }
   }
 
@@ -4311,7 +4635,8 @@ export class MessagingService {
         return this.parse<Opened>(this.watch(step, () => this.deps.wasm.messagingOpen(key, envelope)));
       });
       if (isRefused(opened)) return false;
-      const inbox = await this.inbox(network);
+      // A request an Accept left in its record leaves it before the crate is handed that record (`settled`).
+      const inbox = await this.settled(network);
       // What's set right in the inbox whatever the envelope was: a record found unreadable, one set aside.
       let repaired = false;
       const files = new Map<string, ConversationFile>();
@@ -4636,13 +4961,15 @@ export class MessagingService {
   /**
    * Writes `network`'s requests record as `held` says, before the inbox that lists it (round 5), and notes on `inbox`
    * the nonce it was sealed under, which the sweep compares (`repairRequests`). Its own room (W11): never the budget.
-   * Nothing left in it deletes it.
+   * Nothing left in it deletes it. It never unsets the inbox's mark of a request an Accept left (`requestLeft`): the
+   * nonce it notes says the list is this record's, not that the record holds no accepted request.
    */
   private async writeRequests(network: NetworkName, inbox: Inbox, held: Requests): Promise<void> {
     const name = requestsRecord(network);
     delete inbox.legacy;
     await this.sizesNow();
     if (held.requests === undefined && !held.aside?.length) {
+      this.mine();
       await this.deps.store.remove(name);
       delete inbox.requestsAs;
       this.requestsBytes.set(network, 0);
@@ -4827,7 +5154,10 @@ export class MessagingService {
       const ids = new Set(Object.values(inbox.conversations).flatMap((m) => (m.id ? [m.id] : [])));
       for (const key of await this.deps.local.keys(prefix)) {
         const id = key.slice(prefix.length);
-        if (!ids.has(id)) await this.deps.store.remove(conversationRecord(network, id));
+        if (ids.has(id)) continue;
+        // Unlisted by the inbox this step read: only while that's still the wallet's (`mine`).
+        this.mine();
+        await this.deps.store.remove(conversationRecord(network, id));
       }
       return Object.keys(inbox.conversations);
     });
@@ -4876,6 +5206,7 @@ export class MessagingService {
       now.last?.dir !== meta.last?.dir ||
       now.last?.text !== meta.last?.text ||
       now.last?.reveal !== meta.last?.reveal ||
+      now.last?.unsent !== meta.last?.unsent ||
       now.unchecked !== meta.unchecked ||
       now.revealed?.name !== meta.revealed?.name ||
       now.revealed?.at !== meta.revealed?.at ||
@@ -4923,9 +5254,10 @@ export class MessagingService {
       this.notify(network);
       let nonce: number;
       try {
-        nonce = await this.solve(file.stampDigest, bits, 0, network);
+        nonce = await this.solve(file.stampDigest, bits, 0, network, () => this.unlockedNow());
       } catch (e) {
-        // The relay stopped while it was solved (fix A): given up, its messages still queued for the next lane's stamp.
+        // The relay stopped while it was solved (fix A), or the wallet locked or was removed: given up, its messages
+        // still queued for the next first window's stamp.
         if (e instanceof StopMet) return;
         throw e;
       }
@@ -5208,7 +5540,7 @@ export class MessagingService {
           unreachable: true,
           unreadable: true,
           unchecked: true,
-          last: { dir: "out", text },
+          last: { dir: "out", text, unsent: "refused" },
           revealed: { name: hex64, at: digits },
         },
       ]),
@@ -5246,9 +5578,9 @@ export class MessagingService {
    */
   private async got<T>(name: RecordName): Promise<T | undefined> {
     try {
-      // The area's read first, then the gate, then the unseal in the wallet's queue, admitted: a lane that starts while
-      // the area answers comes first, and one that starts while the unseal waits its turn comes first too (round 5).
-      // Turned away, the area is read again: a lane may have written it meanwhile.
+      // The gate first, then the area's read, then the unseal in the wallet's queue, admitted (`admitted`; 1.10.0's
+      // second review, F5): a lane that starts while the area answers, or while the unseal waits its turn, comes first.
+      // Turned away, the area is read again, a lane may have written it meanwhile, but only once the gate has opened.
       return await this.admitted(
         (admit, sealed) => this.deps.store.open<T>(name, sealed, admit),
         () => this.deps.store.sealed(name),
@@ -5304,7 +5636,7 @@ export class MessagingService {
 
   /** `unlockStamp` for anything but a lane: admitted (`admitted`, round 5). */
   private stampNow(): Promise<number | undefined> {
-    return this.admitted((admit) => this.unlockStamp(admit));
+    return this.admitted((admit) => this.unlockStamp(admit), undefined, true);
   }
 
   /**
@@ -5383,9 +5715,19 @@ export class MessagingService {
     }
   }
 
-  /** Whether `network`'s relay may be asked now: its switch on, and the wallet unlocked. */
-  private async mayAsk(network: NetworkName): Promise<boolean> {
-    return (await this.isOn(network)) && (await this.deps.wallet.state()) === "unlocked";
+  /**
+   * Whether `network`'s relay may be asked now: its switch on, and the wallet unlocked. `pin`, a posting run's: unlocked
+   * under the phrase the run began under (1.10.0's second review). The run reads what's waiting once, and a post's work
+   * can take a minute: a wallet removed and another restored meanwhile, its switch turned on, is unlocked and on, and
+   * the first wallet's envelopes would go out under it. A lane's look at the keys, at once: never the gate.
+   */
+  private async mayAsk(network: NetworkName, pin?: PhrasePin): Promise<boolean> {
+    if (!(await this.isOn(network))) return false;
+    if (!pin) return (await this.deps.wallet.state()) === "unlocked";
+    return this.laneKey((_key, keys) => pin(keys)).then(
+      () => true,
+      () => false,
+    );
   }
 
   /**
@@ -5412,6 +5754,12 @@ export class MessagingService {
    * Lists a new conversation in `inbox` and writes its record within the budget; the inbox is the caller's to write.
    * Nothing is listed when the record can't be written. The room the record needs is made only where the area's reserve
    * holds the record and the inbox that lists it together (f3).
+   *
+   * Never in a held conversation's place, nor over a record that's there (1.10.0's second review): an ID the inbox
+   * already lists as a conversation, or a record's own ID that is taken (a conversation's the inbox lists, or a
+   * record stored under it that nothing lists yet), is refused before anything is listed or written, in the crate's
+   * word for an ID its inbox holds (`invalid_state`). Both IDs are drawn, so only a random source that repeats gets
+   * here; what was there stays as it was.
    */
   private async addConversation(
     network: NetworkName,
@@ -5420,7 +5768,12 @@ export class MessagingService {
     file: ConversationFile,
     meta: Omit<Meta, "id" | "outbox" | "bytes" | "oldestAt">,
   ): Promise<void> {
-    inbox.conversations[cid] = { ...meta, id: newRecordId(), outbox: 0, bytes: 0, oldestAt: meta.startedAt };
+    const id = newRecordId();
+    const taken =
+      Object.values(inbox.conversations).some((held) => held.id === id) ||
+      (await this.area<unknown>(PRIVATE_PREFIX + conversationRecord(network, id))) !== undefined;
+    if (inbox.conversations[cid] !== undefined || taken) throw new MessagingRefused("invalid_state");
+    inbox.conversations[cid] = { ...meta, id, outbox: 0, bytes: 0, oldestAt: meta.startedAt };
     try {
       await this.sizesNow();
       const listed = sizeOf(inboxToStored(inbox)) - (this.sizes.get(network)?.inbox ?? (await this.storedSize(`messaging.${network}`)));
@@ -5525,10 +5878,9 @@ export class MessagingService {
         await this.appendOutbox(network, adding);
       } catch (e) {
         if (e instanceof WalletLocked || isTrap(e)) throw e;
-        // No room for it there: posted from memory all the same, and the next first window writes it again.
-        const noted = this.outboxNoted.get(network) ?? [];
-        const have = new Set(noted.map((w) => `${w.cid}:${w.id}`));
-        this.outboxNoted.set(network, [...noted, ...adding.filter((w) => !have.has(`${w.cid}:${w.id}`))]);
+        // No room for it there: posted from memory all the same, under this phrase alone (`noteWaiting`), and the next
+        // first window writes it again.
+        await this.noteWaiting(network, adding);
       }
     }
     const noted = this.inboxBehind.get(network)?.has(cid);
@@ -5897,6 +6249,52 @@ export class MessagingService {
   }
 
   /**
+   * Refuses a press that would write, seal or solve on a network Messages isn't open on (networks.ts
+   * `MESSAGING_NETWORKS`; 1.10.0's second review): start, start again, continue, send, send again, Show my Seedelf and
+   * accept, in the switch's own words, before anything else, so no chain is read for it, no record is touched and no
+   * stamp is solved there, whoever asks. What a development build left on such a network is still read, named and
+   * deleted. A network that's open with its switch off is as it was: what's written waits.
+   */
+  private openHere(network: NetworkName): void {
+    if (this.deps.preferences.messagingOpen(network)) return;
+    throw new Error(t("worker.messaging.notOpenHere", { network: NETWORKS[network].label }));
+  }
+
+  /**
+   * Refuses a conversation just made (a start's, a continuation's) whose ID the wallet already holds on its network
+   * (1.10.0's second review): as a conversation, as a request the inbox lists, or as a tombstone, one deleted here
+   * that the inbox still remembers. A new conversation's ID, its keys and its first message's salt are all drawn, its
+   * t is rounded down to ten minutes and its stamp is searched from 0: a random source that repeats (stuck, or a
+   * snapshot restored twice) hands a second press in the same ten minutes the first one's conversation, and its first
+   * message would be sealed under the first's key and nonce with another text. So the press is refused before anything
+   * of the new one is listed, written, stamped, sealed or shown, in the crate's own words: `invalid_state`, its
+   * inbox's for an ID it holds (`Inbox::insert`), and `deleted`, a tombstone's. What the wallet held is untouched.
+   * `conversation`: the new one's record (hex), which the tombstones are asked with.
+   */
+  private refuseHeld(inbox: Inbox, cid: string, conversation: string): void {
+    if (inbox.conversations[cid] !== undefined || inbox.requestsShown[cid] !== undefined) throw new MessagingRefused("invalid_state");
+    if (this.tombstoned(inbox, cid, conversation)) throw new MessagingRefused("deleted");
+  }
+
+  /**
+   * Whether `inbox`'s tombstones hold `cid`, the ID of `conversation` (a record just made, hex). Asked of the crate,
+   * which keeps each ID once: deleting the new conversation from an inbox of it and the tombstones alone adds its ID
+   * where it isn't held, and their record grows by one; where it is, the record keeps its length. Nothing of the
+   * answer is kept. False where it can't be known: no tombstones, or a record the crate doesn't read (dropped where
+   * the take or a deletion next meets it, `setAside`).
+   */
+  private tombstoned(inbox: Inbox, cid: string, conversation: string): boolean {
+    const tombstones = inbox.tombstones;
+    if (tombstones === undefined) return false;
+    const asked = JSON.stringify({ cid, conversation, tombstones });
+    const after = this.tryOr(() => {
+      const answer = this.parse<{ deleted: boolean; tombstones: string }>(this.wasmCall(() => this.deps.wasm.messagingDelete(asked)));
+      return isRefused(answer) || !answer.deleted ? undefined : answer.tombstones;
+    }, undefined);
+    return after !== undefined && after.length === tombstones.length;
+  }
+
+  /**
    * `task` with the Seedelf key, in the wallet's queue, admitted (`admitted`, round 5): throws if locked. A read of
    * storage the wallet makes before the task, of its session, fails as StorageFailed (f2); what the task throws is its
    * own.
@@ -5927,21 +6325,52 @@ export class MessagingService {
    * after its state's reads, right before the call runs (`Wallet.withKeys`). Where a lane has started, or a tick come
    * within TAKE_MARGIN_MS, while it waited there (behind another feature's long task, say), it gives the queue back
    * without running and waits at the gate again. So no such call runs in a lane, or just before a tick, whatever was
-   * queued before it: only one already running as a lane starts off the grids can meet it. `prepare`: what goes before
-   * each pass of the gate, done again after a turn given back (the area's read a `got` unseals, the reserve a `put`
-   * looks at), its answer `call`'s. Never awaited inside a lane, nor inside a chain a lane joins (`chained`).
+   * queued before it: only one already running as a lane starts off the grids can meet it. `prepare`: what the call
+   * needs made ready (the area's read a `got` unseals, the reserve a `put` looks at), its answer `call`'s: after each
+   * pass of the gate, never before it (1.10.0's second review, F5), so a call turned away waits at the gate again
+   * before it prepares again, and no record whose size an envelope sets is read from the area, or counted, from a tick
+   * to its lane's end. Never awaited inside a lane, nor inside a chain a lane joins (`chained`).
+   *
+   * And it belongs to the unlock it was asked under (1.10.0's second review, round 7): the one its call in the queue
+   * was asked under (`serial`), or, outside one, the one there as it began, by the wallet's count of its opens
+   * (`Wallet.opened`, read with no turn of its queue). The wait at the gate can be long, a slow relay's whole run of
+   * requests: the wallet locked, removed and another phrase restored inside it, a write that went on would seal one
+   * wallet's record under the next one's key, in its storage. So the count is looked at after each pass of the gate,
+   * before anything is prepared, and again inside the call's own turn of the wallet's queue, right before it runs
+   * (`admit`): another count, a lock and an unlock of the same phrase included, and the call is refused as a locked
+   * wallet refuses, nothing read, unsealed or written for it. `now`: a question of the wallet as it is now, which
+   * writes nothing (which unlock, whose keys, locked or not): never refused for an unlock that ended.
    */
-  private async admitted<T, P = undefined>(call: (admit: Admit, prepared: P) => Promise<T>, prepare?: () => Promise<P>): Promise<T> {
+  private async admitted<T, P = undefined>(call: (admit: Admit, prepared: P) => Promise<T>, prepare?: () => Promise<P>, now = false): Promise<T> {
+    const began = this.task ? this.task.opened : this.opened();
+    const ended = () => !now && this.opened() !== began;
     for (;;) {
-      const prepared = (prepare ? await prepare() : undefined) as P;
       await this.gate();
+      if (ended()) throw new WalletLocked(t("worker.wallet.locked"));
+      const prepared = (prepare ? await prepare() : undefined) as P;
+      // Turned away in its own turn for the unlock, not for a lane: it never comes back to the gate.
+      let over = false;
       try {
-        return await call(this.admit, prepared);
+        return await call(() => !(over = ended()) && this.admit(), prepared);
       } catch (e) {
+        if (over) throw new WalletLocked(t("worker.wallet.locked"));
         if (!(e instanceof NotAdmitted)) throw e;
         this.deps.observe?.("yield");
       }
     }
+  }
+
+  /** The wallet's count of its opens now (`Wallet.opened`): undefined for a wallet that keeps none. */
+  private opened(): number | undefined {
+    return (this.deps.wallet as { opened?: number }).opened;
+  }
+
+  /**
+   * Throws as a lock does where the call running in the queue was asked under an unlock that has ended (`task`):
+   * `admitted`'s look, for what a call removes with no key, which no turn of the wallet's queue guards.
+   */
+  private mine(): void {
+    if (this.task && this.opened() !== this.task.opened) throw new WalletLocked(t("worker.wallet.locked"));
   }
 
   /** The admit check of everything but a lane's calls into the wallet's queue (`admitted`): no lane runs, no tick is near. */
@@ -6026,9 +6455,17 @@ export class MessagingService {
    * the runner's steps. Never a lane's.
    */
   private serial<T>(task: () => Promise<T>): Promise<T> {
+    // The unlock it's asked under, as it's asked, with no read: what waits here for the queue and the gate is still
+    // that unlock's when its turn comes, or it reads and writes nothing (`admitted`).
+    const asked = { opened: this.opened() };
     const gated = async () => {
       await this.gate();
-      return task();
+      this.task = asked;
+      try {
+        return await task();
+      } finally {
+        this.task = undefined;
+      }
     };
     const run = this.queue.then(gated, gated);
     this.queue = run.catch(() => undefined);
@@ -6236,15 +6673,39 @@ function revealsOf(file: ConversationFile, revealed: Meta["revealed"]): Pick<Met
 
 /**
  * What the list shows of a history's last message: which way, and its first PREVIEW_CHARS characters, whole code
- * points, so a cut never splits one. None once the budget has deleted every message.
+ * points, so a cut never splits one; and what its row must say of the user's own messages (`unsentOf`). None once the
+ * budget has deleted every message.
  */
 export function lastOf(history: readonly Entry[]): Meta["last"] {
   const entry = history.at(-1);
   if (!entry) return undefined;
-  if (entry.kind === KIND_REVEAL) return { dir: entry.dir, reveal: true };
-  if (entry.text === undefined) return { dir: entry.dir };
+  const unsent = unsentOf(history);
+  const state = unsent ? { unsent } : {};
+  if (entry.kind === KIND_REVEAL) return { dir: entry.dir, reveal: true, ...state };
+  if (entry.text === undefined) return { dir: entry.dir, ...state };
   const chars = [...entry.text];
-  return { dir: entry.dir, text: chars.length > PREVIEW_CHARS ? `${chars.slice(0, PREVIEW_CHARS).join("")}…` : entry.text };
+  return { dir: entry.dir, text: chars.length > PREVIEW_CHARS ? `${chars.slice(0, PREVIEW_CHARS).join("")}…` : entry.text, ...state };
+}
+
+/**
+ * What a conversation's row says of the user's own messages where its last message's text, or "Sending…", would say
+ * otherwise (the 1.10.0 gate's blind reading: a refused message's row read "You: …", as if it went).
+ *
+ * `refused`: the last message is the user's and ended unsent, refused by the server or by the wallet's own crate
+ * (`Entry.sent`). One the other side's message came after is in the thread, and the row says that message.
+ *
+ * `reply`: there are messages waiting, and every one waits for a reply: queued behind a message already past its
+ * stamp, with none being posted. The thread says "waiting for a reply" of each by the same rule (Messages.tsx
+ * `MessageList`): one still queued after a message of the user's that isn't.
+ */
+function unsentOf(history: readonly Entry[]): NonNullable<Meta["last"]>["unsent"] {
+  const last = history.at(-1);
+  if (last?.dir === "out" && last.sent === "refused") return "refused";
+  const waiting = history.filter((e) => e.dir === "out" && (e.sent === "queued" || e.sent === "pending"));
+  if (!waiting.length || waiting.some((e) => e.sent === "pending")) return undefined;
+  const first = history.indexOf(waiting[0]!);
+  const sealed = history.slice(0, first).some((e) => e.dir === "out" && e.sent !== undefined && e.sent !== "queued");
+  return sealed ? "reply" : undefined;
 }
 
 /**

@@ -441,11 +441,12 @@ describe("the proofs' tools' own test", () => {
 describe("data-layer.yml's paths", () => {
   const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
 
-  /** Every .rs file under `dir`, but build output. */
+  /** Every .rs file under `dir`, but build output and the gitignored reference checkouts (a link in one may lead nowhere). */
   function rust(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
+      if (["target", ".git", "_reference"].includes(name)) return [];
       const path = join(dir, name);
-      if (statSync(path).isDirectory()) return ["target", ".git"].includes(name) ? [] : rust(path);
+      if (statSync(path).isDirectory()) return rust(path);
       return name.endsWith(".rs") ? [path] : [];
     });
   }
@@ -581,11 +582,12 @@ describe("a pull request that changes only the data layer's Rust", () => {
   const DATA = fileURLToPath(new URL("../../../../seedelf-data/", import.meta.url));
   const RS = ["seedelf-data/api/src/public/utxos.rs", "seedelf-data/api/src/main.rs", "seedelf-data/api/tests/common/mod.rs"];
 
-  /** Every .rs file under `dir`, but build output: all the step below reads. */
+  /** Every .rs file under `dir`, but build output and the gitignored reference checkouts: all the step below reads. */
   function rust(dir: string): string[] {
     return readdirSync(dir).flatMap((name) => {
+      if (["target", ".git", "_reference"].includes(name)) return [];
       const path = join(dir, name);
-      if (statSync(path).isDirectory()) return ["target", ".git"].includes(name) ? [] : rust(path);
+      if (statSync(path).isDirectory()) return rust(path);
       return name.endsWith(".rs") ? [path] : [];
     });
   }

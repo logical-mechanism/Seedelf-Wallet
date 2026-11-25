@@ -286,6 +286,9 @@ describe("a message the server refused (worker-net#8)", { timeout: 30_000 }, () 
     expect(envelope).toMatch(/^01[0-9a-f]+$/);
     // Not counted as waiting, and no sync posts it by itself.
     expect((await alice.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.outbox).toBe(0);
+    // The list is told it ended unsent, as the thread is (the 1.10.0 gate's blind reading: its row read "You: …").
+    const row = async () => (await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === cid)!;
+    expect(await row()).toMatchObject({ outbox: 0, last: { dir: "out", text: "refused once", unsent: "refused" } });
     relay.calls.length = 0;
     await synced(alice);
     expect(relay.calls.filter((c) => c.startsWith("POST"))).toEqual([]);
@@ -295,6 +298,8 @@ describe("a message the server refused (worker-net#8)", { timeout: 30_000 }, () 
     sent = await lastOf(alice, cid);
     expect(sent).toMatchObject({ text: "refused once", sent: "posted" });
     expect(sent.resend).toBeUndefined();
+    // Sent now: the list says its text, and nothing more.
+    expect((await row()).last).toEqual({ dir: "out", text: "refused once" });
     expect((await record()).envelope).toBeUndefined();
     // The bytes the ratchet sealed the first time: Bob reads it, once.
     expect(relay.pools.get("preprod")!.held.some((h) => Buffer.from(h.bytes).toString("hex") === envelope)).toBe(true);
@@ -318,6 +323,8 @@ describe("a message the server refused (worker-net#8)", { timeout: 30_000 }, () 
     const sent = await lastOf(alice, cid);
     expect(sent.sent).toBe("refused");
     expect(sent.resend).toBeUndefined();
+    // The list says it wasn't sent, whoever refused it.
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === cid)!.last).toEqual({ dir: "out", text: "unsealed", unsent: "refused" });
     relay.calls.length = 0;
     await alice.messaging.resend("preprod", cid, sent.id);
     await alice.messaging.whenIdle();
@@ -377,6 +384,11 @@ describe("a queued text the crate refuses as the stamp is set (review E)", { tim
       ["third", "queued"],
     ]);
     expect(messages.some((m) => m.refusedBy !== undefined || m.resend)).toBe(false);
+    // Both wait for a reply, as the thread says of each: the list is told so, where its count alone read "Sending…".
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === cid)).toMatchObject({
+      outbox: 2,
+      last: { dir: "out", text: "third", unsent: "reply" },
+    });
     // The branch was the defensive one, and the hook was told.
     expect(alice.unreachable).toEqual(["sealQueued"]);
   });

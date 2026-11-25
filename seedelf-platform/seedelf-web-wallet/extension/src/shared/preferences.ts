@@ -2,6 +2,8 @@
 // (background/preferences.ts); the UI reads and changes them through it, and
 // follows changes other pages make.
 
+import { MESSAGING_NETWORKS, messagingOpen, type NetworkName } from "../networks";
+
 /** chrome.storage.local: the user's settings. */
 export const LOCAL_PREFERENCES = "seedelf.preferences";
 
@@ -177,10 +179,16 @@ export interface MessagingSwitches {
   mainnet: boolean;
 }
 
-/** The switches kept, each one a boolean or else off. */
-export function messagingSwitches(value: unknown): MessagingSwitches {
+/**
+ * The switches kept, each one a boolean or else off; and off on a network Messages isn't open on (`open`: networks.ts
+ * `MESSAGING_NETWORKS`), whatever was kept, so a switch a development build left on never reads there.
+ */
+export function messagingSwitches(value: unknown, open: readonly NetworkName[] = MESSAGING_NETWORKS): MessagingSwitches {
   const kept = (typeof value === "object" && value !== null ? value : {}) as Partial<Record<string, unknown>>;
-  return { preprod: kept.preprod === true, mainnet: kept.mainnet === true };
+  return {
+    preprod: kept.preprod === true && messagingOpen("preprod", open),
+    mainnet: kept.mainnet === true && messagingOpen("mainnet", open),
+  };
 }
 
 export const DEFAULT_PREFERENCES: Preferences = {

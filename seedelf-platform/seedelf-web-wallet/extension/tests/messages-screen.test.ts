@@ -35,6 +35,11 @@ vi.stubGlobal("chrome", {
 (fakeDocument as unknown as { oninput: null }).oninput = null;
 (FakeElement.prototype as unknown as { showModal(): void; close(): void }).showModal = () => {};
 (FakeElement.prototype as unknown as { showModal(): void; close(): void }).close = () => {};
+// The Seedelfs' row brings its switches into view when a press opens it: what was scrolled to, and how.
+const scrolled: Array<{ first: string | null; how: unknown }> = [];
+(FakeElement.prototype as unknown as { scrollIntoView(this: FakeElement, how: unknown): void }).scrollIntoView = function (how) {
+  scrolled.push({ first: elements(this)[0]?.getAttribute("data-testid") ?? null, how });
+};
 
 const { Messages, PRESS_WAIT_SHOWN_MS } = await import("../src/ui/screens/Messages");
 const { NetworkContext } = await import("../src/ui/network");
@@ -177,7 +182,7 @@ async function openThread(c: MessagingConversation, messages: MessagingEntry[] =
 }
 
 const verified: MessagingEntry = { id: 1, dir: "in", at: now - 60_000, reveal: { status: "verified", name: ALICE } };
-const WORDS = "Showed you their Seedelf tagged “alice” (5eed0e1f…0123456789abcdef), verified on the chain";
+const WORDS = "Showed you their Seedelf tagged “alice” (5eed0e1f…0123456789abcdef\u00a0#0), verified on the chain";
 
 describe("the wallet's own notice of a reveal (S1, screens#1)", () => {
   it("is drawn as a notice, never as a bubble, and a text that says its words is a bubble and nothing else", async () => {
@@ -318,16 +323,178 @@ describe("a sent message's state (S4)", () => {
     act(() => root.unmount());
   });
 
-  it("counts down to its own next try, and never reads that out each second (screens#14)", async () => {
+  it("says in how long its own next try comes, in words no time of day reads as, and never reads that out as it changes (screens#14)", async () => {
     const { container, root } = await states([
-      { id: 0, dir: "out", at: now, text: "big", sent: "pending", nextTry: now + 125_000 },
+      { id: 0, dir: "out", at: now, text: "big", sent: "pending", nextTry: Date.now() + 125_000 },
       { id: 1, dir: "out", at: now, text: "small", sent: "pending" },
+      { id: 2, dir: "out", at: now, text: "soon", sent: "pending", nextTry: Date.now() + 40_000 },
     ]);
-    const [big, small] = byTest(container, "bubble-state");
-    expect(big!.textContent).toMatch(/^ · sending in 2:0\d$/);
+    const [big, small, soon] = byTest(container, "bubble-state");
+    // As a declined site's wait is said (ui/sites.ts `waitText`): "2:05" read as a clock's time to the blind reader.
+    expect(big!.textContent).toBe(" · sending in 3 min");
     expect(big!.getAttribute("aria-live")).toBe("off");
     expect(small!.textContent).toBe(" · sending");
     expect(small!.getAttribute("aria-live")).toBeNull();
+    expect(soon!.textContent).toMatch(/^ · sending in (39|40) s$/);
+    expect(byTest(container, "bubble-state").map((e) => e.textContent).join("")).not.toMatch(/\d:\d\d/);
+    act(() => root.unmount());
+  });
+});
+
+// The 1.10.0 gate's blind reading: a first-time reader's worst problem was a message whose row and thread said two
+// things. A refused message's row read "You: …", as if it went; with the server paused the row said "Sending…" and
+// the thread counted down "sending in 1:54" beside the notice that the server is asked again in an hour. Each state a
+// message of the user's can be in, drawn from ONE state in both places (the tab's two panes): the row, and the line.
+describe("a message's state says the same in its row and in its thread", () => {
+  type Case = {
+    name: string;
+    overview?: Partial<MessagingOverview>;
+    c?: Partial<MessagingConversation>;
+    messages: MessagingEntry[];
+    row: string | RegExp;
+    line: string | RegExp;
+  };
+  const out = (over: Partial<MessagingEntry>, id = 0): MessagingEntry => ({ id, dir: "out", at: now, text: "hello there", ...over });
+  const waiting = { outbox: 1, last: { dir: "out" as const, text: "hello there" } };
+  const cases: Case[] = [
+    {
+      name: "refused by the server",
+      c: { last: { dir: "out", text: "hello there", unsent: "refused" } },
+      messages: [out({ sent: "refused", refusedBy: "server", resend: true })],
+      row: "Not sent",
+      line: " · not sent: the server refused it Send again",
+    },
+    {
+      name: "refused by the wallet",
+      c: { last: { dir: "out", text: "hello there", unsent: "refused" } },
+      messages: [out({ sent: "refused", refusedBy: "wallet" })],
+      row: "Not sent",
+      line: " · not sent: Seedelf Wallet couldn't encrypt it",
+    },
+    {
+      name: "paused, where the relay had asked it to wait",
+      overview: { paused: true, pausedAskAt: Date.now() + 3600_000 },
+      c: waiting,
+      messages: [out({ sent: "pending", nextTry: Date.now() + 114_000 })],
+      row: "Waiting: Messages are paused",
+      line: " · waiting: Messages are paused",
+    },
+    {
+      name: "paused, its stamp not yet solved",
+      overview: { paused: true },
+      c: waiting,
+      messages: [out({ sent: "queued", working: { seconds: 7 } })],
+      row: "Waiting: Messages are paused",
+      line: " · waiting: Messages are paused",
+    },
+    {
+      name: "no answer from the server, where the relay had asked it to wait",
+      overview: { offline: true },
+      c: waiting,
+      messages: [out({ sent: "pending", nextTry: Date.now() + 114_000 })],
+      row: "Waiting for the server",
+      line: " · waiting for the server",
+    },
+    {
+      name: "no answer from the server, its proof of work under way",
+      overview: { offline: true },
+      c: waiting,
+      messages: [out({ sent: "pending", working: { seconds: 5 } })],
+      row: "Waiting for the server",
+      line: " · waiting for the server",
+    },
+    {
+      name: "waiting for a reply",
+      c: { outbox: 1, last: { dir: "out", text: "hello there", unsent: "reply" } },
+      messages: [out({ sent: "posted", expires: Date.now() + 3600_000 }), out({ sent: "queued" }, 1)],
+      row: "Waiting for a reply",
+      line: " · waiting for a reply",
+    },
+    {
+      name: "waiting for a reply, the switch off",
+      overview: { on: false },
+      c: { outbox: 1, last: { dir: "out", text: "hello there", unsent: "reply" } },
+      messages: [out({ sent: "posted", expires: Date.now() + 3600_000 }), out({ sent: "queued" }, 1)],
+      row: "Waiting for a reply",
+      line: " · waiting for a reply",
+    },
+    {
+      name: "the switch off",
+      overview: { on: false },
+      c: waiting,
+      messages: [out({ sent: "pending" })],
+      row: "Waiting to send",
+      line: " · waiting for Messages to be on",
+    },
+    {
+      name: "the relay's own delay",
+      c: waiting,
+      messages: [out({ sent: "pending", nextTry: Date.now() + 125_000 })],
+      row: "Sending…",
+      line: " · sending in 3 min",
+    },
+    {
+      name: "its stamp being solved",
+      c: waiting,
+      messages: [out({ sent: "queued", working: { seconds: 7 } })],
+      row: "Sending…",
+      line: " · preparing, about 7 s",
+    },
+    {
+      name: "being posted",
+      c: waiting,
+      messages: [out({ sent: "pending" })],
+      row: "Sending…",
+      line: " · sending",
+    },
+    {
+      name: "sent",
+      c: { last: { dir: "out", text: "hello there" } },
+      messages: [out({ sent: "posted", expires: Date.now() + 3600_000 })],
+      row: "You: hello there",
+      line: /^ · sent, expires /,
+    },
+    {
+      name: "sent, and past its time on the server",
+      c: { last: { dir: "out", text: "hello there" } },
+      messages: [out({ sent: "posted", expires: Date.now() - 3600_000 })],
+      row: "You: hello there",
+      line: " · sent",
+    },
+  ];
+
+  it.each(cases)("$name", async ({ overview, c: over, messages, row, line }) => {
+    media.wide = true;
+    const c = conversation({ cid: "c1", role: "initiator", handle: ALICE, ...over });
+    const { container, root } = await openThread(c, messages, {}, { overview });
+    const shown = elements(one(container, "messages-conversation")).find((e) => classes(e).includes("convo__preview"))!.textContent;
+    const said = byTest(container, "bubble-state").at(-1)!.textContent;
+    if (typeof row === "string") expect(shown).toBe(row);
+    else expect(shown).toMatch(row);
+    if (typeof line === "string") expect(said).toBe(line);
+    else expect(said).toMatch(line);
+    // No clock beside a notice, in either place.
+    expect(`${shown}${said}`.replace(/expires .*/, "")).not.toMatch(/\d:\d\d/);
+    act(() => root.unmount());
+  });
+
+  it("says the same words for each hold in the row and in the line, in three languages", () => {
+    for (const code of ["en", "es", "ja"]) {
+      const words: Record<string, string> = JSON.parse(readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"));
+      for (const hold of ["waitingPaused", "waitingServer"]) {
+        expect(words[`messages.sent.${hold}`]!.toLowerCase(), `${code} ${hold}`).toBe(words[`messages.${hold}`]!.toLowerCase());
+      }
+      expect(words["messages.waitingReply"]!.toLowerCase(), code).toBe(words["messages.sent.waitsForReply"]!.toLowerCase());
+      expect(words["messages.state.warn.notSent"], code).toBeTruthy();
+    }
+  });
+
+  it("says a last message of the other side's, whatever of the user's before it wasn't sent", async () => {
+    // The worker hands `unsent` only for a last message of the user's own (messaging.ts `unsentOf`): their reply's row
+    // is their words.
+    const c = conversation({ cid: "c1", role: "initiator", handle: ALICE, last: { dir: "in", text: "are you there?" } });
+    const { container, root } = await mount(overviewOf([c]));
+    expect(elements(one(container, "messages-conversation")).find((e) => classes(e).includes("convo__preview"))!.textContent).toBe("are you there?");
     act(() => root.unmount());
   });
 });
@@ -403,20 +570,20 @@ describe("a tag that reads as a contact's name (S2, screens#3)", () => {
     const { container, root } = await mount(overviewOf([stranger, real]), { contacts: [CONTACT] });
     // The list: the tag's last sixteen beside it, its own element, never cut (screens#4); the contact's has none.
     const [sRow, aRow] = byTest(container, "messages-conversation");
-    expect(elements(sRow!).find((e) => classes(e).includes("convo__tail"))?.textContent).toBe("…aaaabbbbccccdddd");
+    expect(elements(sRow!).find((e) => classes(e).includes("convo__tail"))?.textContent).toBe("…aaaabbbbccccdddd\u00a0#0");
     expect(elements(sRow!).find((e) => classes(e).includes("convo__name"))?.textContent).toBe("Alice B");
     expect(elements(aRow!).some((e) => classes(e).includes("convo__tail"))).toBe(false);
     // The stranger's header: no "your contact", and the shared name said.
     click(sRow!);
     await answer("messaging-thread", threadOf(stranger, [verified]));
     expect(byTest(container, "thread-detail").map((e) => e.textContent)).toEqual([
-      "Verified Seedelf 5eed0e1f…aaaabbbbccccdddd",
-      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444)",
+      "Verified Seedelf 5eed0e1f…aaaabbbbccccdddd\u00a0#0",
+      "Wrote to your Seedelf web-wallet (5eed0e1f…1111222233334444\u00a0#0)",
     ]);
     expect(one(container, "thread-shared-name").textContent).toBe("Another Seedelf has this name too, in your contacts or another conversation.");
     // The header's name is the tag, its last sixteen beside it, as the list's row has them.
     expect(one(container, "thread-name").textContent).toBe("Alice B");
-    expect(one(container, "thread-tail").textContent).toBe("…aaaabbbbccccdddd");
+    expect(one(container, "thread-tail").textContent).toBe("…aaaabbbbccccdddd\u00a0#0");
     // Narrow, the name and the lines sit under the row of buttons, across the pane (screens#14).
     const details = elements(container).find((e) => classes(e).includes("thread__details"))!;
     expect(details.textContent).toContain("Verified Seedelf");
@@ -425,7 +592,7 @@ describe("a tag that reads as a contact's name (S2, screens#3)", () => {
     // The contact's: says it's one, and nothing shared.
     click(byTest(container, "messages-conversation")[1]!);
     await answer("messaging-thread", threadOf(real, []));
-    expect(byTest(container, "thread-detail").map((e) => e.textContent)).toEqual(["Your contact · 5eed0e1f…0123456789abcdef"]);
+    expect(byTest(container, "thread-detail").map((e) => e.textContent)).toEqual(["Your contact · 5eed0e1f…0123456789abcdef\u00a0#0"]);
     expect(byTest(container, "thread-shared-name")).toHaveLength(0);
     expect(byTest(container, "thread-tail")).toHaveLength(0);
     act(() => root.unmount());
@@ -531,6 +698,8 @@ describe("the list's states (S4)", () => {
         ],
       }),
     );
+    // Behind the Seedelfs' row, which starts folded where one of them takes messages.
+    click(one(container, "messages-seedelfs-row"));
     const switches = byTest(container, "messages-seedelf-switch");
     expect(switches.map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "false"]);
     expect(one(container, "messages-seedelfs").textContent).toContain("Take messages at this Seedelf");
@@ -548,10 +717,246 @@ describe("the list's states (S4)", () => {
   it("shows no Seedelfs' switches while Messages are off, and says nothing of them when all were made here", async () => {
     const off = await mount(overviewOf([], { on: false, seedelfs: [{ name: MINE, register: REGISTER, made: true, on: true }] }));
     expect(byTest(off.container, "messages-seedelfs")).toHaveLength(0);
+    expect(byTest(off.container, "messages-seedelfs-row")).toHaveLength(0);
     act(() => off.root.unmount());
     const made = await mount(overviewOf([], { seedelfs: [{ name: MINE, register: REGISTER, made: true, on: true }] }));
+    click(one(made.container, "messages-seedelfs-row"));
+    expect(one(made.container, "messages-seedelfs").textContent).toContain("Take messages at this Seedelf");
     expect(one(made.container, "messages-seedelfs").textContent).not.toContain("Turn on only");
     act(() => made.root.unmount());
+  });
+});
+
+// The owner's call of 2026-11-24: a switch for each Seedelf over the list put a conversation with unread messages off
+// the screen of a wallet that holds fifteen. The requests and the conversations come first; the Seedelfs' switches are
+// behind one row at the foot of the list, which says how many take messages.
+describe("the Seedelfs' row at the foot of the list (the owner, 2026-11-24)", () => {
+  const seedelf = (tag: string, on: boolean, made = on) => ({
+    name: nameOf(tag, "1111222233334444"),
+    register: { generator: "a".repeat(96), publicValue: Buffer.from(tag).toString("hex").padEnd(96, "b") },
+    made,
+    on,
+  });
+  const request = { cid: "r1", startedAt: now, to: MINE, messages: 1, lastAt: now, unread: 1 };
+  const talk = conversation({ cid: "c1", role: "initiator", handle: ALICE, unread: 2 });
+  const row = (root: FakeNode) => one(root, "messages-seedelfs-row");
+  /** Where each of `ids` first is in the document, in the order given. */
+  const placesOf = (root: FakeNode, ids: string[]) => {
+    const all = elements(root).map((e) => e.getAttribute("data-testid"));
+    return ids.map((id) => all.indexOf(id));
+  };
+  const ascending = (places: number[]) => places.every((p, i) => p >= 0 && (i === 0 || p > places[i - 1]!));
+
+  it("comes after the list's lines, the requests and the conversations, and before the list's note", async () => {
+    const { container, root } = await mount(
+      overviewOf([talk], { requests: [request], full: true, alsoOn: ["mainnet"], seedelfs: [seedelf("one", true), seedelf("two", false)] }),
+    );
+    const order = [
+      "messages-switch",
+      "messages-test-wallet",
+      "messages-full",
+      "messages-also-on",
+      "messages-requests",
+      "messages-conversations",
+      "messages-seedelfs-row",
+      "messages-notes",
+    ];
+    expect(placesOf(container, order), order.join(" < ")).toSatisfy(ascending);
+    // Open, its switches are under it and over the note, never over the conversations.
+    click(row(container));
+    const open = ["messages-conversations", "messages-seedelfs-row", "messages-seedelfs", "messages-seedelf-switch", "messages-notes"];
+    expect(placesOf(container, open), open.join(" < ")).toSatisfy(ascending);
+    act(() => root.unmount());
+  });
+
+  it("comes after the line of a list with nothing in it", async () => {
+    const { container, root } = await mount(overviewOf([], { seedelfs: [seedelf("one", true)] }));
+    expect(one(container, "messages-none").textContent).toBe("No conversations yet.");
+    expect(placesOf(container, ["messages-none", "messages-seedelfs-row", "messages-notes"])).toSatisfy(ascending);
+    act(() => root.unmount());
+  });
+
+  it("says how many of the wallet's Seedelfs take messages, and follows a switch turned", async () => {
+    const three = [seedelf("one", true), seedelf("two", false), seedelf("three", false)];
+    const { container, root, rerender } = await mount(overviewOf([talk], { seedelfs: three }));
+    expect(row(container).localName).toBe("button");
+    expect(row(container).getAttribute("type")).toBe("button");
+    expect(row(container).textContent).toBe("Your Seedelfstaking messages: 1 of 3");
+    expect(one(container, "messages-seedelfs-count").textContent).toBe("taking messages: 1 of 3");
+    rerender(overviewOf([talk], { seedelfs: three.map((s) => ({ ...s, on: true })) }));
+    expect(one(container, "messages-seedelfs-count").textContent).toBe("taking messages: 3 of 3");
+    rerender(overviewOf([talk], { seedelfs: three.map((s) => ({ ...s, on: false })) }));
+    expect(one(container, "messages-seedelfs-count").textContent).toBe("taking messages: 0 of 3");
+    act(() => root.unmount());
+  });
+
+  it("is folded where a Seedelf takes messages, and open where none does", async () => {
+    const some = await mount(overviewOf([], { seedelfs: [seedelf("one", true), seedelf("two", false)] }));
+    expect(row(some.container).getAttribute("aria-expanded")).toBe("false");
+    expect(byTest(some.container, "messages-seedelfs")).toHaveLength(0);
+    expect(byTest(some.container, "messages-seedelf-switch")).toHaveLength(0);
+    // The note about a Seedelf someone else made is the switches', and folds with them.
+    expect(some.container.textContent).not.toContain("Turn on only");
+    act(() => some.root.unmount());
+    // A wallet restored from its phrase: every switch off, so they're shown without a press.
+    const none = await mount(overviewOf([], { seedelfs: [seedelf("one", false), seedelf("two", false)] }));
+    expect(row(none.container).getAttribute("aria-expanded")).toBe("true");
+    expect(one(none.container, "messages-seedelfs-count").textContent).toBe("taking messages: 0 of 2");
+    expect(byTest(none.container, "messages-seedelf-switch").map((s) => s.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    expect(one(none.container, "messages-seedelfs").textContent).toContain("Turn on only a Seedelf you made");
+    act(() => none.root.unmount());
+  });
+
+  it("shows the switches at a press and hides them at the next, aria-expanded following, and names the box it opens", async () => {
+    const { container, root } = await mount(overviewOf([talk], { seedelfs: [seedelf("one", true), seedelf("two", false)] }));
+    expect(row(container).getAttribute("aria-expanded")).toBe("false");
+    expect(row(container).getAttribute("aria-controls")).toBeNull();
+    click(row(container));
+    expect(row(container).getAttribute("aria-expanded")).toBe("true");
+    expect(byTest(container, "messages-seedelf")).toHaveLength(2);
+    expect(byTest(container, "messages-seedelf-switch").map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    const box = one(container, "messages-seedelfs");
+    expect(box.getAttribute("id")).toBeTruthy();
+    expect(row(container).getAttribute("aria-controls")).toBe(box.getAttribute("id"));
+    click(row(container));
+    expect(row(container).getAttribute("aria-expanded")).toBe("false");
+    expect(row(container).getAttribute("aria-controls")).toBeNull();
+    expect(byTest(container, "messages-seedelfs")).toHaveLength(0);
+    click(row(container));
+    expect(row(container).getAttribute("aria-expanded")).toBe("true");
+    expect(byTest(container, "messages-seedelf-switch")).toHaveLength(2);
+    // Opening it asks the worker nothing: only a switch does.
+    expect(asked("messaging-answer-at")).toHaveLength(0);
+    act(() => root.unmount());
+  });
+
+  it("takes its start once: turning the first Seedelf on doesn't fold it, nor the last one off open it", async () => {
+    const both = [seedelf("one", false), seedelf("two", false)];
+    const opened = await mount(overviewOf([], { seedelfs: both }));
+    click(byTest(opened.container, "messages-seedelf-switch")[0]!);
+    expect(asked("messaging-answer-at").map((w) => w.payload)).toEqual([{ name: both[0]!.name, register: both[0]!.register, on: true }]);
+    // The screen's owner draws what the worker answered: one on now, and the switches still there.
+    opened.rerender(overviewOf([], { seedelfs: [{ ...both[0]!, on: true }, both[1]!] }));
+    expect(one(opened.container, "messages-seedelfs-count").textContent).toBe("taking messages: 1 of 2");
+    expect(row(opened.container).getAttribute("aria-expanded")).toBe("true");
+    expect(byTest(opened.container, "messages-seedelf-switch").map((s) => s.getAttribute("aria-checked"))).toEqual(["true", "false"]);
+    act(() => opened.root.unmount());
+    worker.waiting.length = 0;
+    // Folded at one on: none on later (turned off from another page) says so in its count, and stays as the user left it.
+    const folded = await mount(overviewOf([], { seedelfs: [seedelf("one", true)] }));
+    folded.rerender(overviewOf([], { seedelfs: [seedelf("one", false, true)] }));
+    expect(one(folded.container, "messages-seedelfs-count").textContent).toBe("taking messages: 0 of 1");
+    expect(row(folded.container).getAttribute("aria-expanded")).toBe("false");
+    act(() => folded.root.unmount());
+  });
+
+  it("brings the switches into view at a press that opens them, never at the first draw nor at one that folds them", async () => {
+    scrolled.length = 0;
+    // Open from the start (none takes messages): the list stays where it is.
+    const none = await mount(overviewOf([talk], { seedelfs: [seedelf("one", false)] }));
+    expect(row(none.container).getAttribute("aria-expanded")).toBe("true");
+    expect(scrolled).toEqual([]);
+    click(row(none.container));
+    expect(scrolled).toEqual([]);
+    // The row and its switches together (the row is the first thing in what's scrolled to), by the nearest edge.
+    click(row(none.container));
+    expect(scrolled).toEqual([{ first: "messages-seedelfs-row", how: { block: "nearest" } }]);
+    act(() => none.root.unmount());
+  });
+
+  // The 1.10.0 gate's blind reading: at 0 of N the reader worked out only from the count that nobody could write
+  // first; and the line about which Seedelf to turn on sat under fifteen switches.
+  it("says, with none taking messages, that no one can write first: over the switches, in three languages, and only then", async () => {
+    const { i18n } = await import("../src/i18n/core");
+    const none = [seedelf("one", false), seedelf("two", false)];
+    try {
+      for (const code of ["en", "es", "ja"]) {
+        const words: Record<string, string> = JSON.parse(readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"));
+        await i18n.changeLanguage(code);
+        const { container, root } = await mount(overviewOf([], { seedelfs: none }));
+        expect(one(container, "messages-seedelfs-none").textContent, code).toBe(words["messages.seedelfsNone"]);
+        expect(words["messages.seedelfsNone"], code).toMatch(/Seedelf/);
+        expect(placesOf(container, ["messages-seedelfs-row", "messages-seedelfs-none", "messages-seedelf-switch"]), code).toSatisfy(ascending);
+        act(() => root.unmount());
+      }
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+    expect(JSON.parse(readFileSync(new URL("../src/i18n/translations/en.json", import.meta.url), "utf8"))["messages.seedelfsNone"]).toBe(
+      "Until a Seedelf takes messages, no one can write to you first.",
+    );
+    // With one on, it isn't said: the row opened by a press, or still open from when none was.
+    const some = await mount(overviewOf([], { seedelfs: [seedelf("one", true), seedelf("two", false)] }));
+    click(row(some.container));
+    expect(byTest(some.container, "messages-seedelf-switch")).toHaveLength(2);
+    expect(byTest(some.container, "messages-seedelfs-none")).toHaveLength(0);
+    act(() => some.root.unmount());
+    const turned = await mount(overviewOf([], { seedelfs: none }));
+    expect(byTest(turned.container, "messages-seedelfs-none")).toHaveLength(1);
+    turned.rerender(overviewOf([], { seedelfs: [{ ...none[0]!, on: true }, none[1]!] }));
+    expect(row(turned.container).getAttribute("aria-expanded")).toBe("true");
+    expect(byTest(turned.container, "messages-seedelfs-none")).toHaveLength(0);
+    act(() => turned.root.unmount());
+  });
+
+  it("says to turn on only a Seedelf you made over the switches, never under them", async () => {
+    const many = Array.from({ length: 15 }, (_, i) => seedelf(`s${i}`, i === 0, i === 0));
+    const { container, root } = await mount(overviewOf([], { seedelfs: many }));
+    click(row(container));
+    const inside = elements(one(container, "messages-seedelfs"));
+    const note = inside.findIndex((e) => e.localName === "p" && e.textContent === "Turn on only a Seedelf you made: one someone else made can tie your Seedelfs to each other.");
+    const first = inside.findIndex((e) => e.getAttribute("data-testid") === "messages-seedelf");
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(first).toBeGreaterThan(note);
+    // Said once, with the words it had.
+    expect(one(container, "messages-seedelfs").textContent!.split("Turn on only a Seedelf you made")).toHaveLength(2);
+    act(() => root.unmount());
+  });
+
+  it("isn't shown for a wallet with no Seedelfs, nor before the overview is read", async () => {
+    const empty = await mount(overviewOf([talk], { seedelfs: [] }));
+    expect(byTest(empty.container, "messages-seedelfs-row")).toHaveLength(0);
+    expect(byTest(empty.container, "messages-notes")).toHaveLength(1);
+    act(() => empty.root.unmount());
+    const unread = await mount(undefined);
+    expect(byTest(unread.container, "messages-seedelfs-row")).toHaveLength(0);
+    act(() => unread.root.unmount());
+  });
+
+  it("has its words in every language, the two counts in each", () => {
+    for (const code of ["en", "es", "ja"]) {
+      const words: Record<string, string> = JSON.parse(readFileSync(new URL(`../src/i18n/translations/${code}.json`, import.meta.url), "utf8"));
+      expect(words["messages.seedelfs"], code).toMatch(/Seedelf/);
+      expect(words["messages.seedelfsTaking"], code).toContain("{{on}}");
+      expect(words["messages.seedelfsTaking"], code).toContain("{{total}}");
+      // No form that depends on a count: one string, whatever the numbers.
+      expect(Object.keys(words).filter((k) => k.startsWith("messages.seedelfsTaking")), code).toEqual(["messages.seedelfsTaking"]);
+    }
+  });
+});
+
+// The 1.10.0 gate's blind reading: the one place the user chooses WHICH Seedelf to show cut each to one line,
+// "web-wallet (5eed0e1f…abab…", its last sixteen and its index gone.
+describe("Show my Seedelf's pick", () => {
+  it("says each Seedelf whole, on as many lines as it takes", async () => {
+    const c = conversation({ cid: "c1", role: "initiator", handle: ALICE });
+    const said: MessagingEntry[] = [
+      { id: 0, dir: "out", at: now - 2000, text: "hello", sent: "posted" },
+      { id: 1, dir: "in", at: now - 1000, text: "hi" },
+    ];
+    const { container, root } = await openThread(c, said, { seedelfs: [MINE, LOOKALIKE] });
+    click(one(container, "thread-reveal"));
+    const labels = elements(one(container, "messages-reveal-pick")).filter((e) => classes(e).includes("token-row__label"));
+    expect(labels.map((l) => l.textContent)).toEqual(["web-wallet (5eed0e1f…1111222233334444\u00a0#0)", "Alice B (5eed0e1f…aaaabbbbccccdddd\u00a0#0)"]);
+    for (const l of labels) expect(classes(l)).toContain("token-row__label--wrap");
+    // The rule that lets it: wrapped, and broken anywhere before it's cut.
+    const css = readFileSync(new URL("../src/ui/styles.css", import.meta.url), "utf8");
+    const rule = css.match(/\n\.token-row__label--wrap \{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toMatch(/white-space:\s*normal/);
+    expect(rule).toMatch(/overflow-wrap:\s*anywhere/);
+    // And it comes after the one-line rule it undoes.
+    expect(css.indexOf("\n.token-row__label--wrap {")).toBeGreaterThan(css.indexOf("\n.token-row__label {"));
+    act(() => root.unmount());
   });
 });
 

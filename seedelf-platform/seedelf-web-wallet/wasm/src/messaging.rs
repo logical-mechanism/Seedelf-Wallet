@@ -28,6 +28,7 @@
 //! tombstones. Only an envelope the scan matched is ever opened, so the
 //! second opening costs only matches.
 
+use std::borrow::Borrow;
 use std::fmt;
 
 use anyhow::{Result, anyhow};
@@ -276,13 +277,27 @@ fn cid_hex(cid: ConversationId) -> String {
     hex::encode(cid.0)
 }
 
-fn secret_key(sk: Scalar) -> Result<SecretKey> {
-    SecretKey::from_scalar(sk).map_err(|e| anyhow!("the key: {e}"))
+fn secret_key(sk: &Scalar) -> Result<SecretKey> {
+    SecretKey::from_scalar(*sk).map_err(|e| anyhow!("the key: {e}"))
 }
 
 fn conversation(record: &Secret) -> Result<Conversation> {
     Conversation::from_bytes(&record.bytes("a conversation's record")?)
         .map_err(|e| anyhow!("a conversation's record doesn't read: {e}"))
+}
+
+/// A conversation's record, for JavaScript to seal and keep. Never a state
+/// whose ratchet key is the conversation's own identity key: that key's
+/// secret is the Seedelf key itself, which no record may hold. The crate
+/// returns no such state and reads none back; `to_bytes` can't refuse one,
+/// so this does, and throws.
+fn record_of(held: &Conversation) -> Result<Secret> {
+    if held.ratchet_key_is_identity() {
+        return Err(anyhow!(
+            "a conversation's state holds its identity key as its ratchet key: it isn't written"
+        ));
+    }
+    Ok(Secret::of(&held.to_bytes()))
 }
 
 /// The requests' record, none yet when absent. Bytes that aren't hex throw;
@@ -326,8 +341,8 @@ fn inbox(
 /// scan-timing#1; whether an envelope is a v1 envelope with a valid `p` is
 /// in its bytes, for anyone to see). An envelope that isn't one isn't the
 /// reader's; only one that isn't hex throws.
-pub fn scan(sk: Scalar, envelopes: &[String]) -> Result<String> {
-    let key = secret_key(sk)?;
+pub fn scan(sk: impl Borrow<Scalar>, envelopes: &[String]) -> Result<String> {
+    let key = secret_key(sk.borrow())?;
     let mut found = String::with_capacity(envelopes.len());
     for envelope in envelopes {
         let bytes = decode(envelope, "an envelope")?;
@@ -357,8 +372,8 @@ pub struct Opened {
 
 /// Opens an envelope addressed to `sk` and says which conversation it's
 /// for: every point checked, the padding exact. Its message isn't decrypted.
-pub fn open(sk: Scalar, envelope: &str) -> Result<Answer<Opened>> {
-    let key = secret_key(sk)?;
+pub fn open(sk: impl Borrow<Scalar>, envelope: &str) -> Result<Answer<Opened>> {
+    let key = secret_key(sk.borrow())?;
     let bytes = decode(envelope, "the envelope")?;
     Ok(answer(seedelf_messaging::session::open(&key, &bytes).map(
         |opened| {
@@ -457,8 +472,8 @@ pub struct ReceiveResult {
 /// is said only of a session message of a held conversation that
 /// authenticates and whose envelope checks (§16.4): a forgery past the bound
 /// is `decryption_failed`. A requests' record that doesn't read is refused.
-pub fn receive(sk: Scalar, request: ReceiveRequest) -> Result<Answer<ReceiveResult>> {
-    let key = secret_key(sk)?;
+pub fn receive(sk: impl Borrow<Scalar>, request: ReceiveRequest) -> Result<Answer<ReceiveResult>> {
+    let key = secret_key(sk.borrow())?;
     let envelope = decode(&request.envelope, "the envelope")?;
     let handles = handles(&request.handles)?;
     let conversations = request
@@ -493,7 +508,7 @@ pub fn receive(sk: Scalar, request: ReceiveRequest) -> Result<Answer<ReceiveResu
                     cid: cid_hex(cid),
                     plaintext: Secret::of(&plaintext),
                 },
-                conversation: Some(Secret::of(&held.to_bytes())),
+                conversation: Some(record_of(held)?),
                 requests: None,
             }
         }
@@ -547,28 +562,29 @@ pub struct Started {
     pub digest: String,
 }
 
-fn started(conversation: &Conversation) -> Started {
-    Started {
+fn started(conversation: &Conversation) -> Result<Started> {
+    Ok(Started {
         cid: cid_hex(conversation.cid()),
-        conversation: Secret::of(&conversation.to_bytes()),
+        conversation: record_of(conversation)?,
         digest: hex::encode(conversation.stamp_digest()),
-    }
+    })
 }
 
 /// Starts a conversation with a Seedelf's owner (protocol.md §3): both
 /// identities, F with its proof, the session key and the sending chain. A
 /// register that isn't valid, a `to` that isn't 1 to 32 bytes and a
 /// register of `sk`'s own are refused.
-pub fn start(sk: Scalar, request: StartRequest) -> Result<Answer<Started>> {
-    let key = secret_key(sk)?;
+pub fn start(sk: impl Borrow<Scalar>, request: StartRequest) -> Result<Answer<Started>> {
+    let key = secret_key(sk.borrow())?;
     let to = decode(&request.to, "`to`")?;
     let handle = match request.handle.read("the handle")? {
         Ok(handle) => handle,
         Err(error) => return Ok(answer(Err(error))),
     };
-    Ok(answer(
-        Conversation::start(&key, &handle, &to, request.now).map(|c| started(&c)),
-    ))
+    match Conversation::start(&key, &handle, &to, request.now) {
+        Ok(conversation) => Ok(Answer::Done(started(&conversation)?)),
+        Err(error) => Ok(refusal(error)),
+    }
 }
 
 /// [`start_continuing`]'s request.
@@ -583,12 +599,16 @@ pub struct ContinueRequest {
 
 /// Starts a conversation continuing an old one, with its identities and no
 /// `to` (protocol.md §6). Either side can. The old record is unchanged.
-pub fn start_continuing(sk: Scalar, request: ContinueRequest) -> Result<Answer<Started>> {
-    let key = secret_key(sk)?;
+pub fn start_continuing(
+    sk: impl Borrow<Scalar>,
+    request: ContinueRequest,
+) -> Result<Answer<Started>> {
+    let key = secret_key(sk.borrow())?;
     let old = conversation(&request.conversation)?;
-    Ok(answer(
-        Conversation::start_continuing(&key, &old, request.now).map(|c| started(&c)),
-    ))
+    match Conversation::start_continuing(&key, &old, request.now) {
+        Ok(conversation) => Ok(Answer::Done(started(&conversation)?)),
+        Err(error) => Ok(refusal(error)),
+    }
 }
 
 /// [`set_stamp`]'s request.
@@ -621,7 +641,7 @@ pub fn set_stamp(request: SetStampRequest) -> Result<Answer<Stamped>> {
     }
     let bits = held.stamp().map_or(0, |(_, bits)| bits);
     Ok(Answer::Done(Stamped {
-        conversation: Secret::of(&held.to_bytes()),
+        conversation: record_of(&held)?,
         bits,
     }))
 }
@@ -667,7 +687,7 @@ pub fn send(request: SendRequest) -> Result<Answer<Sent>> {
         Err(error) => return Ok(refusal(error)),
     };
     Ok(Answer::Done(Sent {
-        conversation: Secret::of(&held.to_bytes()),
+        conversation: record_of(&held)?,
         envelope: hex::encode(envelope),
     }))
 }
@@ -702,8 +722,8 @@ pub struct Revealed {
 /// (`reveal_not_allowed`); the Seedelf's register must be `sk`'s, as the
 /// conversation's own identity must (`not_for_this_key`). The record is
 /// unchanged: the wallet then sends the reveal with [`send`].
-pub fn reveal(sk: Scalar, request: RevealRequest) -> Result<Answer<Revealed>> {
-    let key = secret_key(sk)?;
+pub fn reveal(sk: impl Borrow<Scalar>, request: RevealRequest) -> Result<Answer<Revealed>> {
+    let key = secret_key(sk.borrow())?;
     let held = conversation(&request.conversation)?;
     let name = decode(&request.name, "the Seedelf's name")?;
     let seedelf = match request
@@ -815,8 +835,8 @@ pub struct Accepted {
 /// Replies to a request: builds its conversation from F and its messages,
 /// each as it arrived (protocol.md §3.1). [`send`] then sends the reply. A
 /// requests' record that doesn't read is refused.
-pub fn accept(sk: Scalar, request: RequestOf) -> Result<Answer<Accepted>> {
-    let key = secret_key(sk)?;
+pub fn accept(sk: impl Borrow<Scalar>, request: RequestOf) -> Result<Answer<Accepted>> {
+    let key = secret_key(sk.borrow())?;
     let cid = cid_of(&request.cid)?;
     let requests = match requests(Some(&request.requests))? {
         Ok(requests) => requests,
@@ -829,7 +849,7 @@ pub fn accept(sk: Scalar, request: RequestOf) -> Result<Answer<Accepted>> {
     }
     let held = inbox.conversation(cid).expect("an accepted request's");
     Ok(Answer::Done(Accepted {
-        conversation: Secret::of(&held.to_bytes()),
+        conversation: record_of(held)?,
         requests: hex::encode(inbox.requests().to_bytes()),
         continues: continues_view(continues),
     }))
@@ -866,8 +886,8 @@ pub struct RequestTexts {
 /// A request's messages, decrypted in memory to show them, as the reply
 /// would read them. Nothing changes: the record keeps only what arrived. A
 /// requests' record that doesn't read is refused.
-pub fn read_request(sk: Scalar, request: RequestOf) -> Result<Answer<RequestTexts>> {
-    let key = secret_key(sk)?;
+pub fn read_request(sk: impl Borrow<Scalar>, request: RequestOf) -> Result<Answer<RequestTexts>> {
+    let key = secret_key(sk.borrow())?;
     let cid = cid_of(&request.cid)?;
     let requests = match requests(Some(&request.requests))? {
         Ok(requests) => requests,
@@ -1002,7 +1022,7 @@ pub fn expire(request: ExpireRequest) -> Result<Expired> {
         Some(record) => {
             let mut held = conversation(record)?;
             held.expire(request.now);
-            Some(Secret::of(&held.to_bytes()))
+            Some(record_of(&held)?)
         }
     };
     let tombstones = match request.tombstones.as_deref() {

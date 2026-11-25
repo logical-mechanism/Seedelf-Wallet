@@ -142,6 +142,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
+  | Messages, by its lever ([Stopping Messages](#stopping-messages)) | every `/messaging/` route answers 410 through the public name, with CORS for the wallet's origin, a post's too, and a post's preflight is still answered; `/health` says `"relay":"off"`, and every other route answers as before. A wallet with Messages on shows them paused, solves and posts nothing, and asks one page an hour and one at each unlock. Undone, `/health` says `"relay":"on"`, a page answers 200, and each wallet posts what it queued |
 
   The wallet goes back to the API at its first read after a 5-minute hold, and a retry that fails starts the hold again. Postgres keeps answering on `10.88.0.2` across a restart of the tunnel. The drills as run, with their times, are in [the archived plan for the VPS's set-up](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26c-data-layer-vps.md#the-drills-2026-10-09).
 
@@ -225,6 +226,25 @@ else
 fi
 SCRIPT
 ```
+
+**Then check it as a wallet meets it,** through the public name and Caddy, with the store's origin: both blocks above ask the API itself on `127.0.0.1`, past the proxy. From any machine, after the stop and again after the undo:
+
+```bash
+# any machine
+api=https://mainnet.seedelf.logicalmechanism.io
+o='Origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp'
+want='^HTTP|^access-control-allow-origin|^access-control-allow-methods|^access-control-expose-headers'
+echo "health: $(curl -s -m 10 "$api/health" | grep -o '"relay":"[a-z]*"' || echo 'no answer')"
+for pool in mainnet preprod; do
+  echo "a page, $pool: $(curl -s -m 10 -D - -o /dev/null "$api/messaging/v1/$pool/envelopes" -H "$o" | tr -d '\r' | grep -iE "$want" | tr '\n' ' ')"
+done
+echo "a post: $(printf 123456789 | curl -s -m 10 -D - -o /dev/null -X POST "$api/messaging/v1/preprod/envelopes" -H "$o" -H 'Content-Type: application/octet-stream' --data-binary @- | tr -d '\r' | grep -iE "$want" | tr '\n' ' ')"
+echo "a post's preflight: $(curl -s -m 10 -D - -o /dev/null -X OPTIONS "$api/messaging/v1/preprod/envelopes" -H "$o" -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type' | tr -d '\r' | grep -iE "$want" | tr '\n' ' ')"
+```
+
+- **Stopped:** `"relay":"off"`; each page and the post `HTTP/2 410`, each with `access-control-allow-origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp` and `access-control-expose-headers: retry-after`; the preflight `HTTP/2 200` with `access-control-allow-methods: GET,POST`. A 410 with no `access-control-allow-origin` is one a wallet can't read: it takes it for no answer, and asks every minute where it should ask every hour.
+- **On again:** `"relay":"on"`; each page `HTTP/2 200` and the post `HTTP/2 400` (nine bytes are no envelope), with the same two headers; the preflight as before.
+- **A wallet,** on a development build with Messages on: stopped, the Messages page says *Messages are paused* and when the server is asked again, an hour on; on again, the line goes at the wallet's next page, at the hour's ask or the next unlock.
 
 ## Timeouts and limits a deploy doesn't install
 

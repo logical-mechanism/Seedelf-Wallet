@@ -120,7 +120,7 @@ A conversation's own registers are the session layer's matter: protocol.md §2.
 
 - `test_vectors_match_the_file` holds the code to the file. `RECORD_MESSAGING_VECTORS=1` rewrites it, for a deliberate change of format only.
 - tests/vectors.rs reads the file through the public API alone, and checks w is in none of the envelope's bytes.
-- An independent implementation reproduced every value of the file before the tag replaced w: noble-curves 2.0.1 for G1, with Node's WebCrypto for HKDF-SHA256 and AES-256-GCM, the same primitives a browser has. The file was re-recorded with the tag, and no independent implementation has reproduced it since.
+- An independent implementation reproduced every value of the file before the tag replaced w: noble-curves 2.0.1 for G1, with Node's WebCrypto for HKDF-SHA256 and AES-256-GCM, the same primitives a browser has. The file was re-recorded with the tag, and reproduced again with the other three vector files (2026-11-23, and 2026-11-24 as they are now): another model's harness, written from this document, protocol.md and the files alone, without the Rust, with no mismatch (protocol.md §16.6 says what of the other files it didn't reproduce).
 
 ### 4.6 Cost
 

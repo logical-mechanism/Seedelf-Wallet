@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { dateLocale, t } from "../i18n";
+import { dateLocale, type I18nKey, t } from "../i18n";
 import type { NetworkName } from "../networks";
 import {
   isMessagingChanged,
@@ -16,7 +16,7 @@ import {
   type MessagingConversation,
   type MessagingOverview,
 } from "../shared/rpc";
-import { seedelfLabel } from "../shared/seedelf-name";
+import { seedelfLabel, seedelfTail } from "../shared/seedelf-name";
 import { call } from "./background";
 import { nameSkeleton, shortCounterparty } from "./format";
 
@@ -171,15 +171,19 @@ export function unreadOf(overview: MessagingOverview | undefined): number {
 }
 
 /**
- * What names a Seedelf (its asset name): the user's contact for it, else its tag; with its name cut to parts no one
- * else can choose, since anyone can mint a tag. A contact's name only where a contact names this very Seedelf: a tag
- * that reads the same is still a tag (screens#3), which the screens say as Send does. No word of the wallet's own is
- * in it, so a sentence that names it says nothing the critical set can't see (`seedelfTitle` adds "Seedelf").
+ * What names a Seedelf (its asset name): the user's contact for it, else its tag; with its name cut short
+ * (seedelf-name.ts `seedelfShort`), since anyone can mint a tag. A contact's name only where a contact names this
+ * very Seedelf: a tag that reads the same is still a tag (screens#3), which the screens say as Send does. No word of
+ * the wallet's own is in it, so a sentence that names it says nothing the critical set can't see (`seedelfTitle` adds
+ * "Seedelf").
  */
 export interface SeedelfShown {
-  /** Its name cut to its prefix and its last sixteen. */
+  /** Its name cut to its prefix, its last sixteen and its output index. */
   short: string;
-  /** Its last sixteen, which no one else can choose: what tells two Seedelfs tagged alike apart. */
+  /**
+   * Its last sixteen and its output index: what tells two Seedelfs tagged alike apart. The sixteen are bytes of the
+   * transaction the mint spent, which a Seedelf minted from another output of it shares; the index tells those apart.
+   */
   tail: string;
   /** The contact's name for it, where one names it. */
   contact?: string;
@@ -192,7 +196,7 @@ export function seedelfShown(name: string, contacts: readonly Contact[] | undefi
   const tag = seedelfLabel(name);
   return {
     short: shortCounterparty(name),
-    tail: name.slice(-16),
+    tail: seedelfTail(name),
     ...(contact !== undefined ? { contact } : {}),
     ...(tag !== undefined ? { tag } : {}),
   };
@@ -221,8 +225,9 @@ export function conversationTitle(
 }
 
 /**
- * The last sixteen a conversation's name shows beside it, as `…0123456789abcdef`: where its name is the other side's
- * Seedelf's tag (or "Seedelf"), which anyone can mint, and not the user's own name for it or a contact's (screens#3).
+ * The last sixteen and the output index a conversation's name shows beside it, as `…0123456789abcdef #0`: where its
+ * name is the other side's Seedelf's tag (or "Seedelf"), which anyone can mint, and not the user's own name for it or a
+ * contact's (screens#3).
  */
 export function conversationTail(
   c: Pick<MessagingConversation, "role" | "handle" | "name" | "revealed">,
@@ -332,9 +337,45 @@ export function answeredAfterRestart(
 export const shareUsedUp = (c: Pick<MessagingConversation, "firstContactLeft">): boolean => c.firstContactLeft?.messages === 0;
 
 /**
+ * What holds every message of a network back while its switch is on: the relay's off switch (`paused`: nothing is
+ * solved or posted until it answers again), or no answer from it (`offline`). The list's notice says which, and a
+ * waiting message says the same, in its row and in its thread (the 1.10.0 gate's blind reading: a paused network's
+ * message counted down "sending in 1:54" beside "The server is asked again at …").
+ */
+export type Held = "paused" | "offline";
+
+export const heldOf = (overview: Pick<MessagingOverview, "paused" | "offline"> | undefined): Held | undefined =>
+  overview?.paused ? "paused" : overview?.offline ? "offline" : undefined;
+
+/**
+ * What a conversation's row says while a message of the user's waits, in its last message's place: what the thread
+ * says of the message itself (Messages.tsx `SentState`), one line for them all.
+ *
+ *   paused                        "Waiting: Messages are paused", as each waiting message says
+ *   every one waits for a reply   "Waiting for a reply", as each says, the switch on or off
+ *   the switch off                "Waiting to send": "waiting for Messages to be on" (one still prepared: "preparing")
+ *   no answer from the server     "Waiting for the server", as each says once it's prepared
+ *   otherwise                     "Sending…": "preparing" or "sending", with about how long, or in how long
+ *
+ * None with nothing waiting: a last message that ended unsent is the row's state then ("Not sent").
+ */
+export function rowWaiting(
+  c: Pick<MessagingConversation, "outbox" | "last">,
+  on: boolean,
+  held: Held | undefined,
+): I18nKey | undefined {
+  if (!c.outbox) return undefined;
+  if (on && held === "paused") return "messages.waitingPaused";
+  if (c.last?.unsent === "reply") return "messages.waitingReply";
+  if (!on) return "messages.waiting";
+  if (held === "offline") return "messages.waitingServer";
+  return "messages.sending";
+}
+
+/**
  * How a verified reveal names the Seedelf it showed (protocol.md §19.5), as Send tells them apart (screens#3, i18n#2):
- * "your contact" and the contact's name, a tag as a tag, or the short name alone, each with the short name, the part
- * of the name no one else can choose. One sentence each, never one put together from translated words.
+ * "your contact" and the contact's name, a tag as a tag, or the short name alone, each with the short name, which
+ * no tag is in (seedelf-name.ts `seedelfShort`). One sentence each, never one put together from translated words.
  */
 export function revealVerifiedText(name: string, contacts: readonly Contact[] | undefined): string {
   const shown = seedelfShown(name, contacts);

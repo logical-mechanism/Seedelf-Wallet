@@ -152,6 +152,25 @@ describe("a shortened ID in a review's row", () => {
     }
   });
 
+  // The 1.10.0 gate's second review: a Seedelf's short form (seedelf-name.ts `seedelfShort`, as Activity's entries
+  // save a Seedelf with no tag) is over the 27 characters and holds a no-break space, so its row could break at "…".
+  it("is a Seedelf's short form too, with its index and without: on one line, under its label", () => {
+    for (const id of ["5eed0e1f\u20264b7616eb63a4b4b8\u00a0#1", "5eed0e1f\u20264b7616eb63a4b4b8\u00a0#255", "5eed0e1f\u20264b7616eb63a4b4b8"]) {
+      expect(isShortenedId(id), id).toBe(true);
+      // Beside a label it has no room at 360 px: under it, as a whole name is, but never copied as a whole one.
+      const html = renderToStaticMarkup(createElement(Row, { label: "To", value: id }));
+      expect(html).toContain('class="review__row review__row--whole review__row--id"');
+      expect(html).not.toContain("data-value");
+    }
+    // The one line holds under the label too: the ID's rule is the one that keeps it.
+    const css = readFileSync(new URL("../src/ui/styles.css", import.meta.url), "utf8");
+    expect(css.slice(css.indexOf("\n.review__row--id dd {"))).toMatch(/^\n\.review__row--id dd \{[^}]*white-space: nowrap;/);
+    // With others beside it, it's a sentence; and so is a form the wallet never writes.
+    for (const v of ["5eed0e1f\u20264b7616eb63a4b4b8\u00a0#1 and 2 more", "5eed0e1f\u20264b7616eb63a4b4b8 #1", "5eed0e1f\u20264b7616eb63a4b4b8\u00a0#1234"]) {
+      expect(isShortenedId(v), v).toBe(false);
+    }
+  });
+
   it("but not a sentence, an amount, or a whole address", () => {
     for (const v of ["Info action \u00b7 53fbef38\u2026#0", "Sending 4 of 10\u2026", "3.174697\u00a0\u20b3", "No"]) expect(isShortenedId(v), v).toBe(false);
     const whole = renderToStaticMarkup(createElement(Row, { label: "To", value: "addr\u2026xyz", whole: true }));

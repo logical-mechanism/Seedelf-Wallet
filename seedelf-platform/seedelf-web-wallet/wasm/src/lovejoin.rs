@@ -56,6 +56,7 @@ use seedelf_crypto::register::Register;
 use seedelf_crypto::schnorr;
 use seedelf_koios::koios::{ProtocolParameters, UtxoResponse, extract_bytes_with_logging};
 use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
 fn network_flag(network: &str) -> Result<bool> {
@@ -273,7 +274,7 @@ impl CollateralTail {
     pub(crate) fn build(
         network_flag: bool,
         params: &ProtocolParameters,
-        sk: Scalar,
+        sk: impl Borrow<Scalar>,
         pool: &PoolRef,
         rows: &[UtxoResponse],
         collateral: &UtxoResponse,
@@ -282,13 +283,14 @@ impl CollateralTail {
         address: &Address,
         rewards: &mut Rewards,
     ) -> Result<Self> {
+        let sk = sk.borrow();
         let protocol = collateral_protocol(network_flag, pool)?;
         if !fits_collateral(collateral) {
             bail!("Only a session's own 5 ₳ collateral goes into the pool of 5 ₳ boxes");
         }
         let mut coins = vec![Coin::from_row(collateral)?];
         coins.extend(payers);
-        let owner = Register::create(sk)?.rerandomize()?;
+        let owner = Register::create(*sk)?.rerandomize()?;
         let tail = lovejoin::collateral_tail(
             params,
             &protocol,
@@ -366,11 +368,17 @@ fn tail_reserve(funded: bool) -> u64 {
 
 /// The boxes of `rows` a tail's mix may draw: `protocol`'s, never the
 /// wallet's own (`sk`'s), nor one `avoid` names.
-fn draws(protocol: &Protocol, rows: &[UtxoResponse], sk: Scalar, avoid: &[OutRef]) -> Vec<PoolBox> {
+fn draws(
+    protocol: &Protocol,
+    rows: &[UtxoResponse],
+    sk: impl Borrow<Scalar>,
+    avoid: &[OutRef],
+) -> Vec<PoolBox> {
+    let sk = sk.borrow();
     rows.iter()
         .filter(|row| !avoid.iter().any(|o| o.is(row)))
         .filter_map(|row| PoolBox::from_row(row, protocol))
-        .filter(|b| !b.is_owned(&sk))
+        .filter(|b| !b.is_owned(sk))
         .collect()
 }
 
@@ -433,13 +441,14 @@ impl DirectTail {
 pub(crate) fn direct_tail(
     network_flag: bool,
     params: &ProtocolParameters,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     pool: &PoolRef,
     rows: &[UtxoResponse],
     utxos: &[UtxoResponse],
     own: &[String],
     rewards: &mut Rewards,
 ) -> Result<DirectTail> {
+    let sk = sk.borrow();
     let is_own = |u: &&UtxoResponse| own.contains(&u.tx_hash);
     let collateral = utxos
         .iter()
@@ -541,9 +550,10 @@ pub struct CollateralMixRequest {
 /// wallet's own, in the pool.
 pub fn collateral_mix(
     accounts: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: CollateralMixRequest,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = collateral_protocol(network_flag, &request.pool_ref)?;
@@ -552,7 +562,7 @@ pub fn collateral_mix(
         .iter()
         .find(|row| request.boxed.is(row))
         .and_then(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| b.is_owned(&sk))
+        .filter(|b| b.is_owned(sk))
         .context("The collateral's box isn't this wallet's, in the pool of 5 ₳ boxes")?;
     let key = accounts.key_hash(Role::Receive, request.index)?;
     let payer = request
@@ -600,7 +610,7 @@ pub fn collateral_mix(
         let config = get_config(VARIANT, network_flag)?;
         let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
         let (tx, fee) =
-            build::external_sweep(&params, &plan.taken, &Register::create(sk)?, &wallet, key)?;
+            build::external_sweep(&params, &plan.taken, &Register::create(*sk)?, &wallet, key)?;
         Ok((sign(tx, accounts, request.index)?, fee))
     })?;
     let (total, tokens) = seedelf_core::utxos::assets_of(plan.taken.clone())?;
@@ -1594,7 +1604,12 @@ fn sign(tx: BuiltTransaction, accounts: &CardanoAccount, index: u32) -> Result<B
 /// transaction signed. When the pool's boxes (only the rows `PoolBox::from_row`
 /// takes) are too few for it, nothing is built: the result says why
 /// (`skipped`), so the worker brings the session back directly.
-pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Result<ChainResult> {
+pub fn chain(
+    accounts: &CardanoAccount,
+    sk: impl Borrow<Scalar>,
+    request: ChainRequest,
+) -> Result<ChainResult> {
+    let sk = sk.borrow();
     chain_in(accounts, sk, request, None)
 }
 
@@ -1603,21 +1618,23 @@ pub fn chain(accounts: &CardanoAccount, sk: Scalar, request: ChainRequest) -> Re
 /// and the tokens its boxes don't take come back with the return.
 pub fn chain_in(
     accounts: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: ChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     chain_at(accounts, sk, request, pool_ref, 3)
 }
 
 /// [`chain_in`], `width` boxes a mix (chunk 34's D3).
 pub fn chain_at(
     accounts: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: ChainRequest,
     pool_ref: Option<&PoolRef>,
     width: usize,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     lovejoin::check_width(width)?;
     check_waves(request.depth, least_waves(request.again))?;
     let network_flag = network_flag(&request.network)?;
@@ -1639,7 +1656,7 @@ pub fn chain_at(
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .partition(|b| b.is_owned(&sk));
+        .partition(|b| b.is_owned(sk));
     let address = Address::from_bech32(&held.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
     let collateral = mixes_collateral(&held, request.depth, request.again)?;
@@ -1702,7 +1719,7 @@ pub fn chain_at(
                 "The session's spare ADA doesn't pay for a Lovejoin box"
             });
         }
-        let base = Register::create(sk)?;
+        let base = Register::create(*sk)?;
         let owners = (0..boxes)
             .map(|_| base.clone().rerandomize())
             .collect::<Result<Vec<_>>>()?;
@@ -1762,11 +1779,12 @@ pub fn chain_at(
 /// takes none is left out of the chain, and [`ChainResult::legs`] says so.
 pub fn chain_across_pools(
     accounts: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: ChainRequest,
     across: &Across,
     width: usize,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     if request.again {
         bail!("Mixing again goes into one Lovejoin pool");
     }
@@ -1800,7 +1818,7 @@ pub fn chain_across_pools(
     }
     let address = Address::from_bech32(&held.address)
         .map_err(|e| anyhow!("The session's address can't be read: {e}"))?;
-    let base = Register::create(sk)?;
+    let base = Register::create(*sk)?;
     let owners = counts
         .iter()
         .map(|n| {
@@ -1817,7 +1835,7 @@ pub fn chain_across_pools(
             leg.pool
                 .iter()
                 .filter_map(|row| PoolBox::from_row(row, protocol))
-                .filter(|b| !b.is_owned(&sk))
+                .filter(|b| !b.is_owned(sk))
                 .collect()
         })
         .collect();
@@ -1892,7 +1910,7 @@ struct Fanned {
 #[allow(clippy::too_many_arguments)]
 fn with_return(
     accounts: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     network_flag: bool,
     params: &ProtocolParameters,
     request: &ChainRequest,
@@ -1900,6 +1918,7 @@ fn with_return(
     fanned: Fanned,
     rewards: &mut Rewards,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     let Fanned {
         built,
         boxes,
@@ -1984,7 +2003,7 @@ fn with_return(
                 let key = accounts.key_hash(Role::Receive, request.index)?;
                 let config = get_config(VARIANT, network_flag)?;
                 let wallet = wallet_contract(network_flag, config.contract.wallet_contract_hash);
-                let base = Register::create(sk)?;
+                let base = Register::create(*sk)?;
                 let (tx, fee) = build::external_sweep(params, &plan.taken, &base, &wallet, key)?;
                 Ok((sign(tx, accounts, request.index)?, fee))
             } else {
@@ -2224,9 +2243,10 @@ pub struct AccountChainRequest {
 /// collateral's.
 pub fn chain_from_account(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     chain_from_account_in(account, sk, request, None)
 }
 
@@ -2236,21 +2256,23 @@ pub fn chain_from_account(
 /// boxes don't take comes back to the account's `0/0`.
 pub fn chain_from_account_in(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     chain_from_account_at(account, sk, request, pool_ref, 3)
 }
 
 /// [`chain_from_account_in`], `width` boxes a mix (chunk 34's D3).
 pub fn chain_from_account_at(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
     width: usize,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     lovejoin::check_width(width)?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
@@ -2380,7 +2402,7 @@ pub fn chain_from_account_at(
         }
     }
 
-    let base = Register::create(sk)?;
+    let base = Register::create(*sk)?;
     let owners = (0..request.boxes)
         .map(|_| base.clone().rerandomize())
         .collect::<Result<Vec<_>>>()?;
@@ -2388,7 +2410,7 @@ pub fn chain_from_account_at(
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .filter(|b| !b.is_owned(&sk))
+        .filter(|b| !b.is_owned(sk))
         .collect();
     let leg = lovejoin::Leg {
         protocol: &protocol,
@@ -2497,9 +2519,10 @@ pub fn chain_from_account_at(
 /// collateral's.
 pub fn again_from_account(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     again_from_account_in(account, sk, request, None)
 }
 
@@ -2507,21 +2530,23 @@ pub fn again_from_account(
 /// pool.
 pub fn again_from_account_in(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     again_from_account_at(account, sk, request, pool_ref, 3)
 }
 
 /// [`again_from_account_in`], `width` boxes a mix (chunk 34's D3).
 pub fn again_from_account_at(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: AccountChainRequest,
     pool_ref: Option<&PoolRef>,
     width: usize,
 ) -> Result<ChainResult> {
+    let sk = sk.borrow();
     lovejoin::check_width(width)?;
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
@@ -2541,7 +2566,7 @@ pub fn again_from_account_at(
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .partition(|b| b.is_owned(&sk));
+        .partition(|b| b.is_owned(sk));
     let boxes = request.boxes.min(ours.len());
     if boxes == 0 {
         bail!("None of this wallet's boxes is in Lovejoin's pool to mix again");
@@ -2665,18 +2690,24 @@ pub struct OwnedResult {
 /// The wallet's boxes in the pool, wherever other people's mixes have moved
 /// them: the Seedelf key's ownership check on each `{a, b}`. And the pool's
 /// other boxes, the ones a mix may take.
-pub fn owned(sk: Scalar, request: OwnedRequest) -> Result<OwnedResult> {
+pub fn owned(sk: impl Borrow<Scalar>, request: OwnedRequest) -> Result<OwnedResult> {
+    let sk = sk.borrow();
     owned_in(sk, request, None)
 }
 
 /// [`owned`] in the token pool `pool` names, or the classic pool.
-pub fn owned_in(sk: Scalar, request: OwnedRequest, pool: Option<&PoolRef>) -> Result<OwnedResult> {
+pub fn owned_in(
+    sk: impl Borrow<Scalar>,
+    request: OwnedRequest,
+    pool: Option<&PoolRef>,
+) -> Result<OwnedResult> {
+    let sk = sk.borrow();
     let protocol = protocol_of(network_flag(&request.network)?, pool)?;
     let (ours, others): (Vec<PoolBox>, Vec<PoolBox>) = request
         .pool
         .iter()
         .filter_map(|row| PoolBox::from_row(row, &protocol))
-        .partition(|b| b.is_owned(&sk));
+        .partition(|b| b.is_owned(sk));
     let boxes: Vec<OutRef> = ours.iter().map(OutRef::of_box).collect();
     Ok(OwnedResult {
         lovelace: (boxes.len() as u64 * protocol.denom).to_string(),
@@ -2722,15 +2753,16 @@ pub struct WithdrawResult {
 /// The wallet's box among the pool's `rows` that `box_ref` names, or the
 /// first of the wallet's there when it names none: what a withdraw takes.
 fn our_box(
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     rows: &[UtxoResponse],
     protocol: &Protocol,
     box_ref: Option<&OutRef>,
 ) -> Result<PoolBox> {
+    let sk = sk.borrow();
     let mut ours = rows
         .iter()
         .filter_map(|row| PoolBox::from_row(row, protocol))
-        .filter(|b| b.is_owned(&sk));
+        .filter(|b| b.is_owned(sk));
     match box_ref {
         Some(r) => ours
             .find(|b| OutRef::of_box(b) == *r)
@@ -2742,26 +2774,28 @@ fn our_box(
 }
 
 /// One of our boxes into a fresh register of the Seedelf key.
-pub fn withdraw(sk: Scalar, request: WithdrawRequest) -> Result<WithdrawResult> {
+pub fn withdraw(sk: impl Borrow<Scalar>, request: WithdrawRequest) -> Result<WithdrawResult> {
+    let sk = sk.borrow();
     withdraw_in(sk, request, None)
 }
 
 /// [`withdraw`] from the token pool `pool` names, or the classic pool.
 pub fn withdraw_in(
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: WithdrawRequest,
     pool: Option<&PoolRef>,
 ) -> Result<WithdrawResult> {
+    let sk = sk.borrow();
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool)?;
     let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
-    let destination = Register::create(sk)?.rerandomize()?;
+    let destination = Register::create(*sk)?.rerandomize()?;
     let built = lovejoin::withdraw(
         &params,
         &protocol,
         std::slice::from_ref(&chosen),
-        &sk,
+        sk,
         destination,
         &mut request.rewards.read()?,
     )?;
@@ -2822,10 +2856,11 @@ pub struct WithdrawPaidResult {
 /// names.
 pub fn withdraw_paid_in(
     account: &CardanoAccount,
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: WithdrawPaidRequest,
     pool: Option<&PoolRef>,
 ) -> Result<WithdrawPaidResult> {
+    let sk = sk.borrow();
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool)?;
@@ -2858,12 +2893,12 @@ pub fn withdraw_paid_in(
         address: account.base_address(network_flag, Role::Receive, 0)?,
         signers: keys.len(),
     };
-    let destination = Register::create(sk)?.rerandomize()?;
+    let destination = Register::create(*sk)?.rerandomize()?;
     let built = lovejoin::withdraw_paid(
         &params,
         &protocol,
         std::slice::from_ref(&chosen),
-        &sk,
+        sk,
         destination,
         &payer,
         &mut request.rewards.read()?,
@@ -2949,17 +2984,18 @@ pub struct WithdrawPrivateResult {
 /// collateral, then `signScriptSpend` adds both signatures. In the classic
 /// pool, or the token pool `pool` names.
 pub fn withdraw_private_in(
-    sk: Scalar,
+    sk: impl Borrow<Scalar>,
     request: WithdrawPrivateRequest,
     pool: Option<&PoolRef>,
 ) -> Result<WithdrawPrivateResult> {
+    let sk = sk.borrow();
     let network_flag = network_flag(&request.network)?;
     let params = ProtocolParameters::from_koios(&request.params)?;
     let protocol = protocol_of(network_flag, pool)?;
     let chosen = our_box(sk, &request.pool, &protocol, request.box_ref.as_ref())?;
-    let destination = Register::create(sk)?.rerandomize()?;
+    let destination = Register::create(*sk)?.rerandomize()?;
     let seed = api::new_seed();
-    let signer = api::key_hash(&api::one_time_key(&sk, &seed));
+    let signer = api::key_hash(&api::one_time_key(sk, &seed));
     // A UTxO too small is passed over having taken nothing.
     let mut rewards = request.rewards.read()?;
     for utxo in &request.utxos {
@@ -2973,11 +3009,11 @@ pub fn withdraw_private_in(
             continue;
         }
         let Some(register) = extract_bytes_with_logging(&utxo.inline_datum)
-            .filter(|r| r.is_owned(sk).unwrap_or(false))
+            .filter(|r| r.is_owned(*sk).unwrap_or(false))
         else {
             continue;
         };
-        let (z, g_r) = schnorr::create_proof(register, sk, hex::encode(signer))?;
+        let (z, g_r) = schnorr::create_proof(register, *sk, hex::encode(signer))?;
         let payer = lovejoin::SeedelfPayer {
             coin: Coin::from_row(utxo)?,
             redeemer: create_spend_redeemer(z, g_r, hex::encode(signer))?,
@@ -2987,7 +3023,7 @@ pub fn withdraw_private_in(
             &params,
             &protocol,
             std::slice::from_ref(&chosen),
-            &sk,
+            sk,
             destination.clone(),
             &payer,
             &mut rewards,

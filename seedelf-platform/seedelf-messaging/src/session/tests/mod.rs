@@ -6,6 +6,7 @@ mod far;
 mod first_contact;
 mod keys_proof;
 mod linking;
+mod mutants;
 mod ratchet;
 mod reveal;
 mod rules;

@@ -27,8 +27,9 @@ export function useContacts(): [Contact[] | undefined, (next?: Contact[]) => voi
 }
 
 /**
- * How a contact's value reads in a list: a seedelf or an address shortened to parts no one else can choose, a $handle
- * as is. Twelve and six kept a name's prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2).
+ * How a contact's value reads in a list: a Seedelf or an address cut short as `shortCounterparty` cuts them (a
+ * Seedelf's name to its prefix, its last sixteen and its output index), a $handle as is. Twelve and six kept a name's
+ * prefix, its tag and three bytes anyone can grind (chunk 51, gap-g10#2).
  */
 export const shortValue = (c: Pick<Contact, "value">) => (c.value.startsWith("$") ? c.value : shortCounterparty(c.value));
 
@@ -41,10 +42,13 @@ function ContactRow({ contact, onClick, label }: { contact: Contact; onClick: ()
           {initials(contact.name)}
         </span>
         <span className="token-row__label">{contact.name}</span>
-        <span className="token-row__amount note">
+        {/* Its kind beside the name alone, and its value across the row under them: beside "Seedelf", a Seedelf's
+            short form with its index had no room at 360 px, and the ellipsis took the index (the 1.10.0 gate's
+            visual check). */}
+        <span className="token-row__amount token-row__amount--head note">
           {contact.kind === "seedelf" ? "Seedelf" : tr("contacts.kind.address")}
         </span>
-        <code className="token-row__sub">{shortValue(contact)}</code>
+        <code className="token-row__sub token-row__sub--across">{shortValue(contact)}</code>
       </button>
     </li>
   );

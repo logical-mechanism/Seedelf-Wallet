@@ -302,8 +302,10 @@ impl Conversation {
             .iter()
             .map(|(opened, at)| conversation.receive_with(opened, *at, draw))
             .collect();
-        // None authenticated: the first message's own refusal.
-        if conversation.ratchet.cks.is_none() {
+        // None authenticated: the first message's own refusal. The scratch
+        // state's ratchet key is still x then; it's dropped here, and no
+        // state whose ratchet key is x is returned, whatever was drawn.
+        if conversation.ratchet.cks.is_none() || conversation.ratchet_key_is_identity() {
             return Err(results
                 .into_iter()
                 .find_map(Result::err)
@@ -530,6 +532,23 @@ impl Conversation {
     /// F.
     pub fn first_contact(&self) -> &FirstContact {
         &self.first
+    }
+
+    /// Whether this state's ratchet key is its own side's identity key on
+    /// p₀ (A for the initiator, w₀ for the responder): the key whose secret
+    /// is x itself. Only a responder's scratch state is such, while a
+    /// request's messages are replayed (`accept_with`): it holds x as its
+    /// ratchet key until its first message's ratchet step replaces it, and
+    /// is never returned. [`Conversation::to_bytes`] would write that
+    /// secret, and can't refuse: so [`Conversation::from_bytes`] reads no
+    /// such state, and a caller that stores states refuses to write one, as
+    /// seedelf-wasm does.
+    pub fn ratchet_key_is_identity(&self) -> bool {
+        let identity = match self.role {
+            Role::Initiator => self.first.initiator,
+            Role::Responder => self.responder,
+        };
+        self.ratchet.dhs.public == identity
     }
 
     /// Whether the next message is a first-contact message: the initiator,
@@ -767,10 +786,17 @@ impl Conversation {
         // Every reachable state has a sending chain and a DHr. A responder has
         // a receiving chain too, and no stamp; an initiator without a
         // receiving chain is still on w₀, and counts what it sent of the
-        // request's share: within it, and so at most 16 messages.
+        // request's share: within it, and so at most 16 messages. And no
+        // state's ratchet key is its own side's identity key, whose secret
+        // is x: only a scratch state holds that, and none is ever written.
         let sending_first_contact = role == Role::Initiator && ckr.is_none();
+        let identity = match role {
+            Role::Initiator => first.initiator,
+            Role::Responder => responder,
+        };
         let consistent = cks.is_some()
             && dhr.is_some()
+            && public != identity
             && match role {
                 Role::Responder => ckr.is_some() && stamp.is_none(),
                 Role::Initiator => ckr.is_some() || (dhr == Some(responder) && pn == 0),

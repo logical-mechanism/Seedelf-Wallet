@@ -1084,7 +1084,8 @@ html:has(.screen__head--sticky) {
   font-weight: 700;
 }
 
-/* An address or a Seedelf's name: the whole of it, under its label. */
+/* An address or a Seedelf's name: the whole of it, under its label. A Seedelf's short form too (ReviewRows' Row),
+   on one line: beside a label it has no room in the side panel. */
 .review__row--whole {
   flex-direction: column;
   align-items: stretch;
@@ -1823,6 +1824,13 @@ html:has(.screen__head--sticky) {
   white-space: nowrap;
 }
 
+/* A label that is the choice itself (Show my Seedelf's pick, components/RadioCards.tsx `wrap`): whole, on as many
+   lines as it takes, as the Seedelfs' switches say a name. Cut to one line it lost its last sixteen and its index. */
+.token-row__label--wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .token-row__amount {
   grid-row: 1 / 3;
   grid-column: 3;
@@ -1837,6 +1845,17 @@ html:has(.screen__head--sticky) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A contact's row (components/Contacts.tsx): its kind on the name's line alone, and its value across the row under
+   them. Beside the kind, a Seedelf's short form with its output index had no room at 360 px, and the ellipsis took the
+   index. */
+.token-row__amount--head {
+  grid-row: 1;
+}
+
+.token-row__sub--across {
+  grid-column: 2 / -1;
 }
 
 .view-all {
@@ -3640,9 +3659,8 @@ button.dapp-tile:hover {
   flex: none;
 }
 
-/* An address or a Seedelf's name, cut to parts nobody else can choose (format.ts `shortCounterparty`): whole, on a line
-   of its own when the line has no room, never squeezed to its checksum as the line's middle cut did (chunk 51,
-   gap-g10#2). */
+/* An address or a Seedelf's name, cut short (format.ts `shortCounterparty`): whole, on a line of its own when the line
+   has no room, never squeezed to its checksum as the line's middle cut did (chunk 51, gap-g10#2). */
 .activity__who {
   flex: none;
   max-width: 100%;
@@ -4267,6 +4285,15 @@ button.dapp-tile:hover {
   border-radius: var(--r-md);
 }
 
+/* Where Messages isn't open yet (networks.ts MESSAGING_NETWORKS): one line in the switch's place. */
+.messages__closed {
+  margin: 0;
+  padding: var(--s3) var(--s4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
 .messages__group {
   display: flex;
   flex-direction: column;
@@ -4485,7 +4512,7 @@ button.dapp-tile:hover {
   color: var(--text);
 }
 
-/* The name takes the ellipsis, never its last sixteen beside it (screens#4's rule, in the header). */
+/* The name takes the ellipsis, never its last sixteen and index beside it (screens#4's rule, in the header). */
 .thread__title {
   min-width: 0;
   overflow: hidden;
@@ -4499,6 +4526,8 @@ button.dapp-tile:hover {
   font-size: 11px;
   font-weight: 400;
   color: var(--muted);
+  /* Its index stays on the sixteen's line. */
+  white-space: nowrap;
 }
 
 .thread__name--alone {
@@ -4824,8 +4853,9 @@ button.dapp-tile:hover {
   font-weight: 600;
 }
 
-/* A Seedelf's name's last sixteen beside its tag in the list: what tells two Seedelfs tagged alike apart. A sibling
-   of the name that never shrinks, so a long tag takes the ellipsis and the sixteen stay whole (screens#4). */
+/* A Seedelf's name's last sixteen and its output index beside its tag in the list: what tells two Seedelfs tagged
+   alike apart. A sibling of the name that never shrinks, so a long tag takes the ellipsis and they stay whole
+   (screens#4). */
 .convo__tail {
   flex: none;
   margin-left: -2px;
@@ -4833,10 +4863,12 @@ button.dapp-tile:hover {
   font-size: 11px;
   font-weight: 400;
   color: var(--muted);
+  /* Its index stays on the sixteen's line. */
+  white-space: nowrap;
 }
 
-/* The list's lines over the conversations: a state with its way out (Try again, Turn off), the Seedelfs' switches,
-   and an overview that couldn't be read. */
+/* The list's lines over the conversations: a state with its way out (Try again, Turn off) and an overview that
+   couldn't be read; and, under them, the Seedelfs' switches. */
 .messages__problem {
   display: flex;
   flex-direction: column;
@@ -4881,14 +4913,40 @@ button.dapp-tile:hover {
   padding: 0 var(--s4);
 }
 
+/* The Seedelfs' switches, folded under one row at the foot of the list (the owner, 2026-11-24): the card they were in,
+   its first row the button that opens them. It keeps to the foot of the pane, the list's note under it. */
+.messages__seedelfs-fold {
+  margin-top: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.messages__seedelfs-fold + .messages__unlock {
+  margin-top: 0;
+}
+
+/* Settings' row (the words, what's set under them, the chevron in its own column), out to the card's edges. */
+.messages__seedelfs-row {
+  width: 100%;
+  margin: 0;
+  /* The card's own edge is the row's: with a button's own, its words sat a pixel right of the switch's over the list. */
+  border: 0;
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-md);
+}
+
+/* Open, the switches are under it in the same card: square where they meet. */
+.messages__seedelfs-row[aria-expanded="true"] {
+  border-radius: var(--r-md) var(--r-md) 0 0;
+}
+
 .messages__seedelfs {
   display: flex;
   flex-direction: column;
   gap: var(--s2);
   padding: var(--s3) var(--s4);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-top: 1px solid var(--border);
 }
 
 .messages__seedelfs .note,
