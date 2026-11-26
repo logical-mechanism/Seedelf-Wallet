@@ -2,6 +2,8 @@
 
 The draft for review: conversations, forward secrecy and post-compromise security, built on the v1 envelope of [construction.md](construction.md). The envelope is built, and so is the session layer of §3 to §6, in this crate's `session` module (chunk 54's 54a). §16 fixes every byte and rule the build decided. The relay is built too, in the data layer (54c), and §17 fixes what it takes and gives. A first message now carries a stamp and a proof that its base comes from the handle it names, and every envelope is bound to its conversation (calls 12 and 13, 2026-11-21), so no writer can learn whether two Seedelfs are one wallet's (§2). The wallet's worker is built too (54e), and §18 fixes what a message's plaintext holds. The screens (54f) add the verified reveal: the side that wrote first may show the other one of its Seedelfs, by a proof only the reader can check, while the writer's random source was sound when it made it (§19; call 15, 2026-11-21; §7 has the condition). The protocol is modelled in Tamarin ([model/](../model/), 54b), and the design is refined as it's built.
 
+**Chunk 55 changes the keys** (the owner, 2026-11-26): Messages gets its own key, x_m, bound to each Seedelf by a certificate the Seedelf key signs, so a flaw in Messages' cryptography can't spend funds. §21 specifies it, and what such a flaw still gives a thief (§21.1). Until its step 55b is built, §2 to §20 describe the code as it is, with the Seedelf key x in every role §21 gives x_m.
+
 Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multiplication, registers (g, v) with v = [x]g.
 
 ## 0. Decided (the owner, 2026-11-20)
@@ -9,7 +11,7 @@ Notation is construction.md's: additive G1 of BLS12-381, [k]P for scalar multipl
 | Area | Decision |
 |---|---|
 | Key encapsulation | ECIES on re-randomized registers: the v1 envelope. |
-| Long-term key | The Seedelf's own key x. A Seedelf is the handle: "message me at ⟨Seedelf⟩". |
+| Long-term key | The Seedelf's own key x. A Seedelf is the handle: "message me at ⟨Seedelf⟩". Chunk 55 (the owner, 2026-11-26) gives Messages a key of its own, x_m, bound to each Seedelf by a certificate x signs; the handle stays the Seedelf (§21: specified, not built). |
 | Identities | The sender of a first message makes both conversation identities. |
 | First message | Protected by the recipient's long-term key alone until they reply. No prekeys, so the relay holds no key material. A review asked for prekeys; declined for now, to revisit with users. |
 | Relay | Keeps envelopes 36 hours, then deletes them, even though a reader must unlock within that time to receive (§13). Proof of work against spam. Senders' IP addresses are seen, as the data layer already sees them. The wallet uses one relay, which prices each address's posts by its recent traffic, and says so (§10). |
@@ -1047,3 +1049,173 @@ No message says which version wrote it, and a writer writing first can't learn w
 - **1.10.0 solves no price above 26 bits,** about 30 s of a browser's time on average: room above the pools' 24-bit ceiling (§17.4), so the ceiling can be raised that far and 1.10.0 still pays it. The first-contact stamp is apart: always 24 bits.
 
 **Time.** Every first-contact rule runs on the two device clocks: t is the writer's (1.10.0 rounds it down to 10 minutes), and now is the reader's. The relay's clock decides only how long it keeps an envelope. 1.10.0 measures its own clock against a fresh answer's `expires`, and only says how far off it is: nothing runs on the relay's time.
+
+## 21. Messages' own key and its certificate (chunk 55)
+
+**Specified, not built.** Chunk 55 (the owner, 2026-11-26) gives Messages a key of its own, x_m, and binds it to each Seedelf by a certificate the Seedelf key x signs. Nothing of Messages has shipped, so it's built in place, as call 16 was (§0): until its step 55b lands, §2 to §20 describe the code as it is, with x in every role this section gives x_m, and the vector files (§16.6, §19.6) are theirs. §21.9 lists what each of those sections becomes. Choices made here are marked [choice].
+
+### 21.1 Why
+
+- **x spends.** Under §3, §16 and §19 it also reads, writes, proves, and computes Diffie–Hellman values on points a stranger chose: [joint-security.md](joint-security.md)'s uses 4 to 7 and 10. A flaw there could cost funds.
+- **After chunk 55, x_m does all of that.** For Messages, x makes one proof, the certificate, over a statement the wallet builds from its own Seedelf. A flaw in Messages' cryptography then can't spend funds: x_m spends nothing. What it gives a thief is §1.1's x_m row: messages, and the power to pose to the key's owner as anyone, a "Verified" Seedelf included (§21.9, §19.5), which could mislead the owner into a payment.
+- **The handle stays the Seedelf:** "message me at ⟨Seedelf⟩". The certificate is what lets a writer find the messaging register behind the name.
+- **What it doesn't change:** x and x_m live in the same WebAssembly module, so a bug that reads the module's memory reaches both.
+
+### 21.2 The messaging key
+
+    okm_m = HKDF-SHA-256(ikm  = the BIP39 seed v1 uses,
+                         salt = "seedelf-messaging-v1",
+                         info = "seedelf-messaging-key" ‖ u32_be(account) ‖ network ‖ generation,
+                         L    = 64)
+    x_m   = int_be(okm_m) mod q
+
+- **The seed** is derivation.rs's: PBKDF2-HMAC-SHA512 of the phrase, empty passphrase. `account` is the one x takes, 0 in v1.
+- **The network byte:** 0x00 for preprod, 0x01 for mainnet [choice]. Any other network, preview included, takes a byte of its own, never one of these: Cardano's network id is 0 for every test network, so it isn't used.
+- **The generation byte:** 0x00 in v1. Rotation (§21.5) derives the next key with the next byte, so the derivation's shape never changes.
+- **An x_m of 0** is a derivation error, as v1's x of 0 is, with probability about 2⁻²⁵⁵.
+- **Independent of x.** Another salt and another info over the same seed: as random oracles, the two outputs are independent, so neither key says anything about the other (joint-security.md §3).
+- **Per network,** so a flaw found on preprod reads no mainnet message. x is the same on every network; x_m isn't.
+- **A sibling of v1, never a change to it.** derivation.rs's v1 and its vectors stay as they are. x_m's derivation is frozen in its turn when Messages opens on mainnet (§20).
+- **The CLI has no x_m:** its x is a random scalar in a file, with no phrase.
+
+### 21.3 A Seedelf's messaging register
+
+For a Seedelf whose asset name is N (1 to 32 raw bytes) under the Seedelf policy `policy` (its 28-byte hash: the policy of the contract variant the wallet reads, variant 1's today), and whose datum register is (g_S, u_S):
+
+    h_S = hash_to_G1(msg = network (1) ‖ policy (28) ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S,
+                     DST = "Seedelf-Messaging|v1|handle-base|BLS12381G1_XMD:SHA-256_SSWU_RO_")
+    m_S = [x_m]h_S
+    M_S = (h_S, m_S)
+
+hash_to_G1 is RFC 9380's `BLS12381G1_XMD:SHA-256_SSWU_RO_`, its DST ending in that suite's ID as RFC 9380 §3.1 recommends, the points compressed (§16.1), and an h_S that's O is refused.
+
+- **A hashed base, not g_S** (chunk 55's call 5, the owner, 2026-11-26). Nobody chooses h_S, so publishing [x_m]h_S answers no one's static Diffie–Hellman question (joint-security.md, rule 1m).
+  - On g_S itself, a Seedelf someone else minted under the key would have a generator they built from the wallet's public registers. Turning it on would publish x_m times a point of their making.
+  - It also keeps one Seedelf's messaging register from being a register on another's base: a certificate binds m_S to N's register only.
+- **Rebuilt from the chain and the phrase alone:** a restore, or a second browser with the same phrase, computes the same M_S.
+- **A new register gives a new base.** A Seedelf that moves gets a new h_S, so a new M_S and a new certificate.
+- **Unlinkable across Seedelfs.** Registers (h, [x_m]h) on independent random-oracle points can't be told to share a key without x_m, under DDH in G1, as Seedelf registers can't.
+- **Never a payable register:** the funds scan never tests a register against x_m (§21.6).
+
+### 21.4 The certificate
+
+    certificate = version (1) ‖ network (1) ‖ generation (1) ‖ policy (28) ‖ len(N) (1) ‖ N ‖ g_S ‖ u_S ‖ m_S ‖ c (32) ‖ z_x (32) ‖ z_m (32)
+
+- **version** 0x01, **network** §21.2's byte, **generation** 0x00. v1 refuses any other generation: rotation (§21.5) comes later.
+- **policy** is the Seedelf policy's hash, so a later contract variant whose names needn't be unique under v1's can't share a certificate with it. Variant 1's policy keeps names unique under itself.
+- **The statement** is every byte before c: 177 to 208 bytes. The certificate is 273 to 304.
+- **c, z_x, z_m** are 32 bytes big-endian, each below q.
+
+**What it proves:** knowledge of x with u_S = [x]g_S AND of x_m with m_S = [x_m]h_S, under one Fiat–Shamir challenge: two Schnorr proofs, ANDed. x's half binds M_S to the Seedelf's register. x_m's half is the back-signature: no one can bind someone else's messaging register to their own Seedelf.
+
+**The wallet, making one:**
+1. Refuses unless g_S and u_S are canonical, in G1 and not O, the checks the verifier's step 2 makes, before x meets them: x on a point outside G1 would answer questions about x modulo the cofactor's small primes (joint-security.md, rule 5). Then refuses unless u_S = [x]g_S and m_S = [x_m]h_S. A proof for a register that isn't x's hands out [x]g_S, as `create_proof` refuses for a spend (joint-security.md, rule 1).
+2. Draws aux, 32 bytes.
+3. k_m = HMAC-SHA-512(key = x_m as 32 big-endian bytes, message = `Seedelf-Messaging|v1|certificate-nonce|m` ‖ statement ‖ aux) mod q, its 64 bytes a big-endian integer. T_m = [k_m]h_S.
+4. k_x = HMAC-SHA-512(key = x as 32 big-endian bytes, message = `Seedelf-Messaging|v1|certificate-nonce|x` ‖ statement ‖ T_m ‖ aux) mod q. T_x = [k_x]g_S.
+5. c = SHA-256(`Seedelf-Messaging|v1|certificate` ‖ statement ‖ T_x ‖ T_m), a big-endian integer, mod q.
+6. z_x = k_x + c·x and z_m = k_m + c·x_m, mod q.
+
+A k_m or k_x of 0 (about 2⁻²⁵⁵) draws aux again and derives both again. The labels are ASCII, with no length or terminator.
+
+**Why the nonces are derived this way:**
+- **One nonce never meets two challenges, whatever the random source does** (joint-security.md, rules 2 and 2m). c covers the statement, T_x and T_m.
+  - k_x's message holds the statement and T_m, and T_x follows from k_x.
+  - k_m's message holds the statement and aux, which fix T_m, then k_x and T_x, so the whole challenge.
+  - So the same nonce means the same challenge, and the same certificate. A source that fails or repeats gives the same certificate again, never one nonce under two challenges, which would give the key: x = (z_x − z_x′)/(c − c′).
+- **k_x is keyed by x alone, never by x_m.** Whoever holds x_m, after a messaging compromise, computes k_m and T_m and still learns nothing of k_x, so z_x says nothing of x. A k_x anyone could compute from x_m would give x = (z_x − k_x)/c from one certificate.
+- **One aux for both,** as the keys proof's three nonces share one (§16.2): an aux for each would let a source that repeated one and not the other put k_m under two challenges.
+- **One maker, one derivation.** k_m's message can't cover T_x, so k_m is safe only while one (statement, aux) always gives one T_x. So both derivations and H_cert's input are fixed by the version byte, and the wallet makes a certificate in one call that takes no commitment from outside. A second derivation of k_x, from another implementation or a changed one under the same version, would, with a repeated aux, put k_m under two challenges and give x_m. x has no such dependence: k_x covers T_m, whatever the x_m half does.
+
+**Anyone, checking one** (the relay and every writer):
+1. Refuse unless the length is 273 to 304 and matches len(N), version is 0x01, network is the pool's, generation is 0x00, policy is the variant's the reader reads, and 1 ≤ len(N) ≤ 32.
+2. Refuse unless g_S, u_S and m_S are canonical, in G1 and not O (§16.1, construction.md §4.4), and c, z_x and z_m are each below q. c below q is load-bearing: c and c + q would otherwise be two encodings of one certificate.
+3. Compute h_S (§21.3), refused if O.
+4. T_x = [z_x]g_S − [c]u_S and T_m = [z_m]h_S − [c]m_S. Either may be O: it's hashed as O's compressed encoding, `0xc0` then 47 zero bytes, as in §19.2.
+5. Good if c = SHA-256(label ‖ statement ‖ T_x ‖ T_m) mod q.
+
+It proves whoever made it knew both keys. It doesn't prove (g_S, u_S) is N's register now: §21.5 does that.
+
+**Never a spending proof.** A spend's challenge is blake2b-224 over the raw bytes of g ‖ T ‖ u ‖ vkh (joint-security.md §3), a hash no reduction programs. A certificate's (T_x, z_x) can be mauled into a pair for any challenge t, T′ = T_x + [c − t]u_S, but T′ is then fixed by t, so a spend needs blake2b-224(g_S ‖ T′ ‖ u_S ‖ vkh) = t: a chance of about 2⁻²²⁴ a try, what a forger has with no certificate at all. A certificate is simulatable without x (joint-security.md §7.2), so it gives a forger nothing. A test holds it, as the reveal's does: the spending verifiers refuse every certificate's (T_x, z_x).
+
+**The labels:** `…|certificate` (raw SHA-256) is a prefix of `…|certificate-nonce|m` and `…|certificate-nonce|x` (HMAC-SHA-512), which is another function, so they're apart (joint-security.md, rule 3). Within each function, no label of §16 to §21 is a prefix of another.
+
+### 21.5 Good for a Seedelf
+
+A certificate is **good for N** when it checks (§21.4) and (g_S, u_S) is the datum register of the contract UTxO that holds N, in the reader's own read of the contract, the one §2 reads a handle by, and as fresh as that read.
+
+- **Revocation comes from the chain.** A Seedelf moved or removed leaves its old certificates naming a register it no longer has, so they're no longer good.
+- **Replaying an old certificate** needs a data source that lies about N's register: the limit already accepted for paying by name (§2).
+- **Good certificates for one register that name more than one m_S** need two holders of x: x stolen, or held by another wallet that derives another x_m. The writer's wallet takes none of them, and N takes no first messages from it [choice]. A reveal of N then doesn't verify either (§21.9, §19). Several good certificates with one m_S are one: a repost with a fresh aux makes other bytes for the same key.
+- **Rotation, later:** a new generation of x_m and a move of the Seedelf together, so the old certificate is never good again. v1 has generation 0 only.
+
+### 21.6 Which key does what
+
+- **x_m:** every use of a side's key in §2 to §6, §16 and §19, where they write x_A and x_B:
+  - the scan's tag over [x_m]p, and opening, [x_m]c;
+  - the reader's w₀ = [x_m]p₀, then [x_m]E_A, [x_m]A and [x_m]S_A;
+  - the writer's b, keyed by x_m, and A = [x_m]p₀;
+  - the keys proof;
+  - a continuation's A;
+  - the reveal;
+  - and the certificate's z_m.
+- **x:** the certificate's z_x, and nothing else in Messages.
+- **x_m never** makes a spending or Lovejoin proof or a one-time key, and the funds scan never tests a register against it.
+  - So a payment to a register of x_m (R_A, the one a first message hands its reader) is never found or spent by the wallet. §2's *Payments* link, which one key and one scan left open, closes.
+  - And x_m holds nothing: whoever steals it gets no funds.
+  - Funds sent to an x_m register by another tool stay there: the wallet never finds or spends them, and nothing in the wallet offers to pay one.
+- **x never** meets a point of an envelope, of a first-contact block or of a ratchet header.
+
+### 21.7 The list on the relay
+
+- **A list of certificates per pool** [choice for 55c: sizes, prices, caps and pages]:
+  - `POST /messaging/v1/{pool}/certificates`: the body is one certificate, `application/octet-stream`.
+  - `GET /messaging/v1/{pool}/certificates`, then `?after=<cursor>`, in pages as §17.5's.
+- **Read whole by every wallet, never by name,** so no read tells the relay whom a wallet will write to. A wallet keeps its copy, sealed, and reads what's new after its cursor.
+- **The relay checks each certificate as §21.4 does before keeping it,** generation 0x00 only, and keeps one for each (N, register, m_S), answering a repost of one it holds as held. It keeps at most two m_S for one (N, register) [choice], so the owner of one Seedelf can't fill the list by varying x_m, and two stay visible as the conflict §21.5 refuses. A post pays a stamp, at 55c's price: §17.3's, with the label `Seedelf-Messaging|v1|listing-stamp|` in place of `…|stamp|`, so a certificate's stamp is never an envelope's, and neither that label nor `…|certificate` is a prefix of the other (joint-security.md, rule 3). A full list refuses new posts; it never pushes out a certificate it keeps, so made-up registers under one name can't crowd out the real one. It keeps no times.
+  - A page's order is the relay's own sequence, which a cursor needs, so whoever reads twice sees what came between. The wallet posts several certificates apart from each other, so a reader of the list doesn't see them arrive together. That hides nothing from the relay, which sees each post's address (§11).
+- **A certificate stays while it's good for its Seedelf** on the relay's own view of the chain, and goes once it isn't.
+  - On mainnet that's the data layer's view (chunk 55's call 6). Preprod has no chain on the data layer: 55c decides between Koios's view and caps alone.
+  - A wallet that finds its own certificate missing posts it again, several apart, as at the switch: a relay that lost its list would otherwise see each wallet's certificates come back together.
+- **The relay can withhold or drop a certificate,** and then writers who read its list can't write to that Seedelf. It can't forge one.
+- **Withdrawing** (chunk 55's call 9, the owner, 2026-11-26): turning Messages or a Seedelf off posts a withdrawal, signed by x_m, never x, over a hash of the one certificate it takes down, so a later posting, made with a fresh aux, is other bytes an old withdrawal can't reach. Specified in 55c, with joint-security.md first, since it's a new use of x_m.
+- **The off switch** (§17's 410) covers these routes.
+
+### 21.8 When a wallet makes and uses one
+
+- **At the switch** (the owner, 2026-11-26: "Then if it exists just use it else create teh cert then start messaging"):
+  - Turning Messages on for a network, or turning a Seedelf on, reads the list.
+  - For each Seedelf that takes first messages there (chunk 54's W8 and W12), the wallet uses a certificate that's good with its own m_S. If none is good, it makes one and posts it, several apart from each other.
+  - **If a good certificate names another m_S,** it posts nothing: a second would leave the Seedelf taking no first messages (§21.5). It says another key holds that Seedelf's messages, which is either another holder of x or another wallet's derivation. Moving the Seedelf (a new register, so a new base) lets it take messages here again; that's the user's choice.
+  - A Seedelf made in this browser while Messages is on gets one the same way.
+- **Writing first:** the writer reads N's register, as now, and the list.
+  - With exactly one good certificate, it writes to M_S: R_B = ([b]h_S, [b]m_S).
+  - With none, it writes nothing, does no work and posts nothing, and says the Seedelf doesn't take messages.
+- **Writing never waits for the writer's own certificate.** Its R_A = (p₀, [x_m]p₀) is on the reader's base. Its own certificate is for being written to and for showing its Seedelf.
+- **A Seedelf that moves** has a new register, so a new M_S, and its certificate is posted when the user turns it on again, as chunk 54's W8 asks of a Seedelf at a register the wallet didn't put it under. Never by itself: a data source that showed a turned-on Seedelf at some other register would otherwise learn, from whether the wallet posts, whether that register is the wallet's. The reader keeps the retired M_S as one of the handle's until 48 hours after the move, a first message's life (§5), so first messages written to it before the move still read.
+- **A Seedelf this wallet didn't mint** may sit at a register someone built from the wallet's own, such as the sum of two (§2). Its certificate is a public, lasting proof that x knows that register's key, so that those registers share a key. The switch says so before it's turned on.
+- **Show my Seedelf** (§19) is offered only for a Seedelf with a good certificate. Its reader checks the certificate with the register at its press.
+
+### 21.9 What §1.1 to §20 become (built in 55b)
+
+- **§0:** the long-term key row names x_m, bound by the certificate.
+- **§1.1:** the rows for Bob's and Alice's keys are x_m's, and "The Seedelf's funds, since x spends" leaves them. The x_m row keeps the power to pose to that side as anyone, and gains what that now includes without x: a reveal of any Seedelf with a good certificate, proved on the reader's own branch, which the reader's wallet shows as verified. A new row for x:
+  - x stolen reveals the funds, and the power to make a certificate for a messaging register of the thief's choosing. Later first messages from writers who read that list then go to the thief, or, beside the real certificate, to no one (§21.5).
+  - It reveals no message sealed to x_m, since x_m isn't derived from x; first messages written after the thief's certificate is the one good one are the thief's.
+- **§2:** a handle is (N, g_S, u_S, m_S), through its certificate, and its register for Messages is M_S. R_B = ([b]h_S, [b]m_S) and R_A = (p₀, [x_m,A]p₀).
+  - *Linking two handles* holds for sums of messaging registers, closed the same way.
+  - *Payments*: the link that couldn't be closed is closed (§21.6).
+- **§3:** (h_S, m_S) where it has (g_S, v_S); b keyed by x_m; the base proof's second branch is x_m with m_S = [x_m]h_S. Bob's check 3 accepts a handle he holds, by its M_S.
+- **§16.2:** every x_A and x_B is that side's x_m, and every (g_S, v_S) is (h_S, m_S). The labels stay as they are.
+- **§16.6 and §19.6:** the four vector files re-recorded once, deliberately, and a new `messaging_certificate_v1.json` for §21.4: good certificates, and each refusal.
+- **§11:** what the relay learns from the list: which address posted each certificate, and so which Seedelfs an address has turned on.
+- **§17:** §21.7's routes.
+- **§19:**
+  - the reveal carries m_S after u_S, so its proof is checked before anything reads the chain or the list: 274 to 305 bytes;
+  - the statement is cid ‖ p₀ ‖ A ‖ w₀ ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ m_S;
+  - branch 1 is log_{h_S} m_S = log_{p₀} A, with h_S from §21.3, proved with x_m;
+  - at the press, the reader finds N's register in its contract read and a good certificate with that m_S, and none naming another (§21.5);
+  - §19.5's "whoever has x_B has the Seedelf's funds too" becomes false: whoever has the reader's x_m can make a reveal of any Seedelf verify for it (§1.1's x_m row);
+  - the prover refuses unless A = [x_m]p₀, m_S = [x_m]h_S and the Seedelf's certificate is good, as it refuses today unless A and the register are its key's;
+  - a reveal no longer uses x.
+- **§20:** the certificate's bytes, the list's routes and x_m's derivation join what the release that opens mainnet freezes.
