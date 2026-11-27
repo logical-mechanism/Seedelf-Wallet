@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::edge::{Caps, Reserve};
+use crate::edge::{Caps, Reserve, Stopped};
 use crate::messaging::reading::Reading;
 
 /// Loopback: on the VPS, Caddy is in front (deploy/README.md).
@@ -22,6 +22,10 @@ pub struct Config {
     /// cardano-submit-api and Ogmios: the submit part answers 503 without them.
     pub submit_api_url: Option<String>,
     pub ogmios_url: Option<String>,
+    /// Koios preprod's API, which the relay asks at each preprod certificate
+    /// post for its Seedelf's register (`messaging::view`): preprod has no
+    /// chain here. [`DEFAULT_KOIOS_PREPROD`] unset.
+    pub koios_preprod_url: String,
     /// The wallet's origins, `chrome-extension://<id>`, that CORS lets read answers.
     pub origins: Vec<String>,
     /// Behind Caddy on loopback: the client is the last `X-Forwarded-For` address.
@@ -40,8 +44,8 @@ pub struct Config {
     pub edge_caps: Caps,
     /// The most connections open at once (`serve::CONNECTIONS`).
     pub connections: usize,
-    /// Seedelf Messaging stopped: every relay route answers 410 Gone (`edge::limit`), the rest goes on.
-    pub messaging_off: bool,
+    /// The relay's pools Seedelf Messaging is stopped for: their routes answer 410 Gone (`edge::limit`), the rest goes on.
+    pub messaging_off: Stopped,
     /// Where the month's traffic is kept: systemd's `StateDirectory`, or `DATA_STATE_DIR`.
     pub state_dir: Option<PathBuf>,
 }
@@ -61,6 +65,7 @@ impl Config {
             listen,
             submit_api_url: optional("MAINNET_SUBMIT_API_URL"),
             ogmios_url: optional("MAINNET_OGMIOS_URL"),
+            koios_preprod_url: koios_url(optional("PREPROD_KOIOS_URL").as_deref())?,
             origins: optional("DATA_ORIGINS")
                 .map(|list| {
                     list.split(',')
@@ -86,15 +91,26 @@ impl Config {
             )?,
             edge_caps: caps(&optional)?,
             connections: connections(optional("DATA_CONNECTIONS").as_deref())?,
-            messaging_off: switch(
-                "DATA_MESSAGING_OFF",
-                optional("DATA_MESSAGING_OFF").as_deref(),
-            )?,
+            messaging_off: messaging_off(optional("DATA_MESSAGING_OFF").as_deref())?,
             state_dir: optional("DATA_STATE_DIR")
                 .or_else(|| optional("STATE_DIRECTORY"))
                 .map(PathBuf::from),
         })
     }
+}
+
+/// Koios preprod's public API.
+pub const DEFAULT_KOIOS_PREPROD: &str = "https://preprod.koios.rest/api/v1";
+
+/// `PREPROD_KOIOS_URL`: an `https://` base, no trailing slash kept; unset,
+/// Koios preprod's own. Anything else is refused at start: the relay reaches
+/// Koios over TLS alone, and follows no redirect.
+fn koios_url(value: Option<&str>) -> Result<String> {
+    let url = value.map_or(DEFAULT_KOIOS_PREPROD, str::trim);
+    if !url.starts_with("https://") {
+        bail!("PREPROD_KOIOS_URL is an https:// URL");
+    }
+    Ok(url.trim_end_matches('/').to_string())
 }
 
 /// `true` or `false` in a variable's value; unset is false. Anything else is
@@ -105,6 +121,20 @@ fn switch(name: &str, value: Option<&str>) -> Result<bool> {
         None | Some("false") => Ok(false),
         Some("true") => Ok(true),
         Some(_) => bail!("{name} is true or false"),
+    }
+}
+
+/// `DATA_MESSAGING_OFF`: `true`, every pool stopped; `false` or unset, none;
+/// or the pools stopped, a comma-separated list of their names, each once,
+/// whitespace around each trimmed (`preprod`, `mainnet`, `preprod,mainnet`).
+/// Anything else is refused at start, as a typo in a switch is: a pool
+/// meant to stop would otherwise run.
+fn messaging_off(value: Option<&str>) -> Result<Stopped> {
+    const WORDS: &str = "DATA_MESSAGING_OFF is true, false, or the pools stopped, comma-separated: preprod, mainnet, or preprod,mainnet";
+    match value.map(str::trim) {
+        None | Some("false") => Ok(Stopped::none()),
+        Some("true") => Ok(Stopped::all()),
+        Some(list) => Stopped::of(list.split(',').map(str::trim)).map_err(|_| anyhow!("{WORDS}")),
     }
 }
 
@@ -213,6 +243,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn koios_preprod_is_its_own_unless_set_and_an_https_url_when_set() {
+        assert_eq!(
+            koios_url(None).unwrap(),
+            "https://preprod.koios.rest/api/v1"
+        );
+        assert_eq!(koios_url(None).unwrap(), DEFAULT_KOIOS_PREPROD);
+        assert_eq!(
+            koios_url(Some(" https://koios.example/api/v1/ ")).unwrap(),
+            "https://koios.example/api/v1"
+        );
+        for bad in [
+            "",
+            "preprod.koios.rest",
+            "ftp://x",
+            "koios",
+            "http://127.0.0.1:9/api/v1",
+        ] {
+            assert!(koios_url(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn the_relays_reading_and_reserve_come_from_the_environment_or_their_defaults() {
         assert_eq!(reading(None, None).unwrap(), Reading::DEFAULT);
         assert_eq!(
@@ -252,23 +304,56 @@ mod tests {
         assert_eq!(reserve(Some("0"), None).unwrap().part, 0.0);
     }
 
-    /// `DATA_MESSAGING_OFF` (the relay's off switch), read as
-    /// `DATA_TRUST_PROXY` is: true or false, unset is false, and anything
-    /// else is refused at start rather than guessed at.
+    /// `DATA_MESSAGING_OFF` (the relay's off switch): true, every pool;
+    /// false or unset, none; or the pools stopped, comma-separated, each
+    /// once, whitespace trimmed. Anything else is refused at start rather
+    /// than guessed at.
     #[test]
-    fn the_relays_off_switch_is_true_or_false() {
-        let off = |value| switch("DATA_MESSAGING_OFF", value);
-        assert!(!off(None).unwrap());
-        assert!(!off(Some("false")).unwrap());
-        assert!(off(Some("true")).unwrap());
-        assert!(off(Some(" true ")).unwrap());
-        for bad in ["TRUE", "yes", "1", "on", "off", "0"] {
-            let error = off(Some(bad)).unwrap_err().to_string();
-            assert_eq!(error, "DATA_MESSAGING_OFF is true or false", "{bad}");
+    fn the_relays_off_switch_is_true_false_or_the_pools_stopped() {
+        let off = |value| messaging_off(value).unwrap();
+        assert_eq!(off(None), Stopped::none());
+        assert_eq!(off(Some("false")), Stopped::none());
+        assert_eq!(off(Some("true")), Stopped::all());
+        assert_eq!(off(Some(" true ")), Stopped::all());
+        let preprod = off(Some("preprod"));
+        assert!(preprod.pool("preprod") && !preprod.pool("mainnet") && !preprod.every());
+        let mainnet = off(Some(" mainnet "));
+        assert!(mainnet.pool("mainnet") && !mainnet.pool("preprod"));
+        // Both, in any order and spacing, are `true`.
+        for both in ["preprod,mainnet", "mainnet,preprod", " preprod , mainnet "] {
+            assert_eq!(off(Some(both)), Stopped::all(), "{both}");
         }
-        // The proxy's switch is read the same way.
+        for bad in [
+            "TRUE",
+            "yes",
+            "1",
+            "on",
+            "off",
+            "0",
+            "",
+            " ",
+            "preprod,",
+            ",preprod",
+            "preprod,preprod",
+            "preprod mainnet",
+            "preprod;mainnet",
+            "Preprod",
+            "testnet",
+            "preprod,mainnet,preprod",
+            "true,preprod",
+            "false,mainnet",
+        ] {
+            let error = messaging_off(Some(bad)).unwrap_err().to_string();
+            assert_eq!(
+                error,
+                "DATA_MESSAGING_OFF is true, false, or the pools stopped, comma-separated: preprod, mainnet, or preprod,mainnet",
+                "{bad:?}"
+            );
+        }
+        // The proxy's switch is still true or false alone.
         assert!(switch("DATA_TRUST_PROXY", Some("true")).unwrap());
         assert!(switch("DATA_TRUST_PROXY", Some("ture")).is_err());
+        assert!(switch("DATA_TRUST_PROXY", Some("preprod")).is_err());
     }
 
     /// The 1.10.0 gate's FI-3, FI-5 and FI-6: the edge's caps, the

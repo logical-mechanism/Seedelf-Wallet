@@ -288,6 +288,26 @@ pub fn is_mix_datum(datum: &[u8]) -> bool {
     }
 }
 
+/// A Seedelf register, `g_S ‖ u_S`, from a contract UTxO's inline datum:
+/// `Constr 0 [g, u]` of two 48-byte byte strings, in exactly the spellings
+/// [`is_mix_datum`] reads a box in (a box's datum is a register), and as
+/// seedelf-koios's `register_of_datum` reads one for the wallet and the CLI.
+/// Both are held to the wallet's `register-spellings.json`. Unlike a box, a
+/// register may have g = u. Whether they're points of G1 isn't asked: the
+/// relay compares these bytes with a certificate's, whose points it checked
+/// (messaging's check 8).
+pub fn register_of(datum: &[u8]) -> Option<[u8; 96]> {
+    match box_fields(datum).as_deref() {
+        Some([Item::Bytes(g), Item::Bytes(u)]) if g.len() == 48 && u.len() == 48 => {
+            let mut register = [0u8; 96];
+            register[..48].copy_from_slice(g);
+            register[48..].copy_from_slice(u);
+            Some(register)
+        }
+        _ => None,
+    }
+}
+
 /// Decodes a reference datum, or says why it isn't one.
 pub fn decode(datum: &[u8]) -> Result<ReferenceDatum, Rejected> {
     let fields = constr0(datum, 8)?;
@@ -615,6 +635,79 @@ mod tests {
             wrong.len(),
             wrong.join(", ")
         );
+    }
+
+    /// A Seedelf register is read in exactly the spellings the wallet's
+    /// shared fixture says the ledger reads alike (the extension's
+    /// `tests/fixtures/register-spellings.json`, which seedelf-koios's
+    /// `register_of_datum` is held to as well), and in none of the others;
+    /// and the node's box spellings read as the same register as a box.
+    #[test]
+    fn a_register_is_read_in_exactly_the_spellings_the_wallet_reads_as_one() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../seedelf-platform/seedelf-web-wallet/extension/tests/fixtures/register-spellings.json"
+        ))
+        .unwrap();
+        let register = [
+            bytes(fixture["generator"].as_str().unwrap()),
+            bytes(fixture["publicValue"].as_str().unwrap()),
+        ]
+        .concat();
+        let spellings = fixture["spellings"].as_array().unwrap();
+        assert!(spellings.len() >= 15);
+        for spelling in spellings {
+            let datum = bytes(spelling["datum"].as_str().unwrap());
+            let read = register_of(&datum);
+            match spelling["register"].as_bool().unwrap() {
+                true => assert_eq!(
+                    read.map(|r| r.to_vec()),
+                    Some(register.clone()),
+                    "{}",
+                    spelling["name"]
+                ),
+                false => assert_eq!(read, None, "{}", spelling["name"]),
+            }
+        }
+        // A register with g = u, which no box is.
+        let same = [
+            &[0xd8, 0x79, 0x82, 0x58, 0x30][..],
+            &[7; 48],
+            &[0x58, 0x30],
+            &[7; 48],
+        ]
+        .concat();
+        assert_eq!(register_of(&same), Some([7; 96]));
+        assert!(!is_mix_datum(&same));
+        // Fields of another length, and bytes after the datum.
+        let short = [
+            &[0xd8, 0x79, 0x82, 0x58, 0x2f][..],
+            &[7; 47],
+            &[0x58, 0x30],
+            &[7; 48],
+        ]
+        .concat();
+        assert_eq!(register_of(&short), None);
+        let after = [&same[..], &[0]].concat();
+        assert_eq!(register_of(&after), None);
+        // The node's box spellings: a box is read as the same register.
+        let boxes: Value = serde_json::from_str(include_str!(
+            "../../../../seedelf-platform/seedelf-core/tests/fixtures/lovejoin-box-spellings.json"
+        ))
+        .unwrap();
+        let the_box = [
+            bytes(boxes["a"].as_str().unwrap()),
+            bytes(boxes["b"].as_str().unwrap()),
+        ]
+        .concat();
+        for spelling in boxes["spellings"].as_array().unwrap() {
+            let datum = bytes(spelling["hex"].as_str().unwrap());
+            let read = register_of(&datum).map(|r| r.to_vec());
+            if spelling["node"] == "constr0_ab" {
+                assert_eq!(read, Some(the_box.clone()), "{}", spelling["name"]);
+            } else {
+                assert_ne!(read, Some(the_box.clone()), "{}", spelling["name"]);
+            }
+        }
     }
 
     /// r3a#1 widened the box's reader alone. A pool's reference datum is still

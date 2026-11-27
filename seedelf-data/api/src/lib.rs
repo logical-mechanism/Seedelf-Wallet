@@ -1,8 +1,10 @@
 //! Seedelf Wallet's data layer (web wallet chunk 26): the API in front of the
 //! home db-sync, Kupo and node: the private index of the Seedelf contract and
 //! Lovejoin's mix box, the Koios-equivalent public routes, and the submit
-//! part. Beside them, Seedelf Messaging's relay (chunk 54's 54c), which
-//! reads no chain. See `seedelf-data/README.md`.
+//! part. Beside them, Seedelf Messaging's relay (chunk 54's 54c), whose
+//! envelopes need no chain, and whose list of certificates (chunk 55's 55c)
+//! is checked against the private index on mainnet and Koios on preprod.
+//! See `seedelf-data/README.md`.
 
 pub mod chain;
 pub mod config;
@@ -93,11 +95,11 @@ type Parts = (Arc<AppState>, Arc<Edge>, Arc<Submit>, Arc<Relay>);
 /// the private index may still answer from Kupo while db-sync is down), or
 /// when the month's traffic is over its ceiling. The submit part's state is
 /// said, not counted: the deploy compares this status with the one before.
-/// So is the relay's: whether it's stopped, messaging over its own
-/// allowance, whether it has a ceiling of its own at all and how much of
-/// today's share is left, whether it's down to its reserve, and each pool's
-/// size. Nothing here is of any one client: no address, and no count of
-/// one.
+/// So is the relay's: whether it's stopped, wholly or for some pools,
+/// messaging over its own allowance, whether it has a ceiling of its own at
+/// all and how much of today's share is left, whether it's down to its
+/// reserve, and each pool's size and whether it's stopped. Nothing here is
+/// of any one client: no address, and no count of one.
 async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
     let db_sync = state.tip();
     let public = state.fresh_tip().is_ok();
@@ -105,6 +107,13 @@ async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
     let kupo = state.kupo_tip();
     let egress_over = edge.egress.over();
     let node = submit.node();
+    // Each pool's size, and whether the off switch stops it.
+    let mut pools = relay.health();
+    if let Some(pools) = pools.as_object_mut() {
+        for (name, pool) in pools.iter_mut() {
+            pool["stopped"] = edge.stopped().pool(name).into();
+        }
+    }
     let ok = public && private.is_some() && !egress_over;
     let body = serde_json::json!({
         "network": "mainnet",
@@ -114,8 +123,13 @@ async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
         "submit": if submit.synced() { "ok" } else { "down" },
         "egress": if egress_over { "over" } else { "ok" },
         "messaging": {
-            // off: `DATA_MESSAGING_OFF`, and every relay route answers 410 Gone.
-            "relay": if edge.messaging_off() { "off" } else { "on" },
+            // off: `DATA_MESSAGING_OFF` stops every pool, and every relay route answers 410 Gone;
+            // partly: it stops some, each pool's `stopped` says which; on: none.
+            "relay": match (edge.stopped().every(), edge.stopped().is_empty()) {
+                (true, _) => "off",
+                (false, true) => "on",
+                (false, false) => "partly",
+            },
             "egress": if edge.messaging_egress.over() { "over" } else { "ok" },
             // false: `DATA_MESSAGING_GB_MONTH` isn't set, so the relay spends the API's own allowance.
             "ceiling": edge.messaging_egress.has_ceiling(),
@@ -125,7 +139,7 @@ async fn health(State((state, edge, submit, relay)): State<Parts>) -> Response {
             }),
             // true: only posts and short pages are answered until tomorrow's share (`edge::Reserve`).
             "reserve": edge.reserved(),
-            "pools": relay.health(),
+            "pools": pools,
         },
         "db_sync": db_sync.map(|tip| serde_json::json!({
             "block": tip.height, "slot": tip.slot, "hash": tip.hash, "age": age(&tip),

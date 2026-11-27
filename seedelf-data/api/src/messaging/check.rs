@@ -30,7 +30,8 @@ pub const NONCE_LEN: usize = 8;
 /// The stamp digest's label, before the pool's name.
 pub const STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|stamp|";
 
-const POINT_LEN: usize = 48;
+/// A compressed G1 point.
+pub(crate) const POINT_LEN: usize = 48;
 
 /// Where the envelope's tag starts, after the version and `p`, and how long
 /// it is: a hash only the envelope's reader can work out, which nothing
@@ -105,8 +106,9 @@ pub fn check_envelope(envelope: &[u8]) -> Result<(), Refused> {
 }
 
 /// seedelf-messaging's `decode_point`: the canonical compressed encoding of
-/// a point in G1's prime-order subgroup, other than the identity.
-fn decode_point(bytes: &[u8; POINT_LEN]) -> Result<G1Affine, Refused> {
+/// a point in G1's prime-order subgroup, other than the identity. A
+/// certificate's points are decoded by it too (`certificate`).
+pub(crate) fn decode_point(bytes: &[u8; POINT_LEN]) -> Result<G1Affine, Refused> {
     // blst checks the flag bits, that x is below the field modulus and that
     // the point is on the curve, but not the subgroup.
     let point: G1Affine =

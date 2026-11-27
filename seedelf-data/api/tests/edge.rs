@@ -262,6 +262,8 @@ async fn a_body_past_what_its_route_takes_is_refused_at_the_edge() {
         ("/api/v1/submittx", 16 * 1024),
         ("/api/v1/credential_utxos", 16 * 1024),
         ("/messaging/v1/mainnet/envelopes", 8 + 32_768),
+        ("/messaging/v1/mainnet/certificates", 8 + 304),
+        ("/messaging/v1/mainnet/withdrawals", 8 + 98),
     ] {
         let response = app.clone().oneshot(posted(path, most + 1)).await.unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE, "{path}");
@@ -290,6 +292,9 @@ async fn a_body_on_a_route_that_takes_none_is_refused_unread() {
         (Method::POST, "/nowhere"),
         (Method::PUT, "/messaging/v1/mainnet/envelopes"),
         (Method::GET, "/messaging/v1/mainnet/envelopes"),
+        (Method::PUT, "/messaging/v1/mainnet/certificates"),
+        (Method::GET, "/messaging/v1/preprod/certificates"),
+        (Method::GET, "/messaging/v1/preprod/withdrawals"),
         (Method::GET, "/api/v1/tip"),
         (Method::DELETE, "/api/v1/credential_utxos"),
     ] {
@@ -338,6 +343,10 @@ async fn every_route_that_takes_a_body_is_given_it() {
             "/api/v1/ogmios",
             "/messaging/v1/mainnet/envelopes",
             "/messaging/v1/preprod/envelopes",
+            "/messaging/v1/mainnet/certificates",
+            "/messaging/v1/preprod/certificates",
+            "/messaging/v1/mainnet/withdrawals",
+            "/messaging/v1/preprod/withdrawals",
         ]
         .map(String::from),
     );
@@ -361,5 +370,52 @@ async fn every_route_that_takes_a_body_is_given_it() {
         let words = to_bytes(response.into_body(), 1 << 20).await.unwrap();
         let words = String::from_utf8_lossy(&words);
         assert!(!words.contains("takes no body"), "{path}: {words}");
+    }
+}
+
+/// The deploy script's sha256, as the runbook's block that installs it by hand
+/// pins it (deploy/README.md, "The deploy script": its `want=` line, and the
+/// `installed:` line it should print). That block fetches the script from `main`
+/// and installs it only if it has this sha256. No Rust here reads a Markdown file
+/// (data-layer.yml lets a pull request that changes only Markdown skip this suite),
+/// so the value is written here as well: a change to the script fails this test
+/// until both are updated.
+const RUNBOOK_PINS: &str = "989a99c3754d9e15d921de54b68dd569e8c6c32a3655c3ab7420b36485209d0d";
+
+/// The deploy script is the one the runbook's install block pins, it knows the
+/// action the workflow asks for, and the key's comment says so.
+#[test]
+fn the_deploy_script_is_the_one_the_runbook_pins() {
+    use sha2::{Digest, Sha256};
+    let script = include_bytes!("../../deploy/edge/seedelf-data-deploy");
+    let sum: String = Sha256::digest(script)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(
+        sum, RUNBOOK_PINS,
+        "the deploy script changed: put its sha256 in RUNBOOK_PINS and in deploy/README.md's want= and installed: lines"
+    );
+    // The script knows the action the workflow asks for, and the key's comment says so.
+    let script = std::str::from_utf8(script).unwrap();
+    assert!(script.contains("messaging off|on preprod|mainnet"));
+    let keys = include_str!("../../deploy/edge/deploy-authorized_keys");
+    assert!(keys.contains("\"messaging off <pool>\"") && keys.contains("\"messaging on <pool>\""));
+    let workflow = include_str!("../../../.github/workflows/data-layer-deploy.yml");
+    let sends = workflow
+        .lines()
+        .find(|line| line.trim_start().starts_with("messaging-off-preprod |"))
+        .expect("the case that sends the messaging actions");
+    for action in [
+        "messaging-off-preprod",
+        "messaging-on-preprod",
+        "messaging-off-mainnet",
+        "messaging-on-mainnet",
+    ] {
+        assert!(
+            workflow.contains(&format!("- {action}\n")),
+            "{action} isn't a choice"
+        );
+        assert!(sends.contains(action), "{action} isn't sent");
     }
 }

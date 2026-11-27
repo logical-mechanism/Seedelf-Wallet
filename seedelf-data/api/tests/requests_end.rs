@@ -41,6 +41,7 @@ static POOL: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// The server as `main.rs` serves it.

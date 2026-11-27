@@ -5,13 +5,22 @@ name: Data layer deploy
 # data-layer environment, which holds the deploy key and takes main alone.
 # On the VPS the key runs one script and nothing else:
 # seedelf-data/deploy/edge/seedelf-data-deploy, and the runbook's "Deploys".
+# The messaging actions stop Seedelf Messaging for one network, or start it
+# again, and change nothing else: the runbook's "Stopping Messages".
 on:
   workflow_dispatch:
     inputs:
       action:
-        description: "deploy builds main and installs it; rollback puts the previous binary back; status says what's running"
+        description: "deploy builds main and installs it; rollback puts the previous binary back; status says what's running; messaging-off-<network> stops that network's Messages, messaging-on-<network> starts them again"
         type: choice
-        options: [deploy, rollback, status]
+        options:
+          - deploy
+          - rollback
+          - status
+          - messaging-off-preprod
+          - messaging-on-preprod
+          - messaging-off-mainnet
+          - messaging-on-mainnet
         default: deploy
 
 # One change to the VPS at a time: a second run waits, never cancels the first.
@@ -62,7 +71,8 @@ jobs:
 
   vps:
     needs: build
-    # build is skipped for rollback and status; never run after a failed one.
+    # build is skipped for rollback, status and the messaging actions; never
+    # run after a failed one.
     if: >-
       !cancelled() && (needs.build.result == 'success' ||
       (inputs.action != 'deploy' && needs.build.result == 'skipped'))
@@ -88,7 +98,10 @@ jobs:
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
       # The script installs, restarts and checks, and puts the old binary
-      # back by itself if the new one fails: its output is the record.
+      # back by itself if the new one fails: its output is the record. A
+      # messaging action asks it for its words, messaging-off-preprod for
+      # "messaging off preprod", and it puts the switch back as it was if the
+      # API fails its check.
       - name: ${{ inputs.action }}
         env:
           ACTION: ${{ inputs.action }}
@@ -98,11 +111,17 @@ jobs:
             ssh -i ~/.ssh/deploy -o BatchMode=yes -o IdentitiesOnly=yes \
               -o StrictHostKeyChecking=yes "deploy@$HOST" "$@"
           }
-          if [ "$ACTION" = deploy ]; then
-            vps "deploy $(cut -d' ' -f1 seedelf-data-api.sha256)" < seedelf-data-api
-          else
-            vps "$ACTION" < /dev/null
-          fi
+          case "$ACTION" in
+            deploy)
+              vps "deploy $(cut -d' ' -f1 seedelf-data-api.sha256)" < seedelf-data-api
+              ;;
+            messaging-off-preprod | messaging-on-preprod | messaging-off-mainnet | messaging-on-mainnet)
+              vps "$(printf '%s' "$ACTION" | tr '-' ' ')" < /dev/null
+              ;;
+            *)
+              vps "$ACTION" < /dev/null
+              ;;
+          esac
 
       - name: Forget the key
         if: always()

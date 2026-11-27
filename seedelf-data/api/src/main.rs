@@ -6,6 +6,7 @@ use seedelf_data_api::config::Config;
 use seedelf_data_api::decimals::Decimals;
 use seedelf_data_api::edge::{self, Edge, Egress};
 use seedelf_data_api::kupo::Kupo;
+use seedelf_data_api::messaging::view::View;
 use seedelf_data_api::messaging::{self, Relay};
 use seedelf_data_api::public::history;
 use seedelf_data_api::state::{AppState, watch_kupo, watch_tip};
@@ -73,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
             .with_messaging_egress(messaging_egress)
             .with_reserve(config.messaging_reserve)
             .with_caps(config.edge_caps)
-            .with_messaging_off(config.messaging_off),
+            .with_stopped(config.messaging_off.clone()),
     );
     tokio::spawn(edge::keep(edge.clone()));
     let caps = config.edge_caps;
@@ -91,20 +92,30 @@ async fn main() -> anyhow::Result<()> {
         connections = config.connections,
         "the edge's limits"
     );
+    // Each pool's view of the chain, for a certificate's check against it
+    // (messaging::view): mainnet's the private index's own, preprod's Koios's.
     let relay = Arc::new(
         Relay::new(config.state_dir.as_deref())
             .with_reading(config.messaging_reading)
-            .with_reserve_read(config.messaging_reserve_read),
+            .with_reserve_read(config.messaging_reserve_read)
+            .with_view("mainnet", View::index(state.clone()))
+            .with_view("preprod", View::koios(&config.koios_preprod_url)?)
+            .with_stopped(config.messaging_off.clone()),
     );
     tokio::spawn(messaging::keep(relay.clone()));
+    tokio::spawn(messaging::sweep(relay.clone()));
+    tokio::spawn(messaging::recheck(relay.clone()));
     info!(
-        off = config.messaging_off,
+        // The pools stopped, comma-separated: empty when none is.
+        stopped = %config.messaging_off.names(),
         saved = config.state_dir.is_some(),
         read_mib_day = config.messaging_reading.floor >> 20,
         read_pools_day = config.messaging_reading.pools,
         reserve_percent = (config.messaging_reserve.part * 100.0).round() as u64,
         reserve_page_kib = config.messaging_reserve.page >> 10,
         reserve_read_mib_day = config.messaging_reserve_read >> 20,
+        koios_preprod_default =
+            config.koios_preprod_url == seedelf_data_api::config::DEFAULT_KOIOS_PREPROD,
         "the messaging relay"
     );
 

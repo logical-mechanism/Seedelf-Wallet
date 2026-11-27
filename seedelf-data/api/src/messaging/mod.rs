@@ -9,21 +9,49 @@
 //! - `GET /messaging/v1/{pool}/envelopes?after=<cursor>`: a page of what
 //!   came after the cursor, in the binary format `Page::encode` writes.
 //!
-//! A pool per network (`mainnet`, `preprod`): the Seedelf key is the same on
-//! both, so one pool would show a preprod message to the mainnet wallet.
+//! Beside each pool, its list of certificates (chunk 55's 55c; §21.7): the
+//! certificate that binds a Seedelf's messaging register to its datum's,
+//! one per Seedelf a wallet takes messages for, kept until it stops being
+//! good, and read whole by every wallet.
+//!
+//! - `POST /messaging/v1/{pool}/certificates`: `nonce (8) ‖ certificate`.
+//!   Checked (the shape, already held, the price and the window as for a
+//!   512-byte envelope, the stamp, room, then the points and the proof),
+//!   then listed.
+//! - `GET /messaging/v1/{pool}/certificates?after=<cursor>`: a page of the
+//!   list's entries after the cursor, as `list::encode` writes it.
+//! - `POST /messaging/v1/{pool}/withdrawals`: `nonce (8) ‖ withdrawal`, its
+//!   owner's messaging key taking one certificate down (chunk 55's call 9).
+//!
+//! A certificate is listed only for its Seedelf's register now, in the
+//! pool's view of the chain (`view`, §21.7's check 8): mainnet's the private
+//! index's own, preprod's Koios's at post time. What stops being good as the
+//! chain moves is dropped: on mainnet by a sweep, on preprod by a slow
+//! re-check, one Seedelf every 2 s, each at most once a day, within Koios's
+//! day's budget, and dropped only once a second ask confirms it. Neither
+//! runs for a pool the off switch stops.
+//!
+//! A pool per network (`mainnet`, `preprod`), each with its own prices,
+//! cap and traffic. (They were made two when one key, the Seedelf key, read
+//! Messages on both networks; since chunk 55 Messages has a key for each.)
 //! What an address posted is counted in memory, to price its next post
 //! (`price`) and to bound what it has in the pool (`window`), and so is what
 //! it was sent in pages over the last day (`reading`), and of messaging's
-//! reserve, both pools together: never logged or saved. The pools are
-//! saved to the state directory every minute and at shutdown, so a deploy
-//! keeps what's waiting.
+//! reserve, both pools together: never logged or saved. A certificate is
+//! counted in them as a short envelope. The pools and their lists are saved
+//! to the state directory every minute and at shutdown, so a deploy keeps
+//! what's waiting.
 
+pub mod certificate;
 pub mod check;
+pub mod list;
 pub mod pool;
 pub mod price;
 pub mod reading;
+pub mod view;
 pub mod window;
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
@@ -40,11 +68,14 @@ use axum::routing::get;
 use serde_json::{Value, json};
 use tracing::warn;
 
-use crate::edge::{Client, Reserved};
+use crate::edge::{Client, Reserved, Stopped};
+use certificate::Unwithdrawn;
 use check::{NONCE_LEN, SIZES};
+use list::{Key, List, Listed, Recheck, RoundAt, Unlisted};
 use pool::{Full, Held, Kept, LENGTH_LEN, PAGE_BYTES, PAGE_HEADER, PAGE_VERSION, Page, Snapshot};
 use price::{Asked, Counts, Prices};
 use reading::{Reading, Reads};
+use view::{Asker, Unasked, Unreadable, View};
 use window::{Limits, Window};
 
 /// A pool's numbers.
@@ -56,7 +87,26 @@ pub struct Config {
     /// The most one address may have in it, whatever work it does
     /// (`window`).
     pub window: Limits,
+    /// Its list of certificates.
+    pub list: Listing,
 }
+
+/// A pool's list of certificates (§21.7).
+#[derive(Debug, Clone, Copy)]
+pub struct Listing {
+    /// The network byte its certificates carry (§21.2):
+    /// `certificate::NETWORK_PREPROD` or `NETWORK_MAINNET`.
+    pub network: u8,
+    /// The most bytes its entries hold, certificates' and removals', their
+    /// framing aside. Past it a certificate is refused, and none is ever
+    /// pushed out for it.
+    pub cap: usize,
+}
+
+/// A certificate is priced and counted as an envelope of this many bytes
+/// from its address, in the price and in the window (§21.7's check 4)
+/// [choice].
+const CERTIFICATE_AS: usize = SIZES[0];
 
 /// The pools, and what they price by (protocol.md §17). The base costs a
 /// browser about 0.1 s of WebAssembly (2¹⁸ SHA-256 attempts at about 425 ns
@@ -66,6 +116,9 @@ pub struct Config {
 /// The window is the owner's to tune: 1,000 envelopes is about a second of
 /// every reader's trial scan, 4,096 units 2 MiB of every reader's download.
 /// The same on both pools, so a wallet meets the same limits on preprod.
+///
+/// The lists' caps are §21.7's [choice], 55c's to tune: 64 MiB on mainnet,
+/// about 220,000 certificates, and 8 MiB on preprod.
 pub const POOLS: [Config; 2] = [
     Config {
         name: "mainnet",
@@ -81,6 +134,10 @@ pub const POOLS: [Config; 2] = [
             envelopes: 1000,
             units: 4096,
         },
+        list: Listing {
+            network: certificate::NETWORK_MAINNET,
+            cap: 64 << 20,
+        },
     },
     Config {
         name: "preprod",
@@ -95,6 +152,10 @@ pub const POOLS: [Config; 2] = [
         window: Limits {
             envelopes: 1000,
             units: 4096,
+        },
+        list: Listing {
+            network: certificate::NETWORK_PREPROD,
+            cap: 8 << 20,
         },
     },
 ];
@@ -136,20 +197,31 @@ pub fn address_key(ip: IpAddr) -> IpAddr {
 pub struct Pool {
     pub config: &'static Config,
     held: Mutex<Held>,
+    /// Its certificates. Taken after `window` when both are, never before,
+    /// and never with `held`.
+    list: Mutex<List>,
+    /// Envelopes' and certificates' alike.
     counts: Mutex<Counts>,
-    /// Taken before `held` when both are, never after.
+    /// Taken before `held`, or `list`, when both are, never after.
     window: Mutex<Window>,
-    /// What each address was sent of it in the last day. Taken alone, never
-    /// with another lock held.
+    /// What each address was sent of it in the last day, envelopes' pages
+    /// and the list's together. Taken alone, never with another lock held.
     reads: Mutex<Reads>,
     /// What each address was sent of messaging's reserve in the last day:
     /// one table for both pools. Taken alone, never with another lock held.
     reserve: Arc<Mutex<Reads>>,
-    /// Where it's saved, and the mark a clean shutdown leaves beside it.
-    file: Option<(PathBuf, PathBuf)>,
+    /// Where its envelopes are saved.
+    file: Option<Files>,
     /// Its file was there at start but couldn't be read: until a save of
     /// the pool succeeds, no clean mark is written beside it.
     unread: AtomicBool,
+    /// Where its list is saved, a file of its own, and the same for it.
+    list_file: Option<Files>,
+    list_unread: AtomicBool,
+    /// Where it reads the chain for §21.7's check 8: [`View::Nowhere`] until
+    /// `Relay::with_view` gives it one, and every certificate post is then a
+    /// 503.
+    view: View,
 }
 
 /// Why a post whose checks passed wasn't kept: try again in this many
@@ -160,6 +232,15 @@ enum NotKept {
     Window(u64),
     /// The pool's cap.
     Full(u64),
+}
+
+/// Why a certificate whose checks passed wasn't listed.
+#[derive(Debug, PartialEq, Eq)]
+enum NotListed {
+    /// The address's window, filled meanwhile: in this many seconds.
+    Window(u64),
+    /// Its Seedelf's two, or the list's cap, reached meanwhile.
+    Room(Unlisted),
 }
 
 /// Why a page wasn't sent.
@@ -223,6 +304,94 @@ impl Pool {
         now: i64,
         instant: Instant,
     ) -> Result<Vec<u8>, NotRead> {
+        self.counted(address, short, now, instant, |short| {
+            let page = {
+                let mut held = self.held.lock().expect("pool lock");
+                match short {
+                    None => held.page(after, PAGE_BYTES, now),
+                    Some(most) => held.page_within(after, most, now),
+                }
+            };
+            let prices = {
+                let counts = self.counts.lock().expect("counts lock");
+                let window = self.window.lock().expect("window lock");
+                prices(&counts, &window, address, instant)
+            };
+            encode(&page, prices)
+        })
+    }
+
+    /// Lists a certificate whose checks have passed, as [`Pool::keep`]
+    /// keeps an envelope: its address's window is checked again and
+    /// counted with the insert, as a short envelope's, and so are its
+    /// Seedelf's two and the list's cap, so posts at once can't pass them
+    /// together; one listed meanwhile is "already".
+    fn list(
+        &self,
+        digest: [u8; 32],
+        key: Key,
+        certificate: &[u8],
+        address: IpAddr,
+        instant: Instant,
+    ) -> Result<Listed, NotListed> {
+        let mut window = self.window.lock().expect("window lock");
+        let mut list = self.list.lock().expect("list lock");
+        if list.already(&key) {
+            return Ok(Listed::Already);
+        }
+        if let Some(secs) = window.wait(address, CERTIFICATE_AS, instant) {
+            return Err(NotListed::Window(secs));
+        }
+        let listed = list
+            .insert(digest, key, certificate, self.config.list.cap)
+            .map_err(NotListed::Room)?;
+        if listed == Listed::New {
+            window.record(address, CERTIFICATE_AS, instant);
+        }
+        Ok(listed)
+    }
+
+    /// The list's page after `after` for `address`, as [`Pool::read`]
+    /// makes the pool's: counted in the same day's reading, and in the
+    /// reserve, cut to what it sends (§21.7, "as §17.5's pages are")
+    /// [choice]. Its price is a certificate's: a short envelope's.
+    fn read_list(
+        &self,
+        after: Option<u64>,
+        address: IpAddr,
+        short: Option<usize>,
+        now: i64,
+        instant: Instant,
+    ) -> Result<Vec<u8>, NotRead> {
+        self.counted(address, short, now, instant, |short| {
+            let page = {
+                let list = self.list.lock().expect("list lock");
+                match short {
+                    None => list.page(after, list::PAGE_BYTES),
+                    Some(most) => list.page_within(after, most),
+                }
+            };
+            let price = {
+                let counts = self.counts.lock().expect("counts lock");
+                let window = self.window.lock().expect("window lock");
+                prices(&counts, &window, address, instant)[0]
+            };
+            list::encode(&page, price)
+        })
+    }
+
+    /// A page that `make` makes, `short` the reserve's longest if
+    /// messaging is down to it, counted against `address`'s reading for the
+    /// day and, in the reserve, its share of the reserve, as
+    /// [`Pool::read`] says.
+    fn counted(
+        &self,
+        address: IpAddr,
+        short: Option<usize>,
+        now: i64,
+        instant: Instant,
+        make: impl FnOnce(Option<usize>) -> Vec<u8>,
+    ) -> Result<Vec<u8>, NotRead> {
         // A first look, before the page is made.
         if let Some(secs) = self
             .reads
@@ -241,19 +410,7 @@ impl Pool {
         {
             return Err(NotRead::Day(reserve_wait(secs, now)));
         }
-        let page = {
-            let mut held = self.held.lock().expect("pool lock");
-            match short {
-                None => held.page(after, PAGE_BYTES, now),
-                Some(most) => held.page_within(after, most, now),
-            }
-        };
-        let prices = {
-            let counts = self.counts.lock().expect("counts lock");
-            let window = self.window.lock().expect("window lock");
-            prices(&counts, &window, address, instant)
-        };
-        let bytes = encode(&page, prices);
+        let bytes = make(short);
         self.reads
             .lock()
             .expect("reads lock")
@@ -280,6 +437,10 @@ pub struct Relay {
     /// One save at a time: the minute's, on a blocking thread, can meet the
     /// shutdown's, and two would write the same partial file.
     saving: Mutex<()>,
+    /// The pools the off switch stops (`DATA_MESSAGING_OFF`), as the edge
+    /// holds them: each route checks its pool's name too, decoded, so no
+    /// spelling of a path walks past the edge's check.
+    stopped: Stopped,
 }
 
 impl Relay {
@@ -295,29 +456,38 @@ impl Relay {
         let pools = pools
             .iter()
             .map(|config| {
-                let file = dir.map(|dir| {
-                    (
-                        dir.join(format!("messaging-{}.pool", config.name)),
-                        dir.join(format!("messaging-{}.clean", config.name)),
-                    )
-                });
+                let file = dir.map(|dir| Files::pool(dir, config.name));
                 let (held, unread) = load(config.name, file.as_ref());
+                let list_file = dir.map(|dir| Files::list(dir, config.name));
+                let (list, list_unread) = load_list(config, list_file.as_ref());
                 Pool {
                     config,
                     held: Mutex::new(held),
+                    list: Mutex::new(list),
                     counts: Mutex::new(Counts::new(config.prices, now)),
                     window: Mutex::new(Window::new(config.window, now)),
                     reads: Mutex::new(Reads::new(Reading::DEFAULT.budget(config.cap), now)),
                     reserve: reserve.clone(),
                     file,
                     unread: AtomicBool::new(unread),
+                    list_file,
+                    list_unread: AtomicBool::new(list_unread),
+                    view: View::Nowhere,
                 }
             })
             .collect();
         Relay {
             pools,
             saving: Mutex::new(()),
+            stopped: Stopped::none(),
         }
+    }
+
+    /// With the off switch's pools (main.rs gives the edge the same): their
+    /// routes answer 410 here too, by the pool's name as the route decodes it.
+    pub fn with_stopped(mut self, stopped: Stopped) -> Self {
+        self.stopped = stopped;
+        self
     }
 
     /// With another day's reading for each address than
@@ -343,16 +513,179 @@ impl Relay {
         self
     }
 
+    /// With `view` as the pool `pool`'s view of the chain (§21.7's check
+    /// 8): mainnet's the index's, preprod's Koios's (main.rs).
+    pub fn with_view(mut self, pool: &str, view: View) -> Self {
+        if let Some(at) = self.pools.iter_mut().find(|p| p.config.name == pool) {
+            at.view = view;
+        }
+        self
+    }
+
     pub fn pool(&self, name: &str) -> Option<&Pool> {
         self.pools.iter().find(|pool| pool.config.name == name)
     }
 
-    /// Drops what's expired, the counts that have decayed away, and the
+    /// The mainnet sweep (§21.7, "A certificate stays while it's good"):
+    /// for each pool whose view knows every Seedelf's register at once, the
+    /// index's, drops each listed certificate whose Seedelf isn't at its
+    /// register now, a removal entry taking its place, and forgets each
+    /// withdrawn digest whose Seedelf isn't either, found elsewhere on three
+    /// views in a row, since the chain check refuses those bytes now. A
+    /// view that can't be read drops nothing, and neither does one that
+    /// holds no Seedelf at all, which on mainnet is a broken read [choice],
+    /// nor a pool the off switch stops. How many certificates went.
+    pub async fn sweep_once(&self) -> usize {
+        let mut dropped = 0;
+        for pool in &self.pools {
+            if self.stopped.pool(pool.config.name) {
+                continue;
+            }
+            let Some(Ok(registers)) = pool.view.every().await else {
+                continue;
+            };
+            if registers.is_empty() {
+                continue;
+            }
+            let mut list = pool.list.lock().expect("list lock");
+            dropped += list.sweep(
+                pool.config.name,
+                unix_day(),
+                registers.view(),
+                |name, register| registers.holds(name, register),
+            );
+        }
+        dropped
+    }
+
+    /// One step of preprod's slow re-check (§21.7) at `now`, Unix seconds,
+    /// for each pool whose view is Koios's and that the off switch doesn't
+    /// stop: one Seedelf the list knows, listed or withdrawn, asked of
+    /// Koios through the view's own client, places, minute's answers and
+    /// day's budget, of which it takes only what posts leave
+    /// (`Asker::Recheck`). Whether it asked: false once nothing is due, or
+    /// while every request to Koios waits.
+    ///
+    /// - **A round** walks every Seedelf the list knows by key, smallest
+    ///   first, its place saved with the list (`list::Recheck`), so a
+    ///   restart goes on from it; the next begins once it's over and a day
+    ///   after it began, so each is asked at most once a day, and a round
+    ///   the budget can't finish in a day goes on the next.
+    /// - **Found there**, it's judged present (`List::judge`). **Found
+    ///   elsewhere**, it's asked again at least [`RECHECK_CONFIRM`] later,
+    ///   before the round's next, and only an answer then that finds it
+    ///   elsewhere too drops its certificates, and counts toward forgetting
+    ///   its withdrawn digests: one answer from a Koios that's behind drops
+    ///   nothing.
+    /// - **No answer**, its place holds, and it's asked again at the next
+    ///   step; a second failure in a row passes it, for the next round. A
+    ///   day's budget spent, or Koios's requests stopped, asks nothing.
+    pub async fn recheck_step(&self, rounds: &mut HashMap<&'static str, Round>, now: i64) -> bool {
+        let today = now.div_euclid(86_400) as u32;
+        for pool in &self.pools {
+            let Some(koios) = pool.view.as_koios() else {
+                continue;
+            };
+            let name = pool.config.name;
+            if self.stopped.pool(name) {
+                continue;
+            }
+            let round = rounds.entry(name).or_default();
+            // A second ask that's due, for a Seedelf found elsewhere.
+            let due = round
+                .elsewhere
+                .iter()
+                .find(|(_, (at, _))| now - *at >= RECHECK_CONFIRM)
+                .map(|(key, _)| *key);
+            if let Some(key) = due {
+                let Some((seedelf, register)) = pool.list.lock().expect("list lock").seedelf(&key)
+                else {
+                    round.elsewhere.remove(&key);
+                    continue;
+                };
+                match koios.answer(&seedelf, Asker::Recheck, now).await {
+                    Ok((at, view)) => {
+                        round.elsewhere.remove(&key);
+                        let present = at == Some(register);
+                        let mut list = pool.list.lock().expect("list lock");
+                        list.judge(name, &key, present, today, view);
+                    }
+                    Err(Unasked::Waiting(_)) => continue,
+                    // Asked again at the next step; failed twice, left for
+                    // the next round, judged neither way.
+                    Err(Unasked::Failed) => {
+                        if let Some((_, failed)) = round.elsewhere.get_mut(&key)
+                            && std::mem::replace(failed, true)
+                        {
+                            round.elsewhere.remove(&key);
+                        }
+                    }
+                }
+                return true;
+            }
+            let (key, seedelf, register) = {
+                let mut list = pool.list.lock().expect("list lock");
+                let mut state = list.recheck();
+                if state.at == RoundAt::Done {
+                    if state.began != 0 && now - state.began < RECHECK_ROUND {
+                        continue;
+                    }
+                    state = Recheck {
+                        began: now,
+                        at: RoundAt::Start,
+                    };
+                }
+                let after = match state.at {
+                    RoundAt::After(key) => Some(key),
+                    RoundAt::Start | RoundAt::Done => None,
+                };
+                let Some(key) = list.seedelf_after(after.as_ref()) else {
+                    list.set_recheck(Recheck {
+                        at: RoundAt::Done,
+                        ..state
+                    });
+                    continue;
+                };
+                list.set_recheck(state);
+                let (seedelf, register) = list.seedelf(&key).expect("a Seedelf the list knows");
+                (key, seedelf, register)
+            };
+            let passed = match koios.answer(&seedelf, Asker::Recheck, now).await {
+                Ok((at, view)) => {
+                    if at == Some(register) {
+                        let mut list = pool.list.lock().expect("list lock");
+                        list.judge(name, &key, true, today, view);
+                    } else {
+                        round.elsewhere.entry(key).or_insert((now, false));
+                    }
+                    true
+                }
+                Err(Unasked::Waiting(_)) => continue,
+                Err(Unasked::Failed) => round.failed.replace(key) == Some(key),
+            };
+            if passed {
+                round.failed = None;
+                let mut list = pool.list.lock().expect("list lock");
+                let began = list.recheck().began;
+                list.set_recheck(Recheck {
+                    began,
+                    at: RoundAt::After(key),
+                });
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Drops what's expired, the lists' removals past their week, Koios's
+    /// answers past their minute, the counts that have decayed away, and the
     /// window's buckets and the readers' hours that have aged out.
     pub fn tidy(&self) {
         let (now, instant) = (unix_now(), Instant::now());
         for pool in &self.pools {
             pool.held.lock().expect("pool lock").expire(now);
+            pool.list.lock().expect("list lock").compact(unix_day());
+            pool.view.tidy();
             pool.counts.lock().expect("counts lock").forget(instant);
             pool.window.lock().expect("window lock").forget(instant);
             pool.reads.lock().expect("reads lock").forget(instant);
@@ -362,61 +695,160 @@ impl Relay {
         }
     }
 
-    /// Writes every pool that changed to its file. `clean` at shutdown,
-    /// once nothing more comes in: the mark beside it says the file holds
-    /// everything. A pool whose file couldn't be read at start, and hasn't
-    /// been saved since, gets no mark: the file there isn't what it held, so
-    /// the next start tells every earlier cursor of a gap (the 1.10.0
-    /// gate's FI-7).
+    /// Writes every pool, and every list, that changed to its file. `clean`
+    /// at shutdown, once nothing more comes in: the mark beside it says the
+    /// file holds everything. A pool or list whose file couldn't be read at
+    /// start, and hasn't been saved since, gets no mark: the file there
+    /// isn't what it held, so the next start tells every earlier cursor of
+    /// a gap (the 1.10.0 gate's FI-7).
     pub fn save(&self, clean: bool) {
         let _one = self.saving.lock().expect("saving lock");
         for pool in &self.pools {
-            let Some((file, mark)) = &pool.file else {
-                continue;
-            };
-            let snapshot = {
-                let mut held = pool.held.lock().expect("pool lock");
-                held.changed.then(|| held.snapshot())
-            };
-            if let Some(snapshot) = snapshot {
-                if let Err(error) = write(file, &pool_partial(file), &snapshot.encode()) {
-                    warn!(pool = pool.config.name, kind = %error.kind(), "a messaging pool couldn't be saved");
+            let name = pool.config.name;
+            if let Some(files) = &pool.file {
+                let snapshot = {
+                    let mut held = pool.held.lock().expect("pool lock");
+                    held.changed.then(|| held.snapshot())
+                };
+                let bytes = snapshot.map(|snapshot| snapshot.encode());
+                if !save_to(files, &pool.unread, bytes, clean, name, "envelopes") {
                     pool.held.lock().expect("pool lock").changed = true;
-                    continue;
                 }
-                // The file is the pool's now, whole.
-                pool.unread.store(false, Ordering::Relaxed);
             }
-            if !clean {
-                continue;
-            }
-            if pool.unread.load(Ordering::Relaxed) {
-                warn!(
-                    pool = pool.config.name,
-                    "a messaging pool's file couldn't be read at start, so it isn't marked clean"
-                );
-                continue;
-            }
-            if let Err(error) = write(mark, &mark_partial(mark), b"") {
-                warn!(pool = pool.config.name, kind = %error.kind(), "a messaging pool's clean mark couldn't be written");
-            }
+            save_list(pool, clean);
         }
     }
 
-    /// Each pool's size, for `/health`: anyone can download the pools, so
-    /// this says nothing new.
+    /// Writes the pool `name`'s list now, if it changed, apart from the
+    /// minute's save: a taken withdrawal's, before its answer, so a crash
+    /// after it can't bring the certificate back. Whether the list's file
+    /// holds it now: a relay that saves nothing, a test's, always does.
+    pub fn save_list(&self, name: &str) -> bool {
+        let _one = self.saving.lock().expect("saving lock");
+        self.pool(name).is_some_and(|pool| save_list(pool, false))
+    }
+
+    /// Each pool's size and its list's, for `/health`: anyone can download
+    /// them, so this says nothing new.
     pub fn health(&self) -> Value {
         self.pools
             .iter()
             .map(|pool| {
-                let held = pool.held.lock().expect("pool lock");
+                let (envelopes, bytes) = {
+                    let held = pool.held.lock().expect("pool lock");
+                    (held.len(), held.bytes())
+                };
+                let (certificates, withdrawn) = {
+                    let list = pool.list.lock().expect("list lock");
+                    (list.certificates(), list.withdrawals())
+                };
                 (
                     pool.config.name.to_string(),
-                    json!({ "envelopes": held.len(), "bytes": held.bytes() }),
+                    json!({
+                        "envelopes": envelopes,
+                        "bytes": bytes,
+                        "certificates": certificates,
+                        "withdrawn": withdrawn,
+                        "chain": pool.view.name(),
+                    }),
                 )
             })
             .collect::<serde_json::Map<_, _>>()
             .into()
+    }
+}
+
+/// Writes `pool`'s list to its file if it changed, as [`Relay::save`] does.
+/// A list whose file couldn't be read at start and couldn't be moved aside
+/// is never written: the file there is kept as it is (`load_list`).
+/// Whether what it holds is saved: always, with no file to save to; never
+/// for that list, or a write that failed.
+fn save_list(pool: &Pool, clean: bool) -> bool {
+    let Some(files) = &pool.list_file else {
+        return true;
+    };
+    if pool.list_unread.load(Ordering::Relaxed) {
+        return false;
+    }
+    let snapshot = {
+        let mut list = pool.list.lock().expect("list lock");
+        list.changed.then(|| list.snapshot())
+    };
+    let bytes = snapshot.map(|snapshot| snapshot.encode());
+    let saved = save_to(
+        files,
+        &pool.list_unread,
+        bytes,
+        clean,
+        pool.config.name,
+        "certificates",
+    );
+    if !saved {
+        pool.list.lock().expect("list lock").changed = true;
+    }
+    saved
+}
+
+/// Where a pool's envelopes, or its list, are saved: the file, the partial
+/// it's written to before it's renamed into place, the clean mark a
+/// shutdown leaves beside it, and the mark's partial.
+struct Files {
+    file: PathBuf,
+    partial: PathBuf,
+    mark: PathBuf,
+    mark_partial: PathBuf,
+}
+
+impl Files {
+    /// The pool's: `messaging-<pool>.pool`, `.partial`, `.clean` and
+    /// `.clean.partial`.
+    fn pool(dir: &Path, name: &str) -> Self {
+        let file = dir.join(format!("messaging-{name}.pool"));
+        let mark = dir.join(format!("messaging-{name}.clean"));
+        Files {
+            partial: pool_partial(&file),
+            mark_partial: mark_partial(&mark),
+            file,
+            mark,
+        }
+    }
+
+    /// The list's: `messaging-<pool>.list`, `.list.partial`, `.list.clean`
+    /// and `.list.clean.partial`, none of them a name of the pool's.
+    fn list(dir: &Path, name: &str) -> Self {
+        let file = format!("messaging-{name}.list");
+        Files {
+            file: dir.join(&file),
+            partial: dir.join(format!("{file}.partial")),
+            mark: dir.join(format!("{file}.clean")),
+            mark_partial: dir.join(format!("{file}.clean.partial")),
+        }
+    }
+}
+
+/// What a start finds of a file.
+enum Found {
+    /// Its bytes, and whether a clean shutdown marked it.
+    Saved(Vec<u8>, bool),
+    /// None yet.
+    Nothing,
+    /// One that's there but can't be read.
+    Unreadable(std::io::ErrorKind),
+}
+
+/// Reads a file at start. The clean mark is removed as it's read, so a
+/// crash later doesn't find it, and so is what a save that failed may have
+/// left.
+fn found(files: &Files) -> Found {
+    // Up to a pool's size, which a build before the 1.10.0 gate's FI-9 left
+    // when a save failed.
+    let _ = std::fs::remove_file(&files.partial);
+    let _ = std::fs::remove_file(&files.mark_partial);
+    let clean = std::fs::remove_file(&files.mark).is_ok();
+    match std::fs::read(&files.file) {
+        Ok(bytes) => Found::Saved(bytes, clean),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Found::Nothing,
+        Err(error) => Found::Unreadable(error.kind()),
     }
 }
 
@@ -425,20 +857,14 @@ impl Relay {
 /// have missed something. No file is an empty pool. A file that's there
 /// but can't be read, or isn't a pool, is an empty pool too, and is left as
 /// it is (`true`, unread: no clean mark goes beside it until a save
-/// replaces it). The clean mark is removed as it's read, so a crash later
-/// doesn't find it, and so is what a save that failed may have left.
-fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> (Held, bool) {
+/// replaces it).
+fn load(name: &str, files: Option<&Files>) -> (Held, bool) {
     let (now, micros) = (unix_now(), unix_micros());
-    let Some((file, mark)) = file else {
+    let Some(files) = files else {
         return (Held::new(micros), false);
     };
-    // Up to a pool's size, which a build before the 1.10.0 gate's FI-9 left
-    // when a save failed.
-    let _ = std::fs::remove_file(pool_partial(file));
-    let _ = std::fs::remove_file(mark_partial(mark));
-    let clean = std::fs::remove_file(mark).is_ok();
-    let held = match std::fs::read(file) {
-        Ok(bytes) => match Snapshot::decode(&bytes) {
+    let held = match found(files) {
+        Found::Saved(bytes, clean) => match Snapshot::decode(&bytes) {
             Some(snapshot) => Held::restore(snapshot, clean, name, now, micros),
             None => {
                 warn!(
@@ -452,17 +878,105 @@ fn load(name: &str, file: Option<&(PathBuf, PathBuf)>) -> (Held, bool) {
         // clean restart reads back where the numbering stood and tells no
         // reader of a gap. Without it, a pool that never kept anything
         // started as new at every restart (the gate review's relay-server#7).
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+        Found::Nothing => {
             let mut held = Held::new(micros);
             held.changed = true;
             held
         }
-        Err(error) => {
-            warn!(pool = name, kind = %error.kind(), "a messaging pool's file couldn't be read, so it starts empty");
+        Found::Unreadable(kind) => {
+            warn!(pool = name, %kind, "a messaging pool's file couldn't be read, so it starts empty");
             return (Held::new(micros), true);
         }
     };
     (held, false)
+}
+
+/// A pool's list from its file, as [`load`] reads the pool's: what it
+/// held, and every earlier cursor told of a gap unless a clean shutdown
+/// marked it; an empty list where there's no file. A file that can't be
+/// read, or isn't a list this pool's could be, is moved aside, as
+/// `messaging-<pool>.list.unreadable.<Unix seconds>`, never overwritten,
+/// and the list starts empty, a new one every earlier cursor is a gap in.
+/// If it can't be moved, it's left as it is and the list is never saved
+/// over it (`true`).
+fn load_list(config: &Config, files: Option<&Files>) -> (List, bool) {
+    let micros = unix_micros();
+    let Some(files) = files else {
+        return (List::new(micros), false);
+    };
+    let (name, network) = (config.name, config.list.network);
+    match found(files) {
+        Found::Saved(bytes, clean) => {
+            if let Some(list) = list::Snapshot::decode(&bytes)
+                .and_then(|snapshot| List::restore(snapshot, clean, name, network, micros))
+            {
+                return (list, false);
+            }
+            warn!(pool = name, "a messaging pool's list file isn't one");
+        }
+        // As for the pool: written at the next save, so a clean restart
+        // reads back where the numbering stood.
+        Found::Nothing => {
+            let mut list = List::new(micros);
+            list.changed = true;
+            return (list, false);
+        }
+        Found::Unreadable(kind) => {
+            warn!(pool = name, %kind, "a messaging pool's list file couldn't be read");
+        }
+    }
+    let aside = files
+        .file
+        .with_file_name(format!("messaging-{name}.list.unreadable.{}", unix_now()));
+    match std::fs::rename(&files.file, &aside) {
+        Ok(()) => {
+            warn!(pool = name, aside = %aside.display(), "so it's moved aside, and the list starts empty");
+            let mut list = List::new(micros);
+            list.changed = true;
+            (list, false)
+        }
+        Err(error) => {
+            warn!(pool = name, kind = %error.kind(), "and it can't be moved aside, so the list starts empty and is never saved over it");
+            (List::new(micros), true)
+        }
+    }
+}
+
+/// Writes `bytes`, when there are any (what changed since the last save),
+/// then, at a clean shutdown, the mark beside them, for a pool's envelopes
+/// or its list (`part`). A file that couldn't be read at start, and hasn't
+/// been written since (`unread`), gets no mark. `false` when the write
+/// failed, so what it holds is still to save.
+fn save_to(
+    files: &Files,
+    unread: &AtomicBool,
+    bytes: Option<Vec<u8>>,
+    clean: bool,
+    pool: &str,
+    part: &str,
+) -> bool {
+    if let Some(bytes) = bytes {
+        if let Err(error) = write(&files.file, &files.partial, &bytes) {
+            warn!(pool, part, kind = %error.kind(), "a messaging pool's file couldn't be saved");
+            return false;
+        }
+        // The file is the pool's, or the list's, now, whole.
+        unread.store(false, Ordering::Relaxed);
+    }
+    if !clean {
+        return true;
+    }
+    if unread.load(Ordering::Relaxed) {
+        warn!(
+            pool,
+            part, "a messaging pool's file couldn't be read at start, so it isn't marked clean"
+        );
+        return true;
+    }
+    if let Err(error) = write(&files.mark, &files.mark_partial, b"") {
+        warn!(pool, part, kind = %error.kind(), "a messaging pool's clean mark couldn't be written");
+    }
+    true
 }
 
 /// Where a pool's file is written before it's renamed into place:
@@ -490,6 +1004,57 @@ fn write(path: &Path, partial: &Path, bytes: &[u8]) -> std::io::Result<()> {
     written
 }
 
+/// How often the mainnet sweep runs [choice]: the names answer it reads is
+/// kept a tip, so most sweeps read nothing new.
+pub const SWEEP_EVERY: Duration = Duration::from_secs(120);
+
+/// Every [`SWEEP_EVERY`]: drop what's no longer good on mainnet's view of
+/// the chain (`Relay::sweep_once`).
+pub async fn sweep(relay: Arc<Relay>) {
+    let mut every = tokio::time::interval(SWEEP_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        every.tick().await;
+        relay.sweep_once().await;
+    }
+}
+
+/// One step of preprod's re-check this often [choice]: at most one request
+/// to Koios every 2 s.
+pub const RECHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// A round of the re-check starts at most this often, in seconds: each
+/// Seedelf is asked about at most once a day.
+pub const RECHECK_ROUND: i64 = 24 * 3600;
+
+/// A Seedelf the re-check found elsewhere is asked again at least this
+/// long after, in seconds [choice], and only that answer drops anything:
+/// Koios a block or a few behind has caught up by then.
+pub const RECHECK_CONFIRM: i64 = 600;
+
+/// What a pool's re-check holds in memory alone (its round's place is the
+/// list's, `list::Recheck`): each Seedelf found elsewhere once, by key,
+/// when, and whether its second ask has failed once, waiting for that ask;
+/// and the Seedelf whose ask failed once, asked again before its place
+/// passes it.
+#[derive(Default)]
+pub struct Round {
+    elsewhere: HashMap<[u8; 32], (i64, bool)>,
+    failed: Option<[u8; 32]>,
+}
+
+/// Every [`RECHECK_EVERY`]: a step of preprod's re-check
+/// (`Relay::recheck_step`).
+pub async fn recheck(relay: Arc<Relay>) {
+    let mut every = tokio::time::interval(RECHECK_EVERY);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut rounds = HashMap::new();
+    loop {
+        every.tick().await;
+        relay.recheck_step(&mut rounds, unix_now()).await;
+    }
+}
+
 /// Every minute: tidy, and save what changed.
 pub async fn keep(relay: Arc<Relay>) {
     let mut every = tokio::time::interval(Duration::from_secs(60));
@@ -508,11 +1073,36 @@ pub async fn keep(relay: Arc<Relay>) {
 /// The most a post's body is: a nonce and the largest envelope.
 pub const MAX_POST: usize = NONCE_LEN + SIZES[3];
 
-/// The relay's routes. A body is at most a nonce and the largest envelope.
+/// The most a certificate post's body is: a nonce and the longest
+/// certificate, 312 bytes.
+pub const MAX_CERTIFICATE_POST: usize = NONCE_LEN + certificate::MAX_LEN;
+
+/// A withdrawal post's body: a nonce and a withdrawal, exactly 106 bytes.
+pub const MAX_WITHDRAWAL_POST: usize = NONCE_LEN + certificate::WITHDRAWAL_LEN;
+
+/// The relay's routes. A body is at most a nonce and the largest envelope,
+/// or, for the list, a nonce and the longest certificate, or a nonce and a
+/// withdrawal.
 pub fn routes() -> Router<Arc<Relay>> {
     Router::new()
         .route("/messaging/v1/{pool}/envelopes", get(page).post(post))
         .layer(DefaultBodyLimit::max(MAX_POST))
+        .merge(
+            Router::new()
+                .route(
+                    "/messaging/v1/{pool}/certificates",
+                    get(list_page).post(post_certificate),
+                )
+                .layer(DefaultBodyLimit::max(MAX_CERTIFICATE_POST)),
+        )
+        .merge(
+            Router::new()
+                .route(
+                    "/messaging/v1/{pool}/withdrawals",
+                    axum::routing::post(post_withdrawal),
+                )
+                .layer(DefaultBodyLimit::max(MAX_WITHDRAWAL_POST)),
+        )
 }
 
 /// What the edge's bucket charges a messaging request, before its answer's
@@ -530,6 +1120,9 @@ async fn post(
     let Some(pool) = relay.pool(&name) else {
         return no_such_pool();
     };
+    if relay.stopped.pool(&name) {
+        return stopped();
+    }
     if body.len() < NONCE_LEN {
         return bad("a post is a nonce, then an envelope");
     }
@@ -553,46 +1146,12 @@ async fn post(
     }
     let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
     let size = envelope.len();
-    let (asked, own) = {
-        let mut counts = pool.counts.lock().expect("counts lock");
-        if !counts.room_for(address, instant) {
-            return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60);
-        }
-        let asked = counts.ask(address, size, instant);
-        let own =
-            matches!(asked, Asked::Refused(_)) && counts.refused_by_own(address, size, instant);
-        (asked, own)
+    let bits = match price(pool, address, size, instant) {
+        Ok(bits) => bits,
+        Err(unpriced) => return unpriced.answer(),
     };
-    // The window with the price, before the stamp: a post with any nonce,
-    // 0 say, learns how long to wait without solving.
-    let wait = {
-        let mut window = pool.window.lock().expect("window lock");
-        if !window.room_for(address, instant) {
-            return refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60);
-        }
-        window.wait(address, size, instant)
-    };
-    match (asked, wait) {
-        (Asked::Refused(secs), wait) => {
-            // Which count took the price past its ceiling: the address's
-            // own, or everyone's floor alone.
-            let error = if own {
-                "too many posts from this address for now"
-            } else {
-                "too many posts to this pool for now"
-            };
-            return refuse(
-                StatusCode::TOO_MANY_REQUESTS,
-                error,
-                secs.max(wait.unwrap_or(0)),
-            );
-        }
-        (_, Some(secs)) => return refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
-        (Asked::Bits(bits), None) if check::stamp_bits(&digest, nonce) < bits => {
-            let body = json!({ "error": "more proof of work", "price": bits });
-            return (StatusCode::PAYMENT_REQUIRED, axum::Json(body)).into_response();
-        }
-        (Asked::Bits(_), None) => {}
+    if check::stamp_bits(&digest, nonce) < bits {
+        return more_work(bits);
     }
     // Room before the points: a post to a full pool waits, however often
     // it comes, without its points checked again. The keep looks again,
@@ -640,6 +1199,9 @@ async fn page(
     let Some(pool) = relay.pool(&name) else {
         return no_such_pool();
     };
+    if relay.stopped.pool(&name) {
+        return stopped();
+    }
     let after = match query.as_deref() {
         None => None,
         Some(query) => match cursor(query) {
@@ -655,12 +1217,444 @@ async fn page(
             return refuse(StatusCode::TOO_MANY_REQUESTS, DAY_READ, secs);
         }
     };
+    octets(page)
+}
+
+/// Why a post isn't priced (§17.2's row 4).
+#[derive(Debug, PartialEq, Eq)]
+enum Unpriced {
+    /// Its address is new to a table that's full: 503 `busy`.
+    Busy,
+    /// Past the price's ceiling, by the address's `own` count or everyone's
+    /// floor alone, or past its window too: again in `secs`.
+    Ceiling { own: bool, secs: u64 },
+    /// Past the address's window: again in this many seconds.
+    Window(u64),
+}
+
+impl Unpriced {
+    fn answer(self) -> Response {
+        match self {
+            Unpriced::Busy => refuse(StatusCode::SERVICE_UNAVAILABLE, "busy", 60),
+            Unpriced::Ceiling { own, secs } => {
+                // Which count took the price past its ceiling: the
+                // address's own, or everyone's floor alone.
+                let error = if own {
+                    "too many posts from this address for now"
+                } else {
+                    "too many posts to this pool for now"
+                };
+                refuse(StatusCode::TOO_MANY_REQUESTS, error, secs)
+            }
+            Unpriced::Window(secs) => refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
+        }
+    }
+}
+
+/// §17.2's row 4, for an envelope of `size` bytes or a certificate,
+/// counted as a short envelope: the bits a post from `address` is asked,
+/// its price within its ceiling and the post within the address's window;
+/// or why not, a 429 with how long to wait, or a 503 `busy` for an address
+/// new to a full table. The window comes with the price, before the stamp:
+/// a post with any nonce, 0 say, learns how long to wait without solving.
+/// When both refuse, the 429 waits for the later.
+fn price(pool: &Pool, address: IpAddr, size: usize, instant: Instant) -> Result<u32, Unpriced> {
+    let (asked, own) = {
+        let mut counts = pool.counts.lock().expect("counts lock");
+        if !counts.room_for(address, instant) {
+            return Err(Unpriced::Busy);
+        }
+        let asked = counts.ask(address, size, instant);
+        let own =
+            matches!(asked, Asked::Refused(_)) && counts.refused_by_own(address, size, instant);
+        (asked, own)
+    };
+    let wait = {
+        let mut window = pool.window.lock().expect("window lock");
+        if !window.room_for(address, instant) {
+            return Err(Unpriced::Busy);
+        }
+        window.wait(address, size, instant)
+    };
+    match (asked, wait) {
+        (Asked::Refused(secs), wait) => Err(Unpriced::Ceiling {
+            own,
+            secs: secs.max(wait.unwrap_or(0)),
+        }),
+        (_, Some(secs)) => Err(Unpriced::Window(secs)),
+        (Asked::Bits(bits), None) => Ok(bits),
+    }
+}
+
+/// A 402: the stamp shows less than the price.
+fn more_work(bits: u32) -> Response {
+    let body = json!({ "error": "more proof of work", "price": bits });
+    (StatusCode::PAYMENT_REQUIRED, axum::Json(body)).into_response()
+}
+
+/// A certificate post (§21.7): checked in its table's order, cheapest first,
+/// the first that fails answering.
+///
+/// 1. A nonce: 400.
+/// 2. The shape (§21.4's check 1): 400.
+/// 3. Already held, a certificate for the same Seedelf, register and m_S:
+///    200 `already`, whatever the stamp, so a wallet that posts its own
+///    again after a restart, or with a fresh aux, isn't asked to pay.
+///    - 3′. Not withdrawn: its listing digest isn't one a withdrawal took
+///      down, else 409 `withdrawn`, so whoever kept a certificate's bytes
+///      can't list it again after its owner withdrew it ("A withdrawal
+///      lasts").
+/// 4. The price and the window, a short envelope's from the same address:
+///    429, as an envelope's.
+/// 5. The stamp, over the listing digest: 402 with the price.
+/// 6. Room: 409 when its Seedelf has two already, 503 when the list is full.
+///    A certificate held is never pushed out for another.
+/// 7. The points and the proof (§21.4's checks 2 to 5), the costly check,
+///    so a sender pays its work, and a full list refuses, before the relay
+///    spends on them: 400, counted against the address's own price, as an
+///    envelope's bad point is.
+/// 8. The chain (chunk 55's call 6): (g_S, u_S) is the datum register of
+///    the contract UTxO that holds N, in the pool's view (`view`): mainnet's
+///    the data layer's own, preprod's Koios's at post time. Last, after the
+///    proof, as it reads another part or another server. Else 409 `not this
+///    Seedelf's register now`, counted against the address's own price as
+///    row 7's is [choice]; and a 503 `can't check the chain now` when the
+///    view can't be read, its `Retry-After` 60, or on preprod however long
+///    Koios's day's budget or its back-off still has to run. A certificate
+///    is never listed unchecked.
+///
+/// From row 7 on, a post is counted against its address whatever comes of
+/// it, a request dropped while the chain is read too (`Counted`).
+async fn post_certificate(
+    State(relay): State<Arc<Relay>>,
+    UrlPath(name): UrlPath<String>,
+    client: Option<Extension<Client>>,
+    body: Bytes,
+) -> Response {
+    let Some(pool) = relay.pool(&name) else {
+        return no_such_pool();
+    };
+    if relay.stopped.pool(&name) {
+        return stopped();
+    }
+    if body.len() < NONCE_LEN {
+        return bad("a post is a nonce, then a certificate");
+    }
+    let nonce = u64::from_be_bytes(body[..NONCE_LEN].try_into().expect("8 bytes"));
+    // Borrowed from the request's body: the list keeps a copy of its own.
+    let bytes = &body[NONCE_LEN..];
+    let shape =
+        match certificate::check_shape(bytes, pool.config.list.network, &certificate::POLICY) {
+            Ok(shape) => shape,
+            Err(refused) => return bad(refused.reason()),
+        };
+    let key = Key::of(&shape);
+    let digest = certificate::listing_digest(pool.config.name, bytes);
+    {
+        let list = pool.list.lock().expect("list lock");
+        // The bytes held for this listing, which may be another posting's:
+        // a withdrawal names them by their digest.
+        if let Some(held) = list.held(&key) {
+            return listed(
+                "already",
+                &certificate::listing_digest(pool.config.name, &held),
+            );
+        }
+        if list.withdrawn(&digest) {
+            return unlisted(Unlisted::Withdrawn);
+        }
+        if list.too_often(&key.seedelf) {
+            return unlisted(Unlisted::TooOften);
+        }
+    }
+    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
+    let instant = Instant::now();
+    let bits = match price(pool, address, CERTIFICATE_AS, instant) {
+        Ok(bits) => bits,
+        Err(unpriced) => return unpriced.answer(),
+    };
+    if check::stamp_bits(&digest, nonce) < bits {
+        return more_work(bits);
+    }
+    // Room before the proof, as an envelope's before its points. The list
+    // looks again as it lists, and that's what counts.
+    let room = pool
+        .list
+        .lock()
+        .expect("list lock")
+        .room(&key, bytes.len(), pool.config.list.cap);
+    if let Err(unlisted_) = room {
+        return unlisted(unlisted_);
+    }
+    // From here every post is counted against its address, whatever comes
+    // of it: a kept one as kept, every other as refused, one whose client
+    // hangs up while the chain is read too. So one solved stamp pays for
+    // only so many proofs and reads of the chain.
+    let counted = Counted::new(pool, address, instant);
+    if let Err(why) = certificate::check_proof(&shape) {
+        return bad(why.reason());
+    }
+    match pool.view.register(shape.name()).await {
+        Ok(Some(register)) if register[..] == *shape.register() => {}
+        Ok(_) => {
+            let body = json!({ "error": "not this Seedelf's register now" });
+            return (StatusCode::CONFLICT, axum::Json(body)).into_response();
+        }
+        Err(Unreadable { retry_after }) => {
+            return refuse(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "can't check the chain now",
+                retry_after,
+            );
+        }
+    }
+    match pool.list(digest, key, bytes, address, instant) {
+        Ok(Listed::New) => {
+            counted.kept();
+            listed("new", &digest)
+        }
+        Ok(Listed::Already) => {
+            let held = pool.list.lock().expect("list lock").held(&key);
+            let held = held.map_or(digest, |held| {
+                certificate::listing_digest(pool.config.name, &held)
+            });
+            listed("already", &held)
+        }
+        Err(NotListed::Window(secs)) => refuse(StatusCode::TOO_MANY_REQUESTS, WINDOW_FULL, secs),
+        Err(NotListed::Room(unlisted_)) => unlisted(unlisted_),
+    }
+}
+
+/// A list post past its stamp, counted against its address however it
+/// ends: as kept once [`Counted::kept`] says so, as refused otherwise,
+/// whether it answers or its request is dropped mid-way (a client that
+/// hangs up while the chain is read, or a save is made, still pays for the
+/// proof and the read).
+struct Counted<'a> {
+    pool: &'a Pool,
+    address: IpAddr,
+    instant: Instant,
+    kept: bool,
+}
+
+impl<'a> Counted<'a> {
+    fn new(pool: &'a Pool, address: IpAddr, instant: Instant) -> Self {
+        Counted {
+            pool,
+            address,
+            instant,
+            kept: false,
+        }
+    }
+
+    /// Counted as kept.
+    fn kept(mut self) {
+        self.kept = true;
+        self.pool.counts.lock().expect("counts lock").record(
+            self.address,
+            CERTIFICATE_AS,
+            self.instant,
+        );
+    }
+}
+
+impl Drop for Counted<'_> {
+    fn drop(&mut self) {
+        if !self.kept {
+            self.pool.counts.lock().expect("counts lock").count_refused(
+                self.address,
+                CERTIFICATE_AS,
+                self.instant,
+            );
+        }
+    }
+}
+
+/// A withdrawal post (§21.7, "Posting one"): checked in its table's order,
+/// cheapest first, the first that fails answering.
+///
+/// 1. The body is a nonce and a withdrawal, 106 bytes: 400.
+/// 2. The shape: version 1, the pool's network, c and z below q: 400.
+/// 3. The digest names a certificate the list holds: 404 `no such
+///    certificate`, which tells a poster only what the list shows.
+/// 4. The price and the window, a short envelope's from the same address:
+///    429, as an envelope's.
+/// 5. The stamp, over SHA-256(`…|unlisting-stamp|` ‖ len(pool) ‖ pool ‖
+///    withdrawal): 402 with the price.
+/// 6. The proof of x_m on the held certificate's messaging register: 400,
+///    counted against the address's own price.
+///
+/// Taken, the certificate goes, a removal entry for its digest takes its
+/// place, the digest is kept so the same bytes are never listed again, and
+/// the list is saved before the answer, so a crash after it can't bring the
+/// certificate back for its wallet to think withdrawn; then the post is
+/// counted as a kept short envelope [choice]: 200 `{"withdrawn": true}`. A
+/// save that fails puts the certificate back in memory (`List::unwithdraw`)
+/// and answers 503 `can't save now`, `Retry-After` 60. One taken meanwhile
+/// by another post of it is a 404 too. From row 6 on, a post is counted
+/// against its address whatever comes of it (`Counted`).
+async fn post_withdrawal(
+    State(relay): State<Arc<Relay>>,
+    UrlPath(name): UrlPath<String>,
+    client: Option<Extension<Client>>,
+    body: Bytes,
+) -> Response {
+    let Some(pool) = relay.pool(&name) else {
+        return no_such_pool();
+    };
+    if relay.stopped.pool(&name) {
+        return stopped();
+    }
+    if body.len() != MAX_WITHDRAWAL_POST {
+        return bad(Unwithdrawn::InvalidLength.reason());
+    }
+    let nonce = u64::from_be_bytes(body[..NONCE_LEN].try_into().expect("8 bytes"));
+    let bytes = &body[NONCE_LEN..];
+    let withdrawal = match certificate::check_withdrawal_shape(bytes, pool.config.list.network) {
+        Ok(withdrawal) => withdrawal,
+        Err(refused) => return bad(refused.reason()),
+    };
+    let Some(held) = pool
+        .list
+        .lock()
+        .expect("list lock")
+        .certificate(withdrawal.digest())
+    else {
+        return no_such_certificate();
+    };
+    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
+    let instant = Instant::now();
+    let bits = match price(pool, address, CERTIFICATE_AS, instant) {
+        Ok(bits) => bits,
+        Err(unpriced) => return unpriced.answer(),
+    };
+    if check::stamp_bits(
+        &certificate::unlisting_digest(pool.config.name, bytes),
+        nonce,
+    ) < bits
+    {
+        return more_work(bits);
+    }
+    let shape = certificate::check_shape(&held, pool.config.list.network, &certificate::POLICY)
+        .expect("a listed certificate's shape");
+    let counted = Counted::new(pool, address, instant);
+    if let Err(refused) = certificate::check_withdrawal_proof(&withdrawal, &shape) {
+        return bad(refused.reason());
+    }
+    let taken = {
+        let mut window = pool.window.lock().expect("window lock");
+        let taken = pool
+            .list
+            .lock()
+            .expect("list lock")
+            .withdraw(withdrawal.digest(), unix_day());
+        if taken {
+            window.record(address, CERTIFICATE_AS, instant);
+        }
+        taken
+    };
+    if !taken {
+        // Taken meanwhile by another post of it: counted as refused, as
+        // every post that reaches the proof is counted.
+        return no_such_certificate();
+    }
+    // Saved before the answer, so a crash after it can't bring the
+    // certificate back for its wallet to think withdrawn.
+    let saving = relay.clone();
+    let saved = tokio::task::spawn_blocking(move || saving.save_list(&name))
+        .await
+        .unwrap_or(false);
+    if !saved {
+        pool.list
+            .lock()
+            .expect("list lock")
+            .unwithdraw(pool.config.name, &held);
+        return refuse(StatusCode::SERVICE_UNAVAILABLE, "can't save now", 60);
+    }
+    counted.kept();
+    axum::Json(json!({ "withdrawn": true })).into_response()
+}
+
+/// §21.7's withdrawal row 3.
+fn no_such_certificate() -> Response {
+    let body = json!({ "error": "no such certificate" });
+    (StatusCode::NOT_FOUND, axum::Json(body)).into_response()
+}
+
+/// A page of the list (§21.7), as an envelope page is read (§17.5).
+async fn list_page(
+    State(relay): State<Arc<Relay>>,
+    UrlPath(name): UrlPath<String>,
+    RawQuery(query): RawQuery,
+    client: Option<Extension<Client>>,
+    reserved: Option<Extension<Reserved>>,
+) -> Response {
+    let Some(pool) = relay.pool(&name) else {
+        return no_such_pool();
+    };
+    if relay.stopped.pool(&name) {
+        return stopped();
+    }
+    let after = match query.as_deref() {
+        None => None,
+        Some(query) => match cursor(query) {
+            Some(after) => Some(after),
+            None => return bad("the one parameter is after, a cursor"),
+        },
+    };
+    let address = client.map_or(NO_ADDRESS, |Extension(Client(ip))| address_key(ip));
+    let short = reserved.map(|Extension(Reserved(most))| most);
+    match pool.read_list(after, address, short, unix_now(), Instant::now()) {
+        Ok(page) => octets(page),
+        Err(NotRead::Day(secs)) => refuse(StatusCode::TOO_MANY_REQUESTS, DAY_READ, secs),
+    }
+}
+
+/// A page's answer: its bytes, as `application/octet-stream`.
+fn octets(page: Vec<u8>) -> Response {
     let mut response = page.into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
     response
+}
+
+/// A certificate post's answer once listed, or held already, with the
+/// listing digest of the certificate the list holds for its Seedelf,
+/// register and m_S: the post's own when new, and when already, the held
+/// one's, which may be another posting's bytes (a fresh aux) and is what a
+/// withdrawal must name. No expiry: the list keeps no times.
+fn listed(kept: &str, digest: &[u8; 32]) -> Response {
+    let digest: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    axum::Json(json!({ "kept": kept, "digest": digest })).into_response()
+}
+
+/// The off switch's answer, as the edge gives it, to a route whose pool it
+/// stops: what the edge's check missed, by a spelling of the path.
+fn stopped() -> Response {
+    let body = json!({ "error": "messaging is stopped" });
+    (StatusCode::GONE, axum::Json(body)).into_response()
+}
+
+/// §21.7's rows 3′ and 6: a 409 `withdrawn` for bytes a withdrawal took
+/// down; a 409 when the certificate's Seedelf, at its register, has two
+/// already, which only a removal frees; a 503 when the list is full, whose
+/// `Retry-After` is an hour, since nothing frees room before a removal does
+/// [choice].
+fn unlisted(unlisted: Unlisted) -> Response {
+    let conflict = |error: &str| {
+        let body = json!({ "error": error });
+        (StatusCode::CONFLICT, axum::Json(body)).into_response()
+    };
+    match unlisted {
+        Unlisted::Withdrawn => conflict("withdrawn"),
+        Unlisted::Two => conflict("two certificates for this Seedelf already"),
+        Unlisted::TooOften => conflict(
+            "this Seedelf was withdrawn too often at this register: move it to list it again",
+        ),
+        Unlisted::Full => refuse(StatusCode::SERVICE_UNAVAILABLE, "the list is full", 3600),
+    }
 }
 
 /// What a page says a post from `address` costs now, for each of the four
@@ -761,6 +1755,11 @@ fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Today, in Unix days: a removal's day (`list`).
+fn unix_day() -> u32 {
+    (unix_now() / 86_400) as u32
 }
 
 fn unix_micros() -> u64 {
@@ -876,6 +1875,80 @@ mod tests {
         assert_eq!(prices(&counts, &window, other, now), [18, 18, 18, 20]);
     }
 
+    /// A relay given no view of the chain (`View::Nowhere`) lists nothing:
+    /// a good certificate, paid, is a 503 at check 8, never kept unchecked.
+    #[tokio::test]
+    async fn without_a_view_of_the_chain_no_certificate_is_listed() {
+        use tower::ServiceExt;
+        let file: Value = serde_json::from_str(include_str!(
+            "../../../../seedelf-platform/seedelf-messaging/tests/vectors/messaging_certificate_v1.json"
+        ))
+        .unwrap();
+        let certificate =
+            certificate::tests::bytes(file["certificates"][0]["certificate"].as_str().unwrap());
+        let digest = certificate::listing_digest("preprod", &certificate);
+        let nonce = (0u64..)
+            .find(|&n| check::stamp_bits(&digest, n) >= 16)
+            .unwrap();
+        let relay = Arc::new(Relay::new(None));
+        assert_eq!(relay.health()["preprod"]["chain"], "none");
+        let request = axum::http::Request::post("/messaging/v1/preprod/certificates")
+            .body(axum::body::Body::from(
+                [&nonce.to_be_bytes()[..], &certificate].concat(),
+            ))
+            .unwrap();
+        let response = routes()
+            .with_state(relay.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "60");
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 10)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "can't check the chain now");
+        assert_eq!(relay.health()["preprod"]["certificates"], 0);
+        // And the sweep, with no view to read, drops nothing.
+        assert_eq!(relay.sweep_once().await, 0);
+    }
+
+    /// The routes check the off switch by the pool's name as they decode
+    /// it, whatever the edge saw: `pre%70rod` is preprod here, and stopped.
+    #[tokio::test]
+    async fn a_stopped_pool_is_stopped_however_its_name_is_spelled() {
+        use tower::ServiceExt;
+        let relay = Arc::new(Relay::new(None).with_stopped(Stopped::of(["preprod"]).unwrap()));
+        let app = routes().with_state(relay);
+        let ask = |method: &str, uri: &str, body: Vec<u8>| {
+            axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(axum::body::Body::from(body))
+                .unwrap()
+        };
+        for (method, uri, body) in [
+            ("GET", "/messaging/v1/pre%70rod/envelopes", vec![]),
+            ("GET", "/messaging/v1/preprod/envelopes", vec![]),
+            ("POST", "/messaging/v1/pre%70rod/envelopes", vec![0; 520]),
+            ("GET", "/messaging/v1/%70reprod/certificates", vec![]),
+            ("POST", "/messaging/v1/prepro%64/certificates", vec![0; 281]),
+            ("POST", "/messaging/v1/pre%70rod/withdrawals", vec![0; 106]),
+        ] {
+            let response = app.clone().oneshot(ask(method, uri, body)).await.unwrap();
+            assert_eq!(response.status(), StatusCode::GONE, "{method} {uri}");
+        }
+        // Mainnet's, encoded or not, answers as ever.
+        for uri in [
+            "/messaging/v1/mainnet/envelopes",
+            "/messaging/v1/main%6eet/envelopes",
+        ] {
+            let response = app.clone().oneshot(ask("GET", uri, vec![])).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        }
+    }
+
     /// A pool whose window holds one envelope.
     static ONE: [Config; 1] = [Config {
         name: "preprod",
@@ -885,6 +1958,7 @@ mod tests {
             envelopes: 1,
             units: 4096,
         },
+        list: POOLS[1].list,
     }];
 
     #[test]
@@ -1294,6 +2368,232 @@ mod tests {
             }
         }
         assert_eq!(ids, (0..600).collect::<Vec<_>>());
+    }
+
+    /// A certificate's shape for preprod (list.rs's test bytes) and the
+    /// key and digest it's listed by.
+    fn shaped(seedelf: u32, value: u32) -> (Vec<u8>, Key, [u8; 32]) {
+        let bytes = list::tests::shaped(seedelf, value, 0);
+        let shape =
+            certificate::check_shape(&bytes, certificate::NETWORK_PREPROD, &certificate::POLICY)
+                .unwrap();
+        let digest = certificate::listing_digest("preprod", &bytes);
+        (bytes.clone(), Key::of(&shape), digest)
+    }
+
+    /// A list page's flags, cursor, price and entries (kind, bytes).
+    fn entries(page: &[u8]) -> (u8, u64, u8, Vec<(u8, Vec<u8>)>) {
+        let count = u16::from_be_bytes([page[11], page[12]]) as usize;
+        let (mut at, mut out) = (list::PAGE_HEADER, vec![]);
+        for _ in 0..count {
+            let len = u16::from_be_bytes([page[at + 1], page[at + 2]]) as usize;
+            out.push((page[at], page[at + 3..at + 3 + len].to_vec()));
+            at += 3 + len;
+        }
+        assert_eq!(at, page.len());
+        let cursor = u64::from_be_bytes(page[2..10].try_into().unwrap());
+        (page[1], cursor, page[10], out)
+    }
+
+    /// A removal entry through the route (the test-only drop stands for
+    /// the chain check and withdrawals, which come later): kind 2 and the
+    /// listing digest, after the certificates, to a reader who read the
+    /// one it names and to one who starts now; and its Seedelf has room for
+    /// another, posted through the route.
+    #[tokio::test]
+    async fn a_removal_is_read_through_the_route_as_kind_2_and_its_digest() {
+        use tower::ServiceExt;
+        let relay = Arc::new(Relay::new(None));
+        let pool = relay.pool("preprod").unwrap();
+        let (a, b, c) = (shaped(1, 1), shaped(1, 2), shaped(2, 1));
+        for (bytes, key, digest) in [&a, &b, &c] {
+            let listed = pool.list(*digest, *key, bytes, NO_ADDRESS, Instant::now());
+            assert_eq!(listed, Ok(Listed::New));
+        }
+        let app = routes().with_state(relay.clone());
+        let get = |after: Option<u64>| {
+            let uri = match after {
+                Some(after) => format!("/messaging/v1/preprod/certificates?after={after}"),
+                None => "/messaging/v1/preprod/certificates".to_string(),
+            };
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(
+                        axum::http::Request::get(uri)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+                    .await
+                    .unwrap();
+                entries(&bytes)
+            }
+        };
+        let (_, cursor, price, read) = get(None).await;
+        assert_eq!(price, 16);
+        assert_eq!(read.len(), 3);
+        assert!(pool.list.lock().unwrap().withdraw(&b.2, 20_833));
+        // The reader who read it: one entry, the removal.
+        let (flags, _, _, after) = get(Some(cursor)).await;
+        assert_eq!((flags, after), (0, vec![(list::REMOVAL, b.2.to_vec())]));
+        // A reader who starts now: the two held, then the removal.
+        let (_, _, _, fresh) = get(None).await;
+        assert_eq!(
+            fresh,
+            vec![
+                (list::CERTIFICATE, a.0.clone()),
+                (list::CERTIFICATE, c.0.clone()),
+                (list::REMOVAL, b.2.to_vec()),
+            ]
+        );
+        // The Seedelf has room for another m_S again, and it's the last entry.
+        let d = shaped(1, 3);
+        let listed = pool.list(d.2, d.1, &d.0, NO_ADDRESS, Instant::now());
+        assert_eq!(listed, Ok(Listed::New));
+        let (_, _, _, last) = get(Some(cursor)).await;
+        assert_eq!(last.last().unwrap(), &(list::CERTIFICATE, d.0.clone()));
+        assert_eq!(relay.health()["preprod"]["certificates"], 3);
+    }
+
+    /// Certificates listed at once from one address: the window is looked
+    /// at again with the insert, as an envelope's is, and so are the
+    /// Seedelf's two and the cap, so they can't pass them together; one
+    /// listed meanwhile is "already".
+    #[test]
+    fn certificates_at_once_are_counted_as_listed_so_only_one_passes() {
+        let relay = Relay::with_pools(None, &ONE);
+        let pool = relay.pool("preprod").unwrap();
+        let me: IpAddr = "203.0.113.7".parse().unwrap();
+        let now = Instant::now();
+        let (a, b) = (shaped(1, 1), shaped(2, 1));
+        assert_eq!(
+            pool.window.lock().unwrap().wait(me, CERTIFICATE_AS, now),
+            None
+        );
+        assert_eq!(pool.list(a.2, a.1, &a.0, me, now), Ok(Listed::New));
+        assert!(matches!(
+            pool.list(b.2, b.1, &b.0, me, now),
+            Err(NotListed::Window(secs)) if secs > 36 * 3600
+        ));
+        assert_eq!(pool.list(a.2, a.1, &a.0, me, now), Ok(Listed::Already));
+        // A Seedelf's two, reached meanwhile from other addresses.
+        let other = |i: u8| IpAddr::from([198, 51, 100, i]);
+        let (c, d) = (shaped(1, 2), shaped(1, 3));
+        assert_eq!(pool.list(c.2, c.1, &c.0, other(1), now), Ok(Listed::New));
+        assert_eq!(
+            pool.list(d.2, d.1, &d.0, other(2), now),
+            Err(NotListed::Room(Unlisted::Two))
+        );
+        // A certificate is a short envelope in the window: the address that
+        // listed one has no room for an envelope now.
+        assert!(pool.window.lock().unwrap().wait(me, 512, now).is_some());
+        assert_eq!(relay.health()["preprod"]["certificates"], 2);
+    }
+
+    /// In messaging's reserve, a list page holds what fits the reserve's
+    /// page, its framing counted, with the flag that more follow, and it
+    /// counts against the address's share of the reserve, both pools'.
+    #[test]
+    fn in_the_reserve_a_list_page_is_cut_short_and_counts_against_the_share() {
+        let relay = Relay::new(None).with_reserve_read(40_000);
+        let pool = relay.pool("preprod").unwrap();
+        {
+            let mut held = pool.list.lock().unwrap();
+            for i in 0..200 {
+                list::tests::listed(&mut held, &list::tests::shaped(i, 0, 0), 1 << 20).unwrap();
+            }
+        }
+        let me = address_key("203.0.113.7".parse().unwrap());
+        let (now, instant) = (unix_now(), Instant::now());
+        let most = Some(16 * 1024);
+        let page = pool.read_list(None, me, most, now, instant).unwrap();
+        let (flags, cursor, _, read) = entries(&page);
+        assert!(page.len() <= 16 * 1024);
+        assert_eq!((flags, read.len()), (pool::MORE, (16 * 1024 - 13) / 276));
+        // Outside the reserve, the whole page.
+        let whole = pool.read_list(None, me, None, now, instant).unwrap();
+        assert_eq!(entries(&whole).3.len(), 200);
+        // The share: 40,000 bytes, and the page that passes it.
+        let mut after = Some(cursor);
+        let mut read = page.len();
+        while let Ok(page) = pool.read_list(after, me, most, now, instant) {
+            read += page.len();
+            after = Some(entries(&page).1);
+        }
+        assert!((40_000..40_000 + 16 * 1024).contains(&read), "{read}");
+        // Spent for envelope pages too, on either pool.
+        for name in ["preprod", "mainnet"] {
+            let pool = relay.pool(name).unwrap();
+            assert!(matches!(
+                pool.read(None, me, most, now, instant),
+                Err(NotRead::Day(_))
+            ));
+        }
+    }
+
+    /// The list is saved in a file of its own beside the pool's, under
+    /// names none of which is the pool's; a save of it that fails leaves
+    /// nothing behind, writes no mark, and leaves the list to save again.
+    #[test]
+    fn the_list_is_saved_apart_from_the_pool_and_a_failed_save_leaves_nothing() {
+        let dir = std::env::temp_dir().join(format!("seedelf-relay-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (pool, list) = (Files::pool(&dir, "preprod"), Files::list(&dir, "preprod"));
+        let names = |files: &Files| {
+            [
+                &files.file,
+                &files.partial,
+                &files.mark,
+                &files.mark_partial,
+            ]
+            .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
+        };
+        assert_eq!(
+            names(&list),
+            [
+                "messaging-preprod.list",
+                "messaging-preprod.list.partial",
+                "messaging-preprod.list.clean",
+                "messaging-preprod.list.clean.partial",
+            ]
+        );
+        assert_eq!(
+            names(&pool),
+            [
+                "messaging-preprod.pool",
+                "messaging-preprod.partial",
+                "messaging-preprod.clean",
+                "messaging-preprod.clean.partial",
+            ]
+        );
+        for name in names(&list) {
+            assert!(!names(&pool).contains(&name), "{name}");
+        }
+        // What a failed save left beside the list, removed at start.
+        std::fs::write(&list.partial, [0u8; 64]).unwrap();
+        std::fs::write(&list.mark_partial, b"").unwrap();
+        let relay = Relay::with_pools(Some(&dir), &ONE);
+        assert!(!list.partial.exists() && !list.mark_partial.exists());
+        let (bytes, key, digest) = shaped(1, 1);
+        let at = relay.pool("preprod").unwrap();
+        at.list(digest, key, &bytes, NO_ADDRESS, Instant::now())
+            .unwrap();
+        // A folder where the list's file goes: the rename fails.
+        std::fs::create_dir(&list.file).unwrap();
+        relay.save(true);
+        assert!(list.file.is_dir() && !list.partial.exists() && !list.mark.exists());
+        assert!(at.list.lock().unwrap().changed);
+        // The pool's own save went on: its file and mark are there.
+        assert!(pool.file.is_file() && pool.mark.exists());
+        std::fs::remove_dir(&list.file).unwrap();
+        relay.save(true);
+        assert!(list.file.is_file() && list.mark.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! The relay under load on two cores, the droplet's size (web wallet chunk
-//! 54's 54c). Not part of the suite: it does nothing unless `RELAY_LOAD=1`,
+//! 54's 54c), its envelopes and its list of certificates (chunk 55's 55c).
+//! Not part of the suite: it does nothing unless `RELAY_LOAD=1`,
 //! and it's meant for a release build pinned to two cores:
 //!
 //! ```text
@@ -10,13 +11,14 @@
 //! from any `.env`; its clients run in the same process, on the same two
 //! cores, so the figures are a floor. Posts carry real proof of work, solved
 //! before the clock starts, each from an address of its own as Caddy names
-//! it.
+//! it. Each certificate is a real one, so each post's proof is checked.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use seedelf_data_api::chain::Chain;
 use seedelf_data_api::edge::{Edge, Egress};
+use seedelf_data_api::messaging::certificate::listing_digest;
 use seedelf_data_api::messaging::check::{stamp_bits, stamp_digest};
 use seedelf_data_api::messaging::price::Prices;
 use seedelf_data_api::messaging::window::Limits;
@@ -24,6 +26,10 @@ use seedelf_data_api::messaging::{Config, Relay};
 use seedelf_data_api::state::AppState;
 use seedelf_data_api::submit::Submit;
 use serde_json::Value;
+
+mod common;
+use common::{KoiosMock, Made};
+use seedelf_data_api::messaging::view::{KOIOS_DEADLINE, KOIOS_KEPT, Koios, View};
 
 const WALLET: &str = "chrome-extension://jfekiogplaamnceifeehipmomhojngcb";
 const POSTS: u32 = 3000;
@@ -48,6 +54,7 @@ static POOL: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 fn short(i: u32) -> Vec<u8> {
@@ -65,8 +72,20 @@ fn short(i: u32) -> Vec<u8> {
     bytes
 }
 
-/// Posts paid at preprod's base, solved on every core there is.
-fn solved(count: u32) -> Vec<Vec<u8>> {
+/// Seedelf `i`, a 32-byte name of its own at a register of its own.
+fn seedelf(i: u32) -> Made {
+    let name = [&[0x5e; 28][..], &i.to_be_bytes()].concat();
+    Made::preprod(&name, 1 + u64::from(i), 3)
+}
+
+/// Its long certificate, 304 bytes.
+fn certificate(i: u32) -> Vec<u8> {
+    seedelf(i).bytes()
+}
+
+/// Posts of `make`'s bytes, each paid at preprod's base over its `digest`,
+/// solved on every core there is.
+fn solved(count: u32, make: fn(u32) -> Vec<u8>, digest: fn(&[u8]) -> [u8; 32]) -> Vec<Vec<u8>> {
     let threads = std::thread::available_parallelism().map_or(4, |n| n.get()) as u32;
     let handles: Vec<_> = (0..threads)
         .map(|t| {
@@ -74,10 +93,10 @@ fn solved(count: u32) -> Vec<Vec<u8>> {
                 (0..count)
                     .filter(|i| i % threads == t)
                     .map(|i| {
-                        let envelope = short(i);
-                        let digest = stamp_digest("preprod", &envelope);
+                        let bytes = make(i);
+                        let digest = digest(&bytes);
                         let nonce = (0u64..).find(|&n| stamp_bits(&digest, n) >= 16).unwrap();
-                        (i, [&nonce.to_be_bytes()[..], &envelope].concat())
+                        (i, [&nonce.to_be_bytes()[..], &bytes].concat())
                     })
                     .collect::<Vec<_>>()
             })
@@ -106,7 +125,8 @@ async fn the_relay_under_load() {
     if std::env::var("RELAY_LOAD").as_deref() != Ok("1") {
         return;
     }
-    let posts = Arc::new(solved(POSTS));
+    let posts = Arc::new(solved(POSTS, short, |e| stamp_digest("preprod", e)));
+    let certificates = Arc::new(solved(POSTS, certificate, |c| listing_digest("preprod", c)));
 
     let state = Arc::new(AppState::new(
         Chain::connect("postgresql://nobody@127.0.0.1:1/nothing").unwrap(),
@@ -117,7 +137,16 @@ async fn the_relay_under_load() {
         vec![WALLET.to_string()],
         Egress::new(None, None),
     ));
-    let relay = Arc::new(Relay::with_pools(None, &POOL));
+    // Preprod's chain check reads a Koios on loopback that holds every
+    // Seedelf posted: at most four requests to it at once, as to Koios, so
+    // the certificates' figures are the check's too.
+    let koios = KoiosMock::start();
+    for i in 0..POSTS {
+        let made = seedelf(i);
+        koios.hold(&made.name, &made.register());
+    }
+    let view = View::Koios(Koios::with(&koios.url, KOIOS_DEADLINE, KOIOS_KEPT).unwrap());
+    let relay = Arc::new(Relay::with_pools(None, &POOL).with_view("preprod", view));
     let app = seedelf_data_api::app(state, submit, edge, relay.clone(), &[WALLET.to_string()]);
     // Served as main.rs serves it: its listener's socket options, its caps
     // on connections, and its record of each (serve.rs).
@@ -212,6 +241,96 @@ async fn the_relay_under_load() {
     let took = start.elapsed();
     println!(
         "fresh syncs: {READERS} of {:.2} MB each in {:.2} s = {:.0} pages/s, {:.0} MB/s",
+        bytes as f64 / f64::from(READERS) / 1e6,
+        took.as_secs_f64(),
+        f64::from(pages) / took.as_secs_f64(),
+        bytes as f64 / took.as_secs_f64() / 1e6,
+    );
+
+    // Certificates: each from its own address, each one's proof checked
+    // (§21.7's row 7), CONCURRENCY at once.
+    let url = format!("http://127.0.0.1:{port}/messaging/v1/preprod/certificates");
+    let start = Instant::now();
+    let mut tasks = vec![];
+    for i in 0..POSTS {
+        let (client, url, certificates, gate) = (
+            client.clone(),
+            url.clone(),
+            certificates.clone(),
+            gate.clone(),
+        );
+        tasks.push(tokio::spawn(async move {
+            let _permit = gate.acquire().await.unwrap();
+            let sent = Instant::now();
+            let response = client
+                .post(&url)
+                .header("x-forwarded-for", address(200_000 + i))
+                .header("content-type", "application/octet-stream")
+                .body(certificates[i as usize].clone())
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                200,
+                "{}",
+                response.text().await.unwrap_or_default()
+            );
+            response.bytes().await.unwrap();
+            sent.elapsed()
+        }));
+    }
+    let mut times = vec![];
+    for task in tasks {
+        times.push(task.await.unwrap());
+    }
+    let took = start.elapsed();
+    println!(
+        "certificates: {POSTS} in {:.2} s = {:.0}/s; p50 {:.2} ms, p99 {:.2} ms",
+        took.as_secs_f64(),
+        f64::from(POSTS) / took.as_secs_f64(),
+        percentile(&mut times, 0.5).as_secs_f64() * 1e3,
+        percentile(&mut times, 0.99).as_secs_f64() * 1e3,
+    );
+    assert_eq!(relay.health()["preprod"]["certificates"], POSTS);
+
+    // Readers of the list: each a fresh read of all of it, page by page.
+    let start = Instant::now();
+    let mut tasks = vec![];
+    for i in 0..READERS {
+        let (client, url, gate) = (client.clone(), url.clone(), gate.clone());
+        tasks.push(tokio::spawn(async move {
+            let _permit = gate.acquire().await.unwrap();
+            let (mut after, mut pages, mut bytes, mut entries) = (None::<u64>, 0, 0, 0);
+            loop {
+                let mut request = client
+                    .get(&url)
+                    .header("x-forwarded-for", address(300_000 + i));
+                if let Some(after) = after {
+                    request = request.query(&[("after", after)]);
+                }
+                let body = request.send().await.unwrap().bytes().await.unwrap();
+                pages += 1;
+                bytes += body.len();
+                entries += u16::from_be_bytes([body[11], body[12]]) as usize;
+                after = Some(u64::from_be_bytes(body[2..10].try_into().unwrap()));
+                if body[1] & 1 == 0 {
+                    break;
+                }
+            }
+            assert_eq!(entries, POSTS as usize);
+            (pages, bytes)
+        }));
+    }
+    let (mut pages, mut bytes) = (0, 0);
+    for task in tasks {
+        let (p, b) = task.await.unwrap();
+        pages += p;
+        bytes += b;
+    }
+    let took = start.elapsed();
+    println!(
+        "list reads: {READERS} of {:.2} MB each in {:.2} s = {:.0} pages/s, {:.0} MB/s",
         bytes as f64 / f64::from(READERS) / 1e6,
         took.as_secs_f64(),
         f64::from(pages) / took.as_secs_f64(),

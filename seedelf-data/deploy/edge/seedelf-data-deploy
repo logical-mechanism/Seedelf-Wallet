@@ -7,11 +7,30 @@
 #   ssh deploy@<VPS> "deploy <the binary's sha256>" < seedelf-data-api
 #   ssh deploy@<VPS> rollback
 #   ssh deploy@<VPS> status
+#   ssh deploy@<VPS> "messaging off preprod"   (or on, or mainnet)
 #
 # deploy installs the binary from stdin and keeps the running one as .prev;
 # rollback swaps the two. Both restart the API and check it: /health as well
 # as before the change, and the store's origin in CORS. A deploy that fails
 # its check puts the old binary back by itself. status changes nothing.
+#
+# messaging off|on <pool> stops Seedelf Messaging for one network's pool, or
+# starts it again (deploy/README.md's "Stopping Messages"). The pools stopped
+# are kept as DATA_MESSAGING_OFF in the runbook lever's drop-in, comma-
+# separated, which a by-hand true reads as both; the drop-in goes once none
+# is stopped. It refuses, changing nothing, when the environment file sets
+# DATA_MESSAGING_OFF (which would override the drop-in), when the drop-in is
+# in any form but the one it and the runbook write, or when the pool is in
+# the state asked already. It restarts the API and checks that it answers
+# at all (200, or 503 while home is down: a stop mustn't wait on home), that
+# the store's origin is in CORS, and both pools' pages: 410 for one stopped,
+# any answer but 410 for one running (a 200, or a 503 or 429 the pool gives
+# for its own reasons). A failed reload, restart or check puts the drop-in
+# back as it was.
+#
+# rollback refuses while the drop-in, or the environment file, stops one
+# network alone, or both by name: a build from before per-network stopping
+# reads only true or false, and wouldn't start.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -23,15 +42,97 @@ API=http://127.0.0.1:8099
 # falls back to Koios), so every change checks it.
 STORE=chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp
 MAX=$((64 * 1024 * 1024))
+# The relay's off switch: the runbook's drop-in, and the file whose setting
+# would override it. The pools in the API's own order.
+OFF=/etc/systemd/system/$UNIT.service.d/messaging-off.conf
+ENVFILE=/etc/seedelf-data/env
+POOLS="mainnet preprod"
+# A line of the environment file that sets it, however spaced.
+SETS='^[[:space:]]*(export[[:space:]]+)?DATA_MESSAGING_OFF[[:space:]]*='
 
 say() { printf '%s\n' "$*"; }
 die() { printf 'FAILED: %s\n' "$*"; exit 1; }
+stop() { printf 'STOP: %s\n' "$*"; exit 1; }
 sum() { sha256sum "$1" | cut -d' ' -f1; }
 health() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$API/health" || true; }
 cors() {
   curl -s -m 5 -D - -o /dev/null -X OPTIONS "$API/api/v1/tip" \
     -H "Origin: $STORE" -H 'Access-Control-Request-Method: GET' |
     tr -d '\r' | grep -qix "access-control-allow-origin: $STORE"
+}
+
+# A relay page's status, from a pool.
+page() { curl -s -m 5 -o /dev/null -w '%{http_code}' "$API/messaging/v1/$1/envelopes" || true; }
+
+# The drop-in's DATA_MESSAGING_OFF, or nothing when there's no drop-in. A
+# drop-in in any form but the one this script and the runbook write, two
+# lines, [Service] and Environment=DATA_MESSAGING_OFF=<letters and commas>,
+# isn't this script's to read or change.
+dropin() {
+  [ -e "$OFF" ] || return 0
+  value=$(sed -n '2s/^Environment=DATA_MESSAGING_OFF=//p' "$OFF")
+  case "$value" in '' | *[!a-z,]*) return 1 ;; esac
+  printf '[Service]\nEnvironment=DATA_MESSAGING_OFF=%s\n' "$value" | cmp -s - "$OFF" || return 1
+  say "$value"
+}
+
+# The pools the drop-in stops, space-separated, or nothing: true is every
+# pool. Anything else in it isn't this script's to change.
+stopped() {
+  value=$(dropin) || return 1
+  case "$value" in
+  true) say "$POOLS" ;;
+  false | '') ;;
+  *)
+    out=
+    # Letters, commas and spaces alone: split, it can't glob.
+    for name in $(printf '%s' "$value" | tr ',' ' '); do
+      case " $POOLS " in *" $name "*) ;; *) return 1 ;; esac
+      case " $out " in *" $name "*) return 1 ;; esac
+      out="${out:+$out }$name"
+    done
+    say "$out"
+    ;;
+  esac
+}
+
+# Waits up to 30 s for the API to answer at all, 200 or 503 (home may be
+# down: a messaging run mustn't wait on it), with the store's origin in CORS.
+up() {
+  i=0 code=
+  while [ "$i" -lt 30 ]; do
+    code=$(health)
+    if [ "$code" = 200 ] || [ "$code" = 503 ]; then
+      cors || { say "check: /health $code, but CORS doesn't answer the store's origin"; return 1; }
+      say "check: /health $code, CORS answers the store's origin"
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  say "check: /health ${code:-silent} after 30 s"
+  return 1
+}
+
+# Each pool's page as the pools stopped, comma-separated, say it should
+# answer: 410 stopped; running, any answer but 410 (a 200, or a 503 or 429
+# the pool gives for its own reasons). No answer at all (000) is neither.
+pages() {
+  bad=0
+  for name in $POOLS; do
+    code=$(page "$name")
+    case ",$1," in
+    *",$name,"*)
+      say "$name's page: $code (want 410)"
+      [ "$code" = 410 ] || bad=1
+      ;;
+    *)
+      say "$name's page: $code (want an answer but 410)"
+      case "$code" in 410 | 000 | '') bad=1 ;; esac
+      ;;
+    esac
+  done
+  return "$bad"
 }
 
 # Waits up to 30 s for the API to answer as well as it did before: 200 if it
@@ -104,8 +205,76 @@ deploy)
   check "$before" || say "and $old fails its check too: look at the API (journalctl -u $UNIT)"
   die "not deployed; running $old"
   ;;
+messaging)
+  [ "$#" -eq 3 ] || die "usage: messaging off|on preprod|mainnet"
+  case "$2" in off | on) ;; *) die "usage: messaging off|on preprod|mainnet" ;; esac
+  case "$3" in preprod | mainnet) ;; *) die "usage: messaging off|on preprod|mainnet" ;; esac
+  want=$2 pool=$3
+  if grep -qsE "$SETS" "$ENVFILE"; then
+    stop "$ENVFILE sets DATA_MESSAGING_OFF, which overrides the drop-in: take that line out of it first"
+  fi
+  if ! now=$(stopped); then
+    stop "$OFF holds a DATA_MESSAGING_OFF this script doesn't read: look at it ($(cat "$OFF"))"
+  fi
+  case " $now " in *" $pool "*) was=off ;; *) was=on ;; esac
+  [ "$was" != "$want" ] || stop "Messages is $want for $pool already (stopped: $(printf '%s' "${now:-none}" | tr ' ' ',')): nothing changed"
+  # The pools stopped after this, in the API's order.
+  next=
+  for name in $POOLS; do
+    case " $now " in *" $name "*) off=yes ;; *) off=no ;; esac
+    if [ "$name" = "$pool" ]; then
+      if [ "$want" = off ]; then off=yes; else off=no; fi
+    fi
+    [ "$off" = no ] || next="${next:+$next,}$name"
+  done
+  was_set=$(printf '%s' "$now" | tr ' ' ',')
+  # The drop-in as it was, to put back if anything after fails.
+  old=$(mktemp)
+  trap 'rm -f "$old"' EXIT
+  if [ -e "$OFF" ]; then cp -p "$OFF" "$old"; had=yes; else had=no; fi
+  putback() {
+    if [ "$had" = yes ]; then cp -p "$old" "$OFF"; else rm -f "$OFF"; fi
+    systemctl daemon-reload || true
+  }
+  if [ -n "$next" ]; then
+    mkdir -p "$(dirname "$OFF")"
+    printf '[Service]\nEnvironment=DATA_MESSAGING_OFF=%s\n' "$next" >"$OFF.new"
+    mv -f "$OFF.new" "$OFF"
+  else
+    rm -f "$OFF"
+  fi
+  if ! systemctl daemon-reload; then
+    putback
+    die "systemd couldn't reload its units: the drop-in is back as it was, and the API wasn't restarted"
+  fi
+  systemctl restart "$UNIT" || true
+  say "Messages $want for $pool: stopped now ${next:-none} (was ${was_set:-none})"
+  if ! up || ! pages "$next"; then
+    say "the API doesn't answer as it should: putting the drop-in back as it was"
+    putback
+    systemctl restart "$UNIT" || true
+    { up && pages "$was_set"; } || say "and doesn't as it was either: look at the API (journalctl -u $UNIT)"
+    die "Messages unchanged for $pool"
+  fi
+  say "/health: $(curl -s -m 5 "$API/health" | grep -o '"relay":"[a-z]*"' || say 'no relay in it')"
+  say "MESSAGING $(printf '%s' "$want" | tr '[:lower:]' '[:upper:]') for $pool (stopped: ${next:-none})"
+  ;;
 rollback)
   [ "$#" -eq 1 ] || die "usage: rollback"
+  # The binary before may be from before per-network stopping, which reads
+  # only true or false: a list of pools would keep it from starting.
+  if ! value=$(dropin); then
+    stop "$OFF is in a form this script doesn't read: look at it before a rollback ($(cat "$OFF"))"
+  fi
+  case "$value" in
+  '' | true | false) ;;
+  *) stop "the drop-in stops $value by name, which a build from before per-network stopping can't read, and wouldn't start on: turn Messages back on there (messaging on <pool>) or stop both by hand (Stopping Messages, true) first, then roll back" ;;
+  esac
+  # And the environment file's: any line of it but true or false, quotes and
+  # spaces aside.
+  value=$(sed -nE "s/$SETS//p" "$ENVFILE" 2>/dev/null |
+    tr -d "\"' \t" | grep -vxE '(true|false)?' | head -n 1) || true
+  [ -z "$value" ] || stop "$ENVFILE sets DATA_MESSAGING_OFF=$value, which a build from before per-network stopping can't read, and wouldn't start on: set it to true or false, or take it out, first, then roll back"
   [ -e "$PREV" ] || die "there's no previous binary"
   cur=$(sum "$BIN")
   prev=$(sum "$PREV")
@@ -120,6 +289,6 @@ rollback)
   say "ROLLED BACK to $prev"
   ;;
 *)
-  die "usage: deploy <sha256> (the binary on stdin) | rollback | status"
+  die "usage: deploy <sha256> (the binary on stdin) | rollback | status | messaging off|on preprod|mainnet"
   ;;
 esac

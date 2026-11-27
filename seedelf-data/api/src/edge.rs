@@ -179,21 +179,27 @@ pub fn weight(path: &str) -> f64 {
 }
 
 /// The most body a request to `path` by `method` may have, if its route
-/// takes one: the relay's post, a submit, an evaluation, and the public
-/// routes' POSTs. Every other request that has a body is refused unread, so
-/// no route holds a body open at a GET's price.
+/// takes one: the relay's posts, an envelope's and a certificate's, a
+/// submit, an evaluation, and the public routes' POSTs. Every other request
+/// that has a body is refused unread, so no route holds a body open at a
+/// GET's price.
 pub fn body_limit(method: &Method, path: &str) -> Option<usize> {
     if method != Method::POST {
         return None;
     }
-    let relay = path
-        .strip_prefix("/messaging/v1/")
-        .and_then(|rest| rest.strip_suffix("/envelopes"))
-        .is_some_and(|pool| !pool.is_empty() && !pool.contains('/'));
+    let relay = |route: &str| {
+        path.strip_prefix("/messaging/v1/")
+            .and_then(|rest| rest.strip_suffix(route))
+            .is_some_and(|pool| !pool.is_empty() && !pool.contains('/'))
+    };
     match path {
-        // A post: a nonce and the largest envelope. An unknown pool's is
-        // the route's to answer, 404.
-        _ if relay => Some(crate::messaging::MAX_POST),
+        // A post: a nonce and the largest envelope, or a nonce and the
+        // longest certificate. An unknown pool's is the route's to answer,
+        // 404.
+        _ if relay("/envelopes") => Some(crate::messaging::MAX_POST),
+        _ if relay("/certificates") => Some(crate::messaging::MAX_CERTIFICATE_POST),
+        // Exactly a nonce and a withdrawal: the route refuses any other length.
+        _ if relay("/withdrawals") => Some(crate::messaging::MAX_WITHDRAWAL_POST),
         "/api/v1/ogmios" => Some(crate::submit::MAX_EVALUATE_BYTES),
         "/api/v1/submittx" => Some(crate::submit::MAX_TX_BYTES),
         _ if crate::public::POSTS.contains(&path) => Some(crate::public::MAX_BODY),
@@ -324,9 +330,93 @@ pub struct Edge {
     pub messaging_egress: Egress,
     /// What's kept of each day's share of the relay's traffic.
     reserve: Reserve,
-    /// Seedelf Messaging stopped (`DATA_MESSAGING_OFF`): every relay route
-    /// answers 410 Gone.
-    messaging_off: bool,
+    /// The relay's pools stopped (`DATA_MESSAGING_OFF`): their routes answer
+    /// 410 Gone, and every relay route does once all are.
+    stopped: Stopped,
+}
+
+/// Which of the relay's pools Seedelf Messaging is stopped for
+/// (`DATA_MESSAGING_OFF`, deploy/README.md's *Stopping Messages*): none,
+/// some, or every one. Held in [`crate::messaging::POOLS`]'s order, each
+/// once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Stopped(Vec<&'static str>);
+
+impl Stopped {
+    /// Stopped for none.
+    pub fn none() -> Self {
+        Stopped(Vec::new())
+    }
+
+    /// Stopped for every pool: `DATA_MESSAGING_OFF=true`.
+    pub fn all() -> Self {
+        Stopped(
+            crate::messaging::POOLS
+                .iter()
+                .map(|pool| pool.name)
+                .collect(),
+        )
+    }
+
+    /// Stopped for each pool `names` names, each a pool's name and named
+    /// once; or the name that isn't one, or is named twice.
+    pub fn of<'a>(names: impl IntoIterator<Item = &'a str>) -> Result<Self, &'a str> {
+        let mut named: Vec<&'static str> = Vec::new();
+        for name in names {
+            let pool = crate::messaging::POOLS
+                .iter()
+                .map(|pool| pool.name)
+                .find(|pool| *pool == name)
+                .ok_or(name)?;
+            if named.contains(&pool) {
+                return Err(name);
+            }
+            named.push(pool);
+        }
+        Ok(Stopped(
+            crate::messaging::POOLS
+                .iter()
+                .map(|pool| pool.name)
+                .filter(|pool| named.contains(pool))
+                .collect(),
+        ))
+    }
+
+    /// Whether the pool `name` is stopped.
+    pub fn pool(&self, name: &str) -> bool {
+        self.0.contains(&name)
+    }
+
+    /// Whether every pool is: then every route under `/messaging/` answers
+    /// 410, as `true` always made it.
+    pub fn every(&self) -> bool {
+        crate::messaging::POOLS
+            .iter()
+            .all(|pool| self.pool(pool.name))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The pools stopped, comma-separated, as the variable names them:
+    /// for the start's log line.
+    pub fn names(&self) -> String {
+        self.0.join(",")
+    }
+
+    /// Whether a request to `path`, under `/messaging/`, is a stopped
+    /// pool's: every one is once all are; else one under
+    /// `/messaging/v1/{pool}/` for a pool that's stopped. A path that names
+    /// no pool is then the routes' to answer, as with none stopped.
+    fn stops(&self, path: &str) -> bool {
+        if self.every() {
+            return true;
+        }
+        path.strip_prefix("/messaging/v1/")
+            .and_then(|rest| rest.split_once('/'))
+            .is_some_and(|(pool, _)| self.pool(pool))
+    }
 }
 
 impl Edge {
@@ -344,25 +434,38 @@ impl Edge {
             egress,
             messaging_egress: Egress::new(None, None),
             reserve: Reserve::DEFAULT,
-            messaging_off: false,
+            stopped: Stopped::none(),
         }
     }
 
-    /// Seedelf Messaging stopped, or not: the relay's off switch
-    /// (`DATA_MESSAGING_OFF`, deploy/README.md's *Stopping Messages*).
-    /// While it's off, every request under `/messaging/` is a 410 Gone,
-    /// which tells the wallet Messages is stopped (protocol.md's freeze of
-    /// `/messaging/v1/`): it posts nothing, solves nothing, and asks again
-    /// now and then. A post is refused unread, so nothing is kept; the
-    /// pools' files wait on disk, and what they hold expires as ever.
-    pub fn with_messaging_off(mut self, off: bool) -> Self {
-        self.messaging_off = off;
+    /// Seedelf Messaging stopped for every pool, or for none: the relay's
+    /// off switch as `true` or `false` sets it ([`Edge::with_stopped`]).
+    pub fn with_messaging_off(self, off: bool) -> Self {
+        self.with_stopped(if off { Stopped::all() } else { Stopped::none() })
+    }
+
+    /// The relay's off switch (`DATA_MESSAGING_OFF`, deploy/README.md's
+    /// *Stopping Messages*), for the pools `stopped` names. A stopped pool's
+    /// routes, `/messaging/v1/{pool}/…`, answer 410 Gone, which tells the
+    /// wallet Messages is stopped on that network (protocol.md's freeze of
+    /// `/messaging/v1/`): it posts nothing there, solves nothing, and asks
+    /// again now and then. A post is refused unread, so nothing is kept;
+    /// the pools' files wait on disk, and what they hold expires as ever.
+    /// The other pool's routes answer as ever; once every pool is stopped,
+    /// every route under `/messaging/` answers 410.
+    pub fn with_stopped(mut self, stopped: Stopped) -> Self {
+        self.stopped = stopped;
         self
     }
 
-    /// Whether Seedelf Messaging is stopped.
+    /// Whether Seedelf Messaging is stopped for every pool.
     pub fn messaging_off(&self) -> bool {
-        self.messaging_off
+        self.stopped.every()
+    }
+
+    /// The pools Seedelf Messaging is stopped for.
+    pub fn stopped(&self) -> &Stopped {
+        &self.stopped
     }
 
     /// The relay's own ceiling, inside the API's.
@@ -687,10 +790,18 @@ pub async fn limit(State(edge): State<Arc<Edge>>, mut request: Request, next: Ne
         let body = axum::Json(serde_json::json!({ "error": "only Seedelf Wallet reads this" }));
         return (StatusCode::FORBIDDEN, body).into_response();
     }
+    // A relay path spelled with a percent-encoding is refused: the routes
+    // decode a pool's name, and the off switch's check below reads the path
+    // as sent, so `pre%70rod` would walk past it. The wallet never sends
+    // one.
+    if part == Part::Messaging && request.uri().path().contains('%') {
+        let body = axum::Json(serde_json::json!({ "error": "encoded paths aren't taken here" }));
+        return (StatusCode::BAD_REQUEST, body).into_response();
+    }
     // Before every other limit, so a wallet learns it whatever its bucket
     // or the day's traffic, and before the body is read, so a post's is
     // never looked at.
-    if part == Part::Messaging && edge.messaging_off {
+    if part == Part::Messaging && edge.stopped.stops(request.uri().path()) {
         let body = axum::Json(serde_json::json!({ "error": "messaging is stopped" }));
         return (StatusCode::GONE, body).into_response();
     }
@@ -1391,6 +1502,55 @@ mod tests {
         assert_eq!(client_key(mapped), "203.0.113.7".parse::<IpAddr>().unwrap());
     }
 
+    /// The off switch by pool: a stopped pool's routes, and only its, under
+    /// `/messaging/v1/{pool}/`; every route under `/messaging/` once both
+    /// are, as `true` makes it; and a name list that isn't one refused.
+    #[test]
+    fn a_pool_is_stopped_alone_and_every_relay_route_once_both_are() {
+        let preprod = Stopped::of(["preprod"]).unwrap();
+        for path in [
+            "/messaging/v1/preprod/envelopes",
+            "/messaging/v1/preprod/certificates",
+            "/messaging/v1/preprod/withdrawals",
+            "/messaging/v1/preprod/anything",
+        ] {
+            assert!(preprod.stops(path), "{path}");
+        }
+        for path in [
+            "/messaging/v1/mainnet/envelopes",
+            "/messaging/v1/mainnet/certificates",
+            "/messaging/v1/mainnet/withdrawals",
+            "/messaging/v1/elsewhere/envelopes",
+            "/messaging/v1/preprodx/envelopes",
+            "/messaging/v2/preprod/envelopes",
+            "/messaging/v1/preprod",
+        ] {
+            assert!(!preprod.stops(path), "{path}");
+        }
+        assert!(!preprod.every() && preprod.pool("preprod") && !preprod.pool("mainnet"));
+        // Both, in either order, are `true`.
+        for both in [
+            Stopped::of(["preprod", "mainnet"]).unwrap(),
+            Stopped::of(["mainnet", "preprod"]).unwrap(),
+        ] {
+            assert_eq!(both, Stopped::all());
+            assert!(both.every());
+            assert!(both.stops("/messaging/v1/elsewhere/envelopes"));
+            assert!(both.stops("/messaging/v2/preprod/envelopes"));
+            assert_eq!(both.names(), "mainnet,preprod");
+        }
+        assert!(!Stopped::none().stops("/messaging/v1/preprod/envelopes"));
+        assert!(Stopped::none().is_empty());
+        assert_eq!(Stopped::of(["preprod", "preprod"]), Err("preprod"));
+        assert_eq!(Stopped::of(["testnet"]), Err("testnet"));
+        assert_eq!(Stopped::of([""]), Err(""));
+        // The edge's own: true and false as ever.
+        let edge = edge().with_messaging_off(true);
+        assert!(edge.messaging_off() && edge.stopped().every());
+        let edge = edge.with_messaging_off(false);
+        assert!(!edge.messaging_off() && edge.stopped().is_empty());
+    }
+
     #[test]
     fn messaging_has_buckets_of_its_own() {
         let edge = edge();
@@ -1406,6 +1566,14 @@ mod tests {
         edge.sweep(start + Duration::from_secs(3600));
         assert_eq!((edge.buckets(), edge.messaging_buckets()), (0, 0));
         assert_eq!(Part::of("/messaging/v1/mainnet/envelopes"), Part::Messaging);
+        assert_eq!(
+            Part::of("/messaging/v1/preprod/certificates"),
+            Part::Messaging
+        );
+        assert_eq!(
+            Part::of("/messaging/v1/preprod/withdrawals"),
+            Part::Messaging
+        );
         assert_eq!(Part::of("/api/v1/tip"), Part::Data);
         assert_eq!(Part::of("/messagingx"), Part::Data);
     }
@@ -1507,6 +1675,18 @@ mod tests {
         }
         // An unknown pool's post is its route's to answer, 404.
         assert_eq!(post("/messaging/v1/elsewhere/envelopes"), Some(8 + 32_768));
+        // A certificate post: a nonce and the longest certificate (§21.7);
+        // a withdrawal's, a nonce and a withdrawal.
+        for pool in ["mainnet", "preprod", "elsewhere"] {
+            assert_eq!(
+                post(&format!("/messaging/v1/{pool}/certificates")),
+                Some(8 + 304)
+            );
+            assert_eq!(
+                post(&format!("/messaging/v1/{pool}/withdrawals")),
+                Some(8 + 98)
+            );
+        }
         assert_eq!(post("/api/v1/ogmios"), Some(64 * 1024));
         assert_eq!(post("/api/v1/submittx"), Some(16 * 1024));
         assert_eq!(crate::public::POSTS.len(), 16);
@@ -1521,6 +1701,12 @@ mod tests {
             "/messaging/v1//envelopes",
             "/messaging/v1/mainnet/x/envelopes",
             "/messaging/v1/mainnet/envelopes/",
+            "/messaging/v1//certificates",
+            "/messaging/v1/mainnet/x/certificates",
+            "/messaging/v1/mainnet/certificates/",
+            "/messaging/v1/mainnet/certificate",
+            "/messaging/v1//withdrawals",
+            "/messaging/v1/mainnet/withdrawals/",
             "/api/v1/credential_utxos/",
             "/nowhere",
         ] {
@@ -1529,6 +1715,16 @@ mod tests {
         for method in [Method::GET, Method::PUT, Method::PATCH, Method::DELETE] {
             assert_eq!(
                 body_limit(&method, "/messaging/v1/mainnet/envelopes"),
+                None,
+                "{method}"
+            );
+            assert_eq!(
+                body_limit(&method, "/messaging/v1/mainnet/certificates"),
+                None,
+                "{method}"
+            );
+            assert_eq!(
+                body_limit(&method, "/messaging/v1/mainnet/withdrawals"),
                 None,
                 "{method}"
             );

@@ -2,7 +2,13 @@
 //! Seedelf Messaging, 54g). A pool's cap counts envelope bytes, so the heap
 //! must grow by about what the pool says it holds: an envelope kept as a
 //! view of the HTTP read buffer it arrived in would pin 8 to 132 KiB for its
-//! 512 counted bytes.
+//! 512 counted bytes. The list of certificates (chunk 55's 55c) is measured
+//! after it: its cap counts certificates' bytes, and its indexes add about
+//! as much again (2.37 times, 647 bytes a 273-byte certificate, measured
+//! 2026-11-26), so mainnet's 64 MiB list holds about 150 MiB of heap. Its
+//! posts meet the chain check, a Koios on loopback in this process, filled
+//! before the count and keeping counts alone, read by a view that keeps no
+//! answer.
 //!
 //! The whole process's live heap is counted, so this test has a binary of
 //! its own. The server runs here, on a local port, with no source and
@@ -22,6 +28,10 @@ use seedelf_data_api::messaging::{Config, Relay};
 use seedelf_data_api::state::AppState;
 use seedelf_data_api::submit::Submit;
 use serde_json::Value;
+
+mod common;
+use common::{KoiosMock, Made};
+use seedelf_data_api::messaging::view::{Koios, View};
 
 /// The system's allocator, counting the bytes that are live.
 struct Counting;
@@ -82,6 +92,7 @@ static POOL: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// A post with any nonce of the vectors' 512-byte envelope: valid points,
@@ -120,7 +131,12 @@ async fn a_kept_envelope_costs_the_heap_about_its_own_bytes() {
     ));
     let submit = Arc::new(Submit::new(None, None).unwrap());
     let edge = Arc::new(Edge::new(true, vec![], Egress::new(None, None)));
-    let relay = Arc::new(Relay::with_pools(None, &POOL));
+    // The list's posts meet the chain check: a Koios on loopback that holds
+    // each Seedelf where its certificate says, filled before the count, and
+    // a view that keeps no answer, so neither grows the heap as it's counted.
+    let koios = KoiosMock::start();
+    let view = Koios::with(&koios.url, Duration::from_secs(5), Duration::ZERO).unwrap();
+    let relay = Arc::new(Relay::with_pools(None, &POOL).with_view("preprod", View::Koios(view)));
     let app = seedelf_data_api::app(state, submit, edge, relay.clone(), &[]);
     // Served as main.rs serves it: its listener's socket options, its caps
     // on connections, and its record of each (serve.rs).
@@ -189,6 +205,64 @@ async fn a_kept_envelope_costs_the_heap_about_its_own_bytes() {
     assert!(
         grown < 2 * counted,
         "the heap grew {grown} bytes for {counted} counted: {:.1} times what the pool's cap counts",
+        grown as f64 / counted as f64,
+    );
+
+    // The list (chunk 55's 55c), after the pool, in the same count: a
+    // listed certificate's bytes, and its place in the list's indexes,
+    // against what the list's cap counts. Each certificate is made before
+    // the count starts.
+    let url = format!("http://127.0.0.1:{port}/messaging/v1/preprod/certificates");
+    let certificates: Vec<Vec<u8>> = (0..warm + POSTS)
+        .map(|i| {
+            // A Seedelf of its own each, a 2-byte name, so 274 bytes.
+            let made = Made::preprod(&(i as u16).to_be_bytes(), 1 + u64::from(i), 3);
+            koios.hold(&made.name, &made.register());
+            [&[0u8; 8][..], &made.bytes()].concat()
+        })
+        .collect();
+    let post_certificate = async |i: u32| {
+        let response = client
+            .post(&url)
+            // Addresses of their own: the envelopes spent the others' buckets.
+            .header(
+                "x-forwarded-for",
+                format!("198.51.100.{}", 1 + i % ADDRESSES),
+            )
+            .header("content-type", "application/octet-stream")
+            .body(certificates[i as usize].clone())
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let answer = response.text().await.unwrap();
+        assert_eq!(status, 200, "{answer}");
+        assert!(answer.contains("\"new\""), "{answer}");
+    };
+    for i in 0..warm {
+        post_certificate(i).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let before = LIVE.load(Ordering::Relaxed);
+    for i in warm..warm + POSTS {
+        post_certificate(i).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after = LIVE.load(Ordering::Relaxed);
+    assert_eq!(
+        relay.health()["preprod"]["certificates"],
+        u64::from(warm + POSTS)
+    );
+    let counted = u64::from(POSTS) * 274;
+    let grown = after.saturating_sub(before) as u64;
+    println!(
+        "listed {POSTS} certificates = {counted} counted bytes; the heap grew {grown} bytes = {} a certificate ({:.2} times its size)",
+        grown / u64::from(POSTS),
+        grown as f64 / counted as f64,
+    );
+    assert!(
+        grown < 3 * counted,
+        "the heap grew {grown} bytes for {counted} counted: {:.1} times what the list's cap counts",
         grown as f64 / counted as f64,
     );
     server.abort();

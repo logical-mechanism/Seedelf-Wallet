@@ -79,7 +79,7 @@ Run it as the role db-sync writes with. It skips any index already there, and bu
    - `curl 127.0.0.1:8099/health` answers 200 with `"source":"db-sync"`.
 6. **The deploy user,** for `.github/workflows/data-layer-deploy.yml`:
    - `useradd --system --create-home --home-dir /home/deploy --shell /bin/sh deploy`, with `/home/deploy/.ssh` its own, mode `0700`;
-   - `edge/seedelf-data-deploy` as `/usr/local/sbin/seedelf-data-deploy`, root's, mode `0755`;
+   - `edge/seedelf-data-deploy` as `/usr/local/sbin/seedelf-data-deploy`, root's, mode `0755` (a new version of it: [The deploy script](#the-deploy-script));
    - `edge/sudoers-seedelf-deploy` as `/etc/sudoers.d/seedelf-deploy`, mode `0440`, after `visudo -cf` passes it;
    - a key made on your own machine (`ssh-keygen -t ed25519`):
      - its public half after `edge/deploy-authorized_keys`'s prefix, as `/home/deploy/.ssh/authorized_keys` (deploy's, `0600`);
@@ -118,6 +118,13 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   ```bash
   curl -s https://mainnet.seedelf.logicalmechanism.io/messaging/v1/mainnet/envelopes | head -c 16 | od -An -tx1
   ```
+- **The certificate lists** (chunk 55): each pool in `/health`'s `messaging` also gives `certificates`, `withdrawn` and `chain`, which is `index` for mainnet (the data layer's own names index) and `koios` for preprod. A list page answers 200 with its 13-byte header (`01`, then flags, a cursor, a price and a count):
+
+  ```bash
+  curl -s https://mainnet.seedelf.logicalmechanism.io/messaging/v1/preprod/certificates | head -c 13 | od -An -tx1
+  ```
+
+  A preprod certificate post that answers 503 `can't check the chain now` for minutes on end means the relay can't reach Koios preprod (`PREPROD_KOIOS_URL`, by default `https://preprod.koios.rest/api/v1`).
 - **The edge's limits at start:** `journalctl -u seedelf-data-api -b | grep "the edge's limits"` names each cap: in flight per address (`in_flight_messaging_address`, `in_flight_data_address`), in flight in all (`in_flight_messaging`, `in_flight_data`), the data answers held (`answers_mib`), the answers compressed at once (`compressing`) and the connections (`connections`). Unset, they're 16, 64, 512, 2048, 256, 64 and 8192 ([the edge](../README.md#the-edge)).
 - **HTTP/1.1 and HTTP/2 alone:** `curl -sI https://mainnet.seedelf.logicalmechanism.io/health | grep -i alt-svc` prints nothing: Caddy offers no HTTP/3.
 - **Limits,** from a third machine, never the maintainer's:
@@ -142,7 +149,7 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
   | the tunnel | every part 503 within 6 s, and a submit 503 within 3 s (it can't connect); the relay carries on |
   | home's power | the same, then a clean start in NUT's order |
   | the VPS | the wallet goes to Koios |
-  | Messages, by its lever ([Stopping Messages](#stopping-messages)) | every `/messaging/` route answers 410 through the public name, with CORS for the wallet's origin, a post's too, and a post's preflight is still answered; `/health` says `"relay":"off"`, and every other route answers as before. A wallet with Messages on shows them paused, solves and posts nothing, and asks one page an hour and one at each unlock. Undone, `/health` says `"relay":"on"`, a page answers 200, and each wallet posts what it queued |
+  | Messages, by its lever ([Stopping Messages](#stopping-messages)) | one network stopped: its routes answer 410 and the other's as before, and `/health` says `"relay":"partly"`. Both: every `/messaging/` route answers 410 through the public name, with CORS for the wallet's origin, a post's too, and a post's preflight is still answered; `/health` says `"relay":"off"`, and every other route answers as before. A wallet with Messages on shows them paused, solves and posts nothing, and asks one page an hour and one at each unlock. Undone, `/health` says `"relay":"on"`, a page answers 200, and each wallet posts what it queued |
 
   The wallet goes back to the API at its first read after a 5-minute hold, and a retry that fails starts the hold again. Postgres keeps answering on `10.88.0.2` across a restart of the tunnel. The drills as run, with their times, are in [the archived plan for the VPS's set-up](../../seedelf-platform/seedelf-web-wallet/docs/archive/plans/chunk-26c-data-layer-vps.md#the-drills-2026-10-09).
 
@@ -151,7 +158,9 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 - **A new API build:** GitHub's Actions → *Data layer deploy* → *Run workflow*, on `main`, and approve the run when GitHub asks.
   - `deploy` builds `main` and installs it, keeping the running binary as `.prev`. It checks `/health`, which must answer as well as before, and the store's CORS line, and puts the old binary back by itself if the new one fails.
   - `rollback` swaps the two, and a second one undoes it. `status` says what's running.
+  - `messaging-off-<network>` and `messaging-on-<network>` stop one network's Messages, or start them again, and change nothing else: [Stopping Messages](#stopping-messages).
   - **After a deploy, check by hand the routes `/health` doesn't read:** the token pools', two public ones, and a relay's page (§5's command). The commands are [the release procedure's](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package), after its `status` run. A restarted server works out its first pool list in the background, for up to a minute, so the token pools' routes can answer 503 meanwhile: ask again before you take it for a failed deploy.
+  - **A `rollback` refuses while one network alone is stopped,** or both by name (`DATA_MESSAGING_OFF=preprod`, `mainnet` or `mainnet,preprod`, as the Actions write it), in the drop-in or in the environment file: a build from before per-network stopping reads only `true` or `false`, and wouldn't start on a list. It says `STOP` and changes nothing. Turn that network's Messages back on first (`messaging-on-<network>`), or stop both by hand, which writes `true` ([Stopping Messages](#stopping-messages)), or set the environment file's line to `true` or `false`, then roll back.
   - **A `rollback` can take a route, or a request's shape, away from a released wallet,** against [the release rule](../../seedelf-platform/seedelf-web-wallet/docs/development.md#2-on-main-after-the-merge-build-and-test-the-store-package) that a wallet the store ships never meets an older API. Its checks pass all the same: they read `/health` and CORS alone. So roll back only as a stopgap, and fix forward. A route the old build lacks answers 404, and a request it takes in another shape answers 400:
     - on a public route (`/api/v1/…`) or the private index's, either holds that whole part of the wallet on Koios for 5 minutes, and again at its first such request after each hold;
     - on the token pools' routes (`lovejoin/pools`, `lovejoin/tokens` and `lovejoin/tokens/since`), neither holds any part. The wallet reads the token pools' boxes from Koios instead and asks it what made its own ([privacy.md](../../seedelf-platform/seedelf-web-wallet/docs/privacy.md#known-links), *Lovejoin*), looks for new pools at Koios's holder, shows no crowd counts on the Lovejoin hub, and watches a token pool's chain through `tx_status`.
@@ -170,59 +179,109 @@ An earlier form of this step moved the node's and db-sync's traffic into the tun
 
 ### Stopping Messages
 
-Seedelf Messaging stops for every wallet at once, and the rest of the data layer goes on. The lever is `DATA_MESSAGING_OFF=true` in the API's environment, set by a drop-in beside the unit so the environment file isn't touched, and a restart. Never put it in the environment file: systemd lets that file's value override the drop-in's, so the lever would then do nothing. Both blocks below say `STOP` if it's there:
+Seedelf Messaging stops for one network, or for both, and the rest of the data layer goes on. The lever is `DATA_MESSAGING_OFF` in the API's environment, set by a drop-in beside the unit, `/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf`, so the environment file isn't touched, and a restart. It's `true`, both networks, or the pools stopped, comma-separated: `preprod`, `mainnet`, or `mainnet,preprod`, which is `true`. Never put it in the environment file: systemd lets that file's value override the drop-in's, so the lever would then do nothing. The Actions and both blocks below say `STOP` if it's there.
 
-- **Every route under `/messaging/` answers 410 Gone,** `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. Every other route answers as before, and `/health` says `"relay":"off"`.
+**From GitHub, one network at a time:** Actions → *Data layer deploy* → *Run workflow*, on `main`, and approve the run when GitHub asks. It builds nothing.
+
+- `messaging-off-preprod` or `messaging-off-mainnet` stops that network's Messages, and the other's go on. Preprod's test ADA is free, so the price that bounds mainnet's posts bounds nothing there: this is the lever for a flood on preprod.
+- `messaging-on-preprod` or `messaging-on-mainnet` starts them again.
+- Both stopped is `true`: every route under `/messaging/` answers 410, as the by-hand block makes it.
+- **What the run prints:** the pools stopped after it and before it, its check (that `/health` answers at all, `200`, or `503` while home is down, since a stop mustn't wait on home; and the store's CORS line), each pool's page, `410` for one stopped and any answer but `410` for one running (`200` as a rule; a `503` or `429` the pool gives for its own reasons passes, and no answer doesn't), and `/health`'s `"relay"`. If systemd can't reload, the API doesn't answer, or a page is wrong, the drop-in is put back as it was and the run fails. `STOP`, and nothing changed, if the environment file sets `DATA_MESSAGING_OFF`, the drop-in is in any form but the one the Actions and the blocks below write, or that network is stopped, or running, already.
+- **Needs an API that reads a list of pools,** whose `/health` gives each pool a `"stopped"`, and [the deploy script](#the-deploy-script) with the `messaging` action. On an older API the restart fails its check and the drop-in goes back; on an older script the run prints the script's usage.
+
+**What a stop does:**
+
+- **A stopped pool's routes answer 410 Gone,** `/messaging/v1/<pool>/…`: its envelopes, its list of certificates and its withdrawals, `{"error":"messaging is stopped"}`, with CORS, before any other limit. A post's body isn't read, so nothing is kept. The other pool's routes answer as before, and once both are stopped, every route under `/messaging/` answers 410. Every other route answers as before. `/health` says `"relay":"off"` with both stopped, `"partly"` with one, `"on"` with none, and each pool's `"stopped"` says which.
 - **The pools wait on disk,** and what they hold still expires 36 hours after it came. A deploy keeps the drop-in, so Messages stays stopped across deploys until it's undone.
-- **What wallets do:** a wallet with Messages on reads the 410 as Messages stopped, and shows them as paused. It solves and posts nothing there, keeps what's queued, and asks one page an hour, and one at each unlock, until a page gets an answer other than the 410. A stopped relay still sees those pages, and now and then a post a wallet made as it unlocked.
+- **What wallets do:** a wallet with Messages on reads the 410 on a network's relay as Messages stopped there, and shows that network's Messages as paused; the other network's go on. It solves and posts nothing there, keeps what's queued, and asks one page an hour, and one at each unlock, until a page gets an answer other than the 410. A stopped relay still sees those pages, and now and then a post a wallet made as it unlocked.
 - **The restart** takes every part away for a moment, and a wallet that reads then goes to Koios for 5 minutes. Its stop saves the pools clean.
 - **Never `DATA_MESSAGING_GB_MONTH=0`:** the API refuses `0` at start and doesn't run, however often systemd starts it again. Every route is down, and every wallet's reads go to Koios on 5-minute holds.
 
-**To stop it,** on the VPS, as `seedelf`. It prints the machine's name, then `"relay":"off"` from `/health` and a page's status, `410`, or `FAILED` and why. Run again, it says `STOP` and changes nothing:
+**By hand, both networks at once,** on the VPS, as `seedelf`: the same lever, `true`. Each block takes the deploy script's lock, so it never runs beside a deploy, a rollback or an Action's run, and says `STOP` if one is under way. A by-hand `true` and the Actions agree. The Actions read `true` as both networks, so `messaging-on-preprod` after it leaves mainnet stopped. This block makes `true` of whatever the drop-in holds, one network or none, and the undo below removes the drop-in, whichever set it. If systemd can't reload or restart, each puts the drop-in back as it was, and says `FAILED`. **To stop both,** it prints the machine's name, then `"relay":"off"` from `/health` and each pool's page, `410`, or `FAILED` and why. Run again, it says `STOP` and changes nothing:
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
 e=/etc/seedelf-data/env
-if grep -qsE '^[[:space:]]*DATA_MESSAGING_OFF=' "$e"; then
+exec 9>/run/lock/seedelf-data-deploy.lock
+if ! flock -n 9; then
+  echo "STOP: a deploy, a rollback or a messaging run is under way: run this again once it's done"
+elif grep -qsE '^[[:space:]]*(export[[:space:]]+)?DATA_MESSAGING_OFF[[:space:]]*=' "$e"; then
   echo "STOP: $e sets DATA_MESSAGING_OFF, which overrides this lever: take that line out of it first"
-elif [ -e "$f" ]; then
-  echo "STOP: Messages is stopped already ($f)"
+elif grep -qsxE 'Environment=DATA_MESSAGING_OFF=(true|mainnet,preprod)' "$f"; then
+  echo "STOP: Messages is stopped already for both networks ($f)"
 else
+  # The drop-in as it was, put back if systemd can't reload or restart.
+  old=$(mktemp)
+  trap 'rm -f "$old"' EXIT
+  if [ -e "$f" ]; then cp -p "$f" "$old"; had=yes; else had=no; fi
+  back() {
+    if [ "$had" = yes ]; then cp -p "$old" "$f"; else rm -f "$f"; fi
+    systemctl daemon-reload || true
+    if [ "$step" = restart ]; then systemctl restart seedelf-data-api || true; fi
+    echo "FAILED: systemctl $step failed, so the drop-in is back as it was: journalctl -u seedelf-data-api -n 20"
+  }
   mkdir -p "$(dirname "$f")"
   printf '[Service]\nEnvironment=DATA_MESSAGING_OFF=true\n' > "$f"
+  trap back ERR
+  step=daemon-reload
   systemctl daemon-reload
+  step=restart
   systemctl restart seedelf-data-api
+  trap - ERR
   for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
   echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
-  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes || true)
-  echo "a page: $code"
-  [ "$code" = 410 ] || echo "FAILED: a page answers $code, not 410: journalctl -u seedelf-data-api -n 20"
+  for pool in mainnet preprod; do
+    code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "127.0.0.1:8099/messaging/v1/$pool/envelopes" || true)
+    echo "$pool's page: $code"
+    [ "$code" = 410 ] || echo "FAILED: $pool's page answers $code, not 410: journalctl -u seedelf-data-api -n 20"
+  done
 fi
 SCRIPT
 ```
 
-**To undo it,** the same way. It prints `"relay":"on"` and `200`, or `FAILED` and why. Undo it only once what stopped it is safe to let back: every wallet then posts what it queued meanwhile, at its next ask, whatever its version.
+**To undo it,** both networks, the same way: it removes the drop-in, whatever it holds. It prints `"relay":"on"` and each pool's page, any answer but `410` (`200` as a rule), or `FAILED` and why. Undo it only once what stopped it is safe to let back: every wallet then posts what it queued meanwhile, at its next ask, whatever its version.
 
 ```bash
 # seedelf-data-layer (the VPS)
 hostname && sudo bash -euo pipefail <<'SCRIPT'
 f=/etc/systemd/system/seedelf-data-api.service.d/messaging-off.conf
 e=/etc/seedelf-data/env
-if grep -qsE '^[[:space:]]*DATA_MESSAGING_OFF=' "$e"; then
+exec 9>/run/lock/seedelf-data-deploy.lock
+if ! flock -n 9; then
+  echo "STOP: a deploy, a rollback or a messaging run is under way: run this again once it's done"
+elif grep -qsE '^[[:space:]]*(export[[:space:]]+)?DATA_MESSAGING_OFF[[:space:]]*=' "$e"; then
   echo "STOP: $e sets DATA_MESSAGING_OFF, which overrides this lever: take that line out of it first"
 elif [ ! -e "$f" ]; then
   echo "STOP: Messages isn't stopped by this lever (there's no $f)"
 else
+  # The drop-in as it was, put back if systemd can't reload or restart.
+  old=$(mktemp)
+  trap 'rm -f "$old"' EXIT
+  cp -p "$f" "$old"
+  back() {
+    cp -p "$old" "$f"
+    systemctl daemon-reload || true
+    if [ "$step" = restart ]; then systemctl restart seedelf-data-api || true; fi
+    echo "FAILED: systemctl $step failed, so the drop-in is back as it was: journalctl -u seedelf-data-api -n 20"
+  }
   rm -f "$f"
+  trap back ERR
+  step=daemon-reload
   systemctl daemon-reload
+  step=restart
   systemctl restart seedelf-data-api
+  trap - ERR
   for i in $(seq 30); do curl -s -m 2 -o /dev/null 127.0.0.1:8099/health && break; sleep 1; done
   echo "the relay: $(curl -s -m 5 127.0.0.1:8099/health | grep -o '"relay":"[a-z]*"' || echo 'no answer: journalctl -u seedelf-data-api -n 20')"
-  code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' 127.0.0.1:8099/messaging/v1/mainnet/envelopes || true)
-  echo "a page: $code"
-  [ "$code" = 200 ] || echo "FAILED: a page answers $code, not 200: journalctl -u seedelf-data-api -n 20"
+  for pool in mainnet preprod; do
+    code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' "127.0.0.1:8099/messaging/v1/$pool/envelopes" || true)
+    echo "$pool's page: $code"
+    case "$code" in
+    410 | 000 | '') echo "FAILED: $pool's page answers ${code:-nothing}, where any answer but 410 is right: journalctl -u seedelf-data-api -n 20" ;;
+    esac
+  done
 fi
 SCRIPT
 ```
@@ -242,9 +301,43 @@ echo "a post: $(printf 123456789 | curl -s -m 10 -D - -o /dev/null -X POST "$api
 echo "a post's preflight: $(curl -s -m 10 -D - -o /dev/null -X OPTIONS "$api/messaging/v1/preprod/envelopes" -H "$o" -H 'Access-Control-Request-Method: POST' -H 'Access-Control-Request-Headers: content-type' | tr -d '\r' | grep -iE "$want" | tr '\n' ' ')"
 ```
 
-- **Stopped:** `"relay":"off"`; each page and the post `HTTP/2 410`, each with `access-control-allow-origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp` and `access-control-expose-headers: retry-after`; the preflight `HTTP/2 200` with `access-control-allow-methods: GET,POST`. A 410 with no `access-control-allow-origin` is one a wallet can't read: it takes it for no answer, and asks every minute where it should ask every hour.
+- **One network stopped:** `"relay":"partly"`; that network's page `HTTP/2 410` with the same headers as below, and the other's `HTTP/2 200`. The post goes to preprod's pool: `410` when preprod is stopped, `400` when it isn't.
+- **Both stopped:** `"relay":"off"`; each page and the post `HTTP/2 410`, each with `access-control-allow-origin: chrome-extension://dkefopeefhophfkjkkdebhoklagjdmcp` and `access-control-expose-headers: retry-after`; the preflight `HTTP/2 200` with `access-control-allow-methods: GET,POST`. A 410 with no `access-control-allow-origin` is one a wallet can't read: it takes it for no answer, and asks every minute where it should ask every hour.
 - **On again:** `"relay":"on"`; each page `HTTP/2 200` and the post `HTTP/2 400` (nine bytes are no envelope), with the same two headers; the preflight as before.
 - **A wallet,** on a development build with Messages on: stopped, the Messages page says *Messages are paused* and when the server is asked again, an hour on; on again, the line goes at the wallet's next page, at the hour's ask or the next unlock.
+
+### The deploy script
+
+`edge/seedelf-data-deploy`, installed by hand as `/usr/local/sbin/seedelf-data-deploy`, root's, mode `0755`: a deploy doesn't install it. A new version of it goes in once, after the change that makes it is on `main`. The block below fetches it from `main` and installs it only if its sha256 is the one written here, which is also `RUNBOOK_PINS` in `api/tests/edge.rs`: a change to the script fails that test until both are updated. It keeps the one before as `seedelf-data-deploy.before`. On the VPS, as `seedelf`. It prints the machine's name, then the new script's sha256, owner and mode, its usage, and its `status`. Run again, it says `STOP` and changes nothing; `STOP` too, and nothing changed, if what `main` gives isn't that version (GitHub's copy can lag a push by 5 minutes):
+
+```bash
+# seedelf-data-layer (the VPS)
+hostname && sudo bash -euo pipefail <<'SCRIPT'
+want=989a99c3754d9e15d921de54b68dd569e8c6c32a3655c3ab7420b36485209d0d
+url=https://raw.githubusercontent.com/logical-mechanism/Seedelf-Wallet/main/seedelf-data/deploy/edge/seedelf-data-deploy
+f=/usr/local/sbin/seedelf-data-deploy
+new=$(mktemp)
+trap 'rm -f "$new"' EXIT
+if [ "$(sha256sum "$f" | cut -d' ' -f1)" = "$want" ]; then
+  echo "STOP: $f is this version already ($want)"
+elif ! curl -fsS -m 30 -o "$new" "$url"; then
+  echo "STOP: $url didn't answer: nothing changed"
+elif [ "$(sha256sum "$new" | cut -d' ' -f1)" != "$want" ]; then
+  echo "STOP: $url isn't $want but $(sha256sum "$new" | cut -d' ' -f1): main has another version, or GitHub's copy lags; nothing changed"
+elif ! sh -n "$new"; then
+  echo "STOP: the fetched script doesn't parse: nothing changed"
+else
+  cp -p "$f" "$f.before"
+  install -o root -g root -m 0755 "$new" "$f"
+  echo "installed: $(sha256sum "$f" | cut -d' ' -f1), $(stat -c '%U:%G %a' "$f") (the one before kept as $f.before)"
+  echo "its usage: $("$f" nothing 2>&1 || true)"
+  echo "its status:"
+  "$f" status
+fi
+SCRIPT
+```
+
+It should print `installed: 989a99c3754d9e15d921de54b68dd569e8c6c32a3655c3ab7420b36485209d0d, root:root 755`, a usage line ending `| messaging off|on preprod|mainnet`, and the running binary's sha256 with `/health: 200`. Then, from GitHub, the Actions in [Stopping Messages](#stopping-messages) work. To put the one before back: `sudo install -o root -g root -m 0755 /usr/local/sbin/seedelf-data-deploy.before /usr/local/sbin/seedelf-data-deploy`.
 
 ## Timeouts and limits a deploy doesn't install
 

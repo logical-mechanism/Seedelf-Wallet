@@ -14,7 +14,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{Method, Request, StatusCode, header};
 use axum::response::Response;
 use seedelf_data_api::chain::Chain;
-use seedelf_data_api::edge::{Edge, Egress, Part};
+use seedelf_data_api::edge::{Edge, Egress, Part, Stopped};
 use seedelf_data_api::messaging::check::{stamp_bits, stamp_digest};
 use seedelf_data_api::messaging::price::Prices;
 use seedelf_data_api::messaging::reading::Reading;
@@ -49,6 +49,16 @@ fn relayed_with_share(relay: Relay, share: u64) -> Relayed {
 
 /// [`relayed_with_share`], with messaging `off` (`DATA_MESSAGING_OFF`) or on.
 fn relayed_as(relay: Relay, share: u64, off: bool) -> Relayed {
+    relayed_stopped(
+        relay,
+        share,
+        if off { Stopped::all() } else { Stopped::none() },
+    )
+}
+
+/// [`relayed_with_share`], with messaging stopped for the pools `stopped`
+/// names (`DATA_MESSAGING_OFF`).
+fn relayed_stopped(relay: Relay, share: u64, stopped: Stopped) -> Relayed {
     let state = Arc::new(AppState::new(
         Chain::connect("postgresql://nobody@127.0.0.1:1/nothing").unwrap(),
     ));
@@ -56,7 +66,7 @@ fn relayed_as(relay: Relay, share: u64, off: bool) -> Relayed {
     let edge = Arc::new(
         Edge::new(true, vec![WALLET.to_string()], Egress::new(None, None))
             .with_messaging_egress(Egress::with_share_today(share))
-            .with_messaging_off(off),
+            .with_stopped(stopped),
     );
     let relay = Arc::new(relay);
     let app = seedelf_data_api::app(
@@ -140,6 +150,7 @@ static SMALL_WINDOW: [Config; 1] = [Config {
         envelopes: 3,
         units: 70,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// A price a test passes in a few posts: a bit more for every 0.8 of the
@@ -163,6 +174,7 @@ static LOW_CEILING: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// The same with a window of two envelopes, which the third post passes
@@ -175,6 +187,7 @@ static LOW_CEILING_TWO: [Config; 1] = [Config {
         envelopes: 2,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// Preprod's pool with room for two short envelopes, 1 bit a post, and a
@@ -193,6 +206,7 @@ static TWO_SHORT: [Config; 1] = [Config {
         envelopes: 3,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// A request as Caddy passes it on, from the wallet, from `client`.
@@ -563,6 +577,155 @@ async fn with_messaging_off_every_relay_route_is_gone_and_nothing_is_kept() {
     let health: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap()).unwrap();
     assert_eq!(health["messaging"]["relay"], "off");
+}
+
+/// The off switch by pool (`DATA_MESSAGING_OFF=preprod`, or `mainnet`): the
+/// stopped pool's routes, its envelopes', its list's and its withdrawals',
+/// answer 410 with CORS, unread; the other pool's answer as ever; a path
+/// that names no pool is the routes' to answer, 404; and `/health` says
+/// `"relay":"partly"` and which pool is `stopped`. Both stopped, by name,
+/// is `true`: every route under /messaging/ is 410, and `"relay":"off"`.
+#[tokio::test]
+async fn each_pool_is_stopped_alone_while_the_other_answers() {
+    let routes = |pool: &str| {
+        [
+            (
+                Method::GET,
+                format!("/messaging/v1/{pool}/envelopes"),
+                vec![],
+            ),
+            (
+                Method::POST,
+                format!("/messaging/v1/{pool}/envelopes"),
+                vec![0; 8 + 512],
+            ),
+            (
+                Method::GET,
+                format!("/messaging/v1/{pool}/certificates?after=5"),
+                vec![],
+            ),
+            (
+                Method::POST,
+                format!("/messaging/v1/{pool}/certificates"),
+                vec![0; 8 + 273],
+            ),
+            (
+                Method::POST,
+                format!("/messaging/v1/{pool}/withdrawals"),
+                vec![0; 106],
+            ),
+        ]
+    };
+    let health = |app: &Router| {
+        let app = app.clone();
+        async move {
+            let response = send(&app, request("203.0.113.7", Method::GET, "/health", vec![])).await;
+            let bytes = to_bytes(response.into_body(), 1 << 20).await.unwrap();
+            serde_json::from_slice::<Value>(&bytes).unwrap()["messaging"].clone()
+        }
+    };
+    for (stopped, running) in [("preprod", "mainnet"), ("mainnet", "preprod")] {
+        let Relayed { app, relay, .. } =
+            relayed_stopped(Relay::new(None), 1_000_000, Stopped::of([stopped]).unwrap());
+        for (method, path, body) in routes(stopped) {
+            let response = send(&app, request("203.0.113.7", method, &path, body)).await;
+            assert_eq!(response.status(), StatusCode::GONE, "{path}");
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                WALLET,
+                "{path}"
+            );
+            let bytes = to_bytes(response.into_body(), 1 << 10).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body,
+                serde_json::json!({ "error": "messaging is stopped" }),
+                "{path}"
+            );
+        }
+        // The other pool's routes answer as ever: pages, and each post's own
+        // refusal of bytes that aren't its.
+        for (method, path, body) in routes(running) {
+            let response = send(&app, request("198.51.100.1", method.clone(), &path, body)).await;
+            let want = if method == Method::GET {
+                StatusCode::OK
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            assert_eq!(response.status(), want, "{path}");
+        }
+        // A path spelled with a percent-encoding is refused at the edge,
+        // with CORS, the stopped pool's name or the other's: so no spelling
+        // walks past the switch.
+        for encoded in [
+            format!(
+                "/messaging/v1/{}%{:02x}/envelopes",
+                &stopped[..stopped.len() - 1],
+                stopped.as_bytes()[stopped.len() - 1]
+            ),
+            format!("/messaging/v1/{running}/envelopes%2f"),
+            format!(
+                "/messaging/v1/%{:02x}{}/certificates",
+                stopped.as_bytes()[0],
+                &stopped[1..]
+            ),
+        ] {
+            let response = send(&app, request("203.0.113.7", Method::GET, &encoded, vec![])).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{encoded}");
+            assert_eq!(
+                response.headers()["access-control-allow-origin"],
+                WALLET,
+                "{encoded}"
+            );
+            let bytes = to_bytes(response.into_body(), 1 << 10).await.unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                body["error"], "encoded paths aren't taken here",
+                "{encoded}"
+            );
+        }
+        // A path that names no pool is the routes': as with none stopped.
+        let response = send(
+            &app,
+            request(
+                "203.0.113.7",
+                Method::GET,
+                "/messaging/v1/elsewhere/envelopes",
+                vec![],
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(relay.health()[stopped]["envelopes"], 0);
+        let messaging = health(&app).await;
+        assert_eq!(messaging["relay"], "partly");
+        assert_eq!(messaging["pools"][stopped]["stopped"], true);
+        assert_eq!(messaging["pools"][running]["stopped"], false);
+    }
+    // Both, named: every route under /messaging/ is gone, as with `true`.
+    let Relayed { app, .. } = relayed_stopped(
+        Relay::new(None),
+        1_000_000,
+        Stopped::of(["preprod", "mainnet"]).unwrap(),
+    );
+    for path in [
+        "/messaging/v1/preprod/envelopes",
+        "/messaging/v1/mainnet/certificates",
+        "/messaging/v1/elsewhere/envelopes",
+        "/messaging/v2/preprod/envelopes",
+    ] {
+        let response = send(&app, request("203.0.113.7", Method::GET, path, vec![])).await;
+        assert_eq!(response.status(), StatusCode::GONE, "{path}");
+    }
+    let messaging = health(&app).await;
+    assert_eq!(messaging["relay"], "off");
+    assert_eq!(messaging["pools"]["preprod"]["stopped"], true);
+    assert_eq!(messaging["pools"]["mainnet"]["stopped"], true);
+    // None: on, and neither stopped.
+    let Relayed { app, .. } = relayed(Relay::new(None));
+    let messaging = health(&app).await;
+    assert_eq!(messaging["relay"], "on");
+    assert_eq!(messaging["pools"]["preprod"]["stopped"], false);
 }
 
 #[tokio::test]
@@ -1220,6 +1383,7 @@ static FAST_FLOOR: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// The 1.10.0 gate's FI-11 (the relay review's N4): a 429 past the price's

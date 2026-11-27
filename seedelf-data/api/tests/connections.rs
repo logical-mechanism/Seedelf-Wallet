@@ -88,6 +88,7 @@ static FREE: [Config; 1] = [Config {
         envelopes: 1000,
         units: 4096,
     },
+    list: seedelf_data_api::messaging::POOLS[1].list,
 }];
 
 /// What a test's server is.
@@ -947,6 +948,8 @@ async fn a_body_on_a_route_that_takes_none_is_answered_at_once_unread() {
         ("POST", "/nowhere"),
         ("PUT", "/messaging/v1/mainnet/envelopes"),
         ("GET", "/messaging/v1/mainnet/envelopes"),
+        ("GET", "/messaging/v1/mainnet/certificates"),
+        ("GET", "/messaging/v1/mainnet/withdrawals"),
     ] {
         let mut stream = connect(server.addr, None).await;
         let head = format!(
@@ -972,12 +975,15 @@ async fn a_body_on_a_route_that_takes_none_is_answered_at_once_unread() {
 
 /// A body whose declared length is past what its route takes is a 413 in
 /// the edge's words, with CORS, at once and unread: a post past the
-/// largest envelope, and a data route's past 16 KiB.
+/// largest envelope, one past the longest certificate, one past a
+/// withdrawal, and a data route's past 16 KiB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_declared_length_past_the_route_is_refused_before_it_is_read() {
     let server = start("too-long", Setup::new(Pools::Free)).await;
     for (path, length) in [
         ("/messaging/v1/preprod/envelopes", 8 + 32_768 + 1),
+        ("/messaging/v1/preprod/certificates", 8 + 304 + 1),
+        ("/messaging/v1/preprod/withdrawals", 8 + 98 + 1),
         ("/api/v1/credential_utxos", 16 * 1024 + 1),
     ] {
         let mut stream = connect(server.addr, None).await;

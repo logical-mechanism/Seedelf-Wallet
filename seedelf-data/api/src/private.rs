@@ -299,8 +299,15 @@ async fn since(state: &AppState, watched: Watched, cursor: &str) -> Result<Respo
 /// Every Seedelf name unspent at the tip, with the row that holds it. One
 /// bucket, the whole list, while it's small (the plan's `names/{bucket}`).
 async fn names(State(state): State<Arc<AppState>>) -> Result<Response, ApiError> {
-    let state = &*state;
-    let answer = from_sources(state, "names", |source, tip| async move {
+    Ok(json(names_answer(&state).await?))
+}
+
+/// The names answer's JSON, made once a tip and kept with the source's tip
+/// (`state::ALWAYS_KEPT`): what the names route sends, and what the relay
+/// reads every Seedelf's register from for its chain check (messaging's
+/// `view`), so the check adds no read of its own.
+pub(crate) async fn names_answer(state: &AppState) -> Result<Bytes, ApiError> {
+    from_sources(state, "names", |source, tip| async move {
         let rows = source.unspent_now(Watched::Contract.cred(), false).await?;
         let mut seen = std::collections::HashSet::new();
         let names = rows
@@ -319,6 +326,5 @@ async fn names(State(state): State<Arc<AppState>>) -> Result<Response, ApiError>
             names,
         })
     })
-    .await?;
-    Ok(json(answer))
+    .await
 }
