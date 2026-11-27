@@ -1,8 +1,10 @@
 // A lock leaves no key in the module's memory (run ../build.sh first).
 //
-// The wallet's lock frees its three key objects, scrubs WebAssembly's stack,
-// and then replaces the instance and zeroes the old one's memory
-// (extension/src/background/wallet.ts `free`, wasm.ts `renewWasm`).
+// The wallet's lock frees its key objects (the Seedelf key, the account, the
+// one-time accounts and, since chunk 55, Messages' own key), scrubs
+// WebAssembly's stack, and then replaces the instance and zeroes the old
+// one's memory (extension/src/background/wallet.ts `free`, wasm.ts
+// `renewWasm`).
 //
 // - free(): wasm-bindgen's free() moves an object out of its cell before
 //   dropping it, so a key held in the cell itself was released as it was: the
@@ -10,11 +12,12 @@
 //   object now keeps its key in an allocation of its own that is overwritten
 //   in place (src/lib.rs, `Wiped`). The first tests look there: before free()
 //   the key's bytes are where the object keeps them, and after it no 8 of
-//   them in a row are left.
+//   them in a row are left. A MessagingKey is held to the same (55d): it keeps
+//   x_m the way SeedelfKey keeps x.
 // - scrubStack(): a call leaves copies of what it worked with on the stack,
 //   which no free() reaches: after an unlock, the keys, the BIP39 seed and
 //   the master key they came from. The scrub overwrites the stack's top half
-//   (src/lib.rs, `scrub_stack`). Four tests lock after a run each and then
+//   (src/lib.rs, `scrub_stack`). Five tests lock after a run each and then
 //   look through the whole memory, for the keys, the keys they derive and
 //   what they came from.
 // - The scrub after an unlock: a call that builds something can copy bytes an
@@ -24,14 +27,16 @@
 //   the wallet scrubs once its keys are derived too (wallet.ts `derive`), and
 //   a test runs that order in a fresh instance: nothing is left. Its control
 //   is the same run without that scrub, which leaves those bytes above the
-//   stack.
+//   stack when x_m is derived first, and not when it's derived last: the
+//   test runs both orders.
 // - The instance replaced: the same copying happens between two later calls,
 //   of a key one left on the stack and the next built over, and no scrub the
 //   wallet could make comes between them. The review found, after a lock's
 //   free()s and scrub: 16 bytes of the stake key's signing scalar in the heap
 //   after `stakePublicKey` then `messagingRequestsInfo`, 16 of payment key
 //   0/0 after `paymentKeyHash` then the same, and bytes of the Seedelf key
-//   itself after two `messagingReadRequest`s. So a lock ends by replacing the
+//   itself after two `messagingReadRequest`s (since 55d those calls take the
+//   messaging key, and leave bytes of it the same way). So a lock ends by replacing the
 //   instance with a fresh one and zeroing the old one's memory. The last
 //   tests are those runs: what the free()s and the scrub leave (the control,
 //   which is why the instance goes), and that the instance the glue's reset
@@ -51,6 +56,7 @@ import { readFileSync } from "node:fs";
 import {
   __wbg_reset_state,
   CardanoAccount,
+  MessagingKey,
   Network,
   OneTimeAccounts,
   SeedelfKey,
@@ -58,6 +64,8 @@ import {
   entropyToPhrase,
   initSync,
   messagingAccept,
+  messagingCertificate,
+  messagingCheckCertificate,
   messagingReadRequest,
   messagingReceive,
   messagingRequestsInfo,
@@ -65,6 +73,7 @@ import {
   messagingSend,
   messagingSetStamp,
   messagingStart,
+  messagingValue,
   phraseToEntropy,
   rerandomize,
   scrubStack,
@@ -80,6 +89,8 @@ const bytes = () => Buffer.from(memory().buffer);
 // constant of the module's (it began 5eed0e1f once, the Seedelf prefix, which
 // every instance's memory holds).
 const SK = "1b2c3d4e5f60718293a4b5c6d7e8f9011223344556677889900aabbccddeeff1";
+// A messaging key of the test's own, apart from SK.
+const SK_M = "2a6e0f9c3b81d47e5c92a03f6b18e7d4c09a5f2e8b37d16c4a90e2f5b8c3d7a1";
 const ENTROPY = Buffer.from("9b4f27c5d81e63a07f2c95b8e4d61a3f0c7e58b2a94d16f3857ac2e9b06d4f71", "hex");
 
 // The scalar as the module holds it: blst's Montgomery form, x·2²⁵⁶ mod r,
@@ -182,6 +193,7 @@ function kept(cell, secret) {
 
 for (const [name, make, secret] of [
   ["SeedelfKey", () => SeedelfKey.fromHex(SK), montgomery(SK)],
+  ["MessagingKey", () => MessagingKey.fromHex(SK_M, "preprod"), montgomery(SK_M)],
   ["CardanoAccount", () => CardanoAccount.fromEntropy(new Uint8Array(ENTROPY), 0), accountKey(ENTROPY, 0)],
   ["OneTimeAccounts", () => OneTimeAccounts.fromEntropy(new Uint8Array(ENTROPY)), accountKey(ENTROPY, 0x5eed)],
 ]) {
@@ -223,19 +235,21 @@ test("scrubStack() overwrites the stack's top 512 KiB, all of it, and nothing be
   new Uint8Array(memory().buffer, 0, STACK).fill(0);
 });
 
-// The three objects' keys, by the names the scans below give them.
+// The four objects' keys, by the names the scans below give them.
 const SEEDELF = "the Seedelf key as the module holds it";
 const ACCOUNT = "the account's key";
 const ONE_TIME = "the one-time accounts' key";
-// And three the review's runs leave bytes of.
+const MESSAGING = "the messaging key as the module holds it";
+// And four the review's runs leave bytes of.
 const SEEDELF_BE = "the Seedelf key big-endian";
+const MESSAGING_BE = "the messaging key big-endian";
 const STAKE = "the stake key 2/0";
 const PAYMENT = "payment key 0/0";
 
 /**
  * A phrase's keys and what an unlock derives them from, each as the module
- * holds it (seedelf-crypto's derivation.rs and cardano.rs), and the entropy
- * the vault keeps of the phrase.
+ * holds it (seedelf-crypto's derivation.rs and cardano.rs), the entropy
+ * the vault keeps of the phrase, and its preprod messaging key, hex.
  */
 function walletOf(phrase) {
   const entropy = Buffer.from(phraseToEntropy(phrase));
@@ -243,18 +257,26 @@ function walletOf(phrase) {
   const info = Buffer.concat([Buffer.from("seedelf-key"), Buffer.alloc(4)]);
   const okm = Buffer.from(hkdfSync("sha256", seed, "seedelf-wallet-v1", info, 64));
   const x = (BigInt(`0x${okm.toString("hex")}`) % R).toString(16).padStart(64, "0");
+  // Messages' key on preprod, account 0, generation 0 (protocol.md §21.2).
+  const infoM = Buffer.concat([Buffer.from("seedelf-messaging-key"), Buffer.alloc(4), Buffer.from([0x00, 0x00])]);
+  const okmM = Buffer.from(hkdfSync("sha256", seed, "seedelf-messaging-v1", infoM, 64));
+  const xM = (BigInt(`0x${okmM.toString("hex")}`) % R).toString(16).padStart(64, "0");
   const master = masterKey(entropy);
   const [account, oneTime] = [accountKey(entropy, 0), accountKey(entropy, 0x5eed)];
   const secrets = [
     [SEEDELF, montgomery(x)],
     [SEEDELF_BE, Buffer.from(x, "hex")],
     ["the Seedelf key little-endian", Buffer.from(x, "hex").reverse()],
+    [MESSAGING, montgomery(xM)],
+    [MESSAGING_BE, Buffer.from(xM, "hex")],
+    ["the messaging key little-endian", Buffer.from(xM, "hex").reverse()],
     // All 96 bytes of each, so the key's 64 too.
     [ACCOUNT, account],
     [ONE_TIME, oneTime],
     ["the entropy", entropy],
     ["the BIP39 seed", seed],
     ["the HKDF output", okm],
+    ["the messaging key's HKDF output", okmM],
     ["the master key", master],
     ["the key at 1852'", hardened(master, 1852)],
     ["the key at 1852'/1815'", [1852, 1815].reduce(hardened, master)],
@@ -271,7 +293,7 @@ function walletOf(phrase) {
     ["one-time stake key 2/0", soft(soft(oneTime, 2), 0)],
   ];
   // A secret of one byte repeated can't be looked for: the vector phrase's entropy is 16 zero bytes.
-  return { entropy, secrets: secrets.filter(([, secret]) => secret.some((byte) => byte !== secret[0])) };
+  return { entropy, xM, secrets: secrets.filter(([, secret]) => secret.some((byte) => byte !== secret[0])) };
 }
 
 /**
@@ -322,12 +344,24 @@ const spender = walletOf(
 );
 const own = walletOf(entropyToPhrase(new Uint8Array(ENTROPY)));
 
-/** An unlock, as the wallet derives its keys (wallet.ts `derive`). */
-const unlock = ({ entropy }) => [
-  SeedelfKey.fromEntropy(new Uint8Array(entropy), 0),
-  CardanoAccount.fromEntropy(new Uint8Array(entropy), 0),
-  OneTimeAccounts.fromEntropy(new Uint8Array(entropy)),
-];
+/** Each key an unlock derives, from the vault's entropy. */
+const derive = {
+  seedelf: (entropy) => SeedelfKey.fromEntropy(new Uint8Array(entropy), 0),
+  account: (entropy) => CardanoAccount.fromEntropy(new Uint8Array(entropy), 0),
+  oneTime: (entropy) => OneTimeAccounts.fromEntropy(new Uint8Array(entropy)),
+  messaging: (entropy) => MessagingKey.fromEntropy(new Uint8Array(entropy), 0, "preprod"),
+};
+const IN_ORDER = ["seedelf", "account", "oneTime", "messaging"];
+
+/**
+ * An unlock, as the wallet derives its keys (wallet.ts `derive`): Messages'
+ * for preprod beside x since 55d, last unless `order` says otherwise. The
+ * keys in the same places whatever the order.
+ */
+const unlock = ({ entropy }, order = IN_ORDER) => {
+  const made = Object.fromEntries(order.map((name) => [name, derive[name](entropy)]));
+  return IN_ORDER.map((name) => made[name]);
+};
 
 /** A private payment built and proven: the vector phrase's Seedelf pays a recorded one (transfer.test.mjs). */
 function transfer(seedelf) {
@@ -341,21 +375,35 @@ function transfer(seedelf) {
   assert.match(JSON.parse(buildTransfer(seedelf, JSON.stringify(request))).txCbor, /^[0-9a-f]+$/);
 }
 
-/** A private payment, a message started and sent, a scan, an address and a one-time key. */
-function use([seedelf, cardano, oneTime]) {
+/**
+ * A private payment, the wallet's own certificate (the one call that takes
+ * both keys) and its own m_S, a message started on a stranger's certificate
+ * and sent, a scan, an address and a one-time key.
+ */
+function use([seedelf, cardano, oneTime, messaging]) {
   transfer(seedelf);
-  const other = SeedelfKey.random();
-  const theirs = other.baseRegister();
-  const handle = { generator: theirs.generator, publicValue: theirs.publicValue };
-  const started = JSON.parse(messagingStart(seedelf, JSON.stringify({ handle, to: "00", now: 1_800_000_000 })));
+  const network = "preprod";
+  const base = seedelf.baseRegister();
+  const mine = rerandomize(base);
+  const own = { generator: mine.generator, publicValue: mine.publicValue };
+  const mineRequest = JSON.stringify({ network, name: "5eed0e1f" + "a0".repeat(28), register: own });
+  messagingCertificate(seedelf, messaging, mineRequest);
+  messagingValue(messaging, mineRequest);
+  const [otherSeedelf, otherMessaging] = [SeedelfKey.random(), MessagingKey.random(network)];
+  const theirs = otherSeedelf.baseRegister();
+  const register = { generator: theirs.generator, publicValue: theirs.publicValue };
+  const { certificate } = JSON.parse(
+    messagingCertificate(otherSeedelf, otherMessaging, JSON.stringify({ network, name: "00", register })),
+  );
+  const start = { network, name: "00", register, certificate, now: 1_800_000_000 };
+  const started = JSON.parse(messagingStart(messaging, JSON.stringify(start)));
   const stamped = JSON.parse(messagingSetStamp(JSON.stringify({ conversation: started.conversation, nonce: 0 })));
   const message = { conversation: stamped.conversation, plaintext: "0168656c6c6f" };
   const sent = JSON.parse(messagingSend(JSON.stringify(message)));
-  messagingScan(seedelf, JSON.stringify(Array(50).fill(sent.envelope)));
+  messagingScan(messaging, JSON.stringify(Array(50).fill(sent.envelope)));
   cardano.receiveAddress(Network.Preprod, 0);
   oneTime.keyHash(0);
-  theirs.free();
-  other.free();
+  for (const object of [base, mine, theirs, otherSeedelf, otherMessaging]) object.free();
 }
 
 /** The same key's own register and a stranger's, asked about last: isOwned takes the key by value. */
@@ -367,21 +415,33 @@ function ownedLast([seedelf]) {
   for (const object of [mine, theirs, other]) object.free();
 }
 
-/** A run, then a lock. `only`: the run's one object's key. `stackKeepsThem`: free() alone leaves copies. */
+/**
+ * A run, then a lock. `only`: the run's one object's key, and how it's made.
+ * `stackKeepsThem`: free() alone leaves copies.
+ */
 const runs = [
   // Scrubbed once its keys are derived, as the wallet's unlock is: the last test says why.
   { name: "an unlock and some use", wallet: spender, run: (keys) => (scrubStack(), use(keys)) },
   { name: "a run ending in isOwned", wallet: own, run: (keys) => ownedLast(keys) },
   { name: "an unlock with nothing after it", wallet: own, run: () => undefined, stackKeepsThem: true },
-  { name: "SeedelfKey.fromEntropy alone", wallet: own, only: SEEDELF },
+  {
+    name: "SeedelfKey.fromEntropy alone",
+    wallet: own,
+    only: [SEEDELF, (entropy) => SeedelfKey.fromEntropy(new Uint8Array(entropy), 0)],
+  },
+  {
+    name: "MessagingKey.fromEntropy alone",
+    wallet: own,
+    only: [MESSAGING, (entropy) => MessagingKey.fromEntropy(new Uint8Array(entropy), 0, "preprod")],
+  },
 ];
 for (const { name, wallet, run, only, stackKeepsThem } of runs) {
   test(`a lock after ${name} leaves no key anywhere in the module's memory`, () => {
-    const keys = only ? [SeedelfKey.fromEntropy(new Uint8Array(wallet.entropy), 0)] : unlock(wallet);
+    const keys = only ? [only[1](wallet.entropy)] : unlock(wallet);
     run?.(keys);
     // Before the lock each object's key is there to be found.
     const before = found(wallet.secrets);
-    for (const held of only ? [only] : [SEEDELF, ACCOUNT, ONE_TIME]) {
+    for (const held of only ? [only[0]] : [SEEDELF, ACCOUNT, ONE_TIME, MESSAGING]) {
       assert.ok(before.some((place) => place.name === held), `${held} isn't found while unlocked`);
     }
 
@@ -402,9 +462,9 @@ for (const { name, wallet, run, only, stackKeepsThem } of runs) {
  * private payment built at once, and a lock. What is left in the memory then.
  * `scrubbed`: with the scrub the wallet makes once its keys are derived.
  */
-function leftAfterTransferAtOnce(scrubbed) {
+function leftAfterTransferAtOnce(scrubbed, order) {
   __wbg_reset_state();
-  const keys = unlock(spender);
+  const keys = unlock(spender, order);
   if (scrubbed) scrubStack();
   transfer(keys[0]);
   for (const key of keys) key.free();
@@ -413,48 +473,69 @@ function leftAfterTransferAtOnce(scrubbed) {
 }
 
 test("a transfer built straight after an unlock copies nothing of the keys' into the heap", () => {
-  // Without the scrub after the derivations it does: the transfer builds a
+  // Without the scrub after the derivations it can: the transfer builds a
   // value over what they left on the stack and moves it to the heap, 8 bytes
   // of the BIP39 seed in the part it never wrote. The lock's scrub clears the
-  // stack, and those stay.
-  const copied = leftAfterTransferAtOnce(false);
-  assert.ok(copied.length > 0, "the transfer copied nothing for the unlock's scrub to prevent");
-  assert.deepEqual(said(copied.filter(({ at }) => at < STACK)), [], "the lock's scrub left a copy on the stack");
-  // As the wallet runs it, nothing is left anywhere.
-  assert.deepEqual(said(leftAfterTransferAtOnce(true)), []);
+  // stack, and those stay. Whether it does depends on what the last
+  // derivation left where: with x, the account and the one-time accounts in
+  // that order (the review's), and with x_m derived before them, it does;
+  // with x_m derived after them, its own derivation overwrites those bytes
+  // first. So the order is no defence, and the scrub is.
+  const orders = [["messaging", ...IN_ORDER.slice(0, 3)], IN_ORDER];
+  const copied = orders.map((order) => leftAfterTransferAtOnce(false, order));
+  assert.ok(
+    copied.some((left) => left.length > 0),
+    "the transfer copied nothing for the unlock's scrub to prevent, in either order",
+  );
+  for (const left of copied) {
+    assert.deepEqual(said(left.filter(({ at }) => at < STACK)), [], "the lock's scrub left a copy on the stack");
+  }
+  // As the wallet runs it, nothing is left anywhere, in either order.
+  for (const order of orders) assert.deepEqual(said(leftAfterTransferAtOnce(true, order)), [], order.join(", "));
 });
 
 // A stranger's request to this test's own wallet, as the wallet keeps it: two
-// first-contact messages in its requests' record. Made in an instance that is
-// then replaced.
+// first-contact messages in its requests' record, written on its Seedelf's
+// certificate. Made in an instance that is then replaced.
+const call = (fn, ...args) => JSON.parse(fn(...args.map((a) => (a?.constructor === Object ? JSON.stringify(a) : a))));
 const request = (() => {
   const seedelf = SeedelfKey.fromEntropy(new Uint8Array(own.entropy), 0);
-  const stranger = SeedelfKey.random();
-  const [base, name, now] = [seedelf.baseRegister(), "5eed0e1f" + "b0".repeat(28), 1_800_000_000];
+  const messaging = MessagingKey.fromEntropy(new Uint8Array(own.entropy), 0, "preprod");
+  const stranger = MessagingKey.random("preprod");
+  const [base, name, now, network] = [seedelf.baseRegister(), "5eed0e1f" + "b0".repeat(28), 1_800_000_000, "preprod"];
   const register = rerandomize(base);
   const handles = [{ name, registers: [{ generator: register.generator, publicValue: register.publicValue }] }];
-  const call = (fn, ...args) => JSON.parse(fn(...args.map((a) => (a?.constructor === Object ? JSON.stringify(a) : a))));
-  const started = call(messagingStart, stranger, { handle: handles[0].registers[0], to: name, now });
+  const { certificate } = call(messagingCertificate, seedelf, messaging, { network, name, register: handles[0].registers[0] });
+  const started = call(messagingStart, stranger, { network, name, register: handles[0].registers[0], certificate, now });
   const stamped = call(messagingSetStamp, { conversation: started.conversation, nonce: 0 });
   const first = call(messagingSend, { conversation: stamped.conversation, plaintext: "68656c6c6f" });
   const second = call(messagingSend, { conversation: first.conversation, plaintext: "616761696e" });
-  const one = call(messagingReceive, seedelf, { envelope: first.envelope, now: now + 60, handles, firstContactBits: 0 });
-  const both = { envelope: second.envelope, now: now + 61, handles, firstContactBits: 0, requests: one.requests };
-  const { requests } = call(messagingReceive, seedelf, both);
-  for (const object of [register, base, stranger, seedelf]) object.free();
+  const one = call(messagingReceive, messaging, { network, envelope: first.envelope, now: now + 60, handles, firstContactBits: 0 });
+  const both = { network, envelope: second.envelope, now: now + 61, handles, firstContactBits: 0, requests: one.requests };
+  const { requests } = call(messagingReceive, messaging, both);
+  for (const object of [register, base, stranger, messaging, seedelf]) object.free();
   return JSON.stringify({ requests, cid: started.cid });
 })();
 const requests = JSON.parse(request).requests;
 
-test("the keys looked for are the module's: the stake key's and the account's public keys", () => {
+test("the keys looked for are the module's: the stake key's, the account's and the messaging key's", () => {
   __wbg_reset_state();
-  const [seedelf, cardano, oneTime] = unlock(own);
+  const [seedelf, cardano, oneTime, messaging] = unlock(own);
   const of = new Map(own.secrets);
   assert.equal(cardano.stakePublicKey(), publicKey(of.get(STAKE).subarray(0, 32)).toString("hex"));
   const account = of.get(ACCOUNT);
   const accountPublic = Buffer.concat([publicKey(account.subarray(0, 32)), account.subarray(64)]);
   assert.equal(cardano.accountPublicKey(), accountPublic.toString("hex"));
-  for (const key of [seedelf, cardano, oneTime]) key.free();
+  // The x_m computed here is the module's: a certificate made with each names one m_S.
+  const base = seedelf.baseRegister();
+  const request = { network: "preprod", name: "61", register: { generator: base.generator, publicValue: base.publicValue } };
+  const named = (key) => {
+    const { certificate } = call(messagingCertificate, seedelf, key, request);
+    return call(messagingCheckCertificate, { network: "preprod", certificate }).messaging;
+  };
+  const computed = MessagingKey.fromHex(own.xM, "preprod");
+  assert.equal(named(messaging), named(computed));
+  for (const key of [base, computed, seedelf, cardano, oneTime, messaging]) key.free();
 });
 
 // The review's runs: two calls between an unlock and a lock, the second
@@ -474,13 +555,13 @@ const copying = [
   },
   {
     name: "messagingReadRequest twice",
-    calls: ([seedelf]) => [messagingReadRequest(seedelf, request), messagingReadRequest(seedelf, request)],
-    left: [SEEDELF_BE, 6],
+    calls: ([, , , messaging]) => [messagingReadRequest(messaging, request), messagingReadRequest(messaging, request)],
+    left: [MESSAGING_BE, 6],
   },
   {
     name: "messagingAccept, then messagingRequestsInfo",
-    calls: ([seedelf]) => [messagingAccept(seedelf, request), messagingRequestsInfo(requests)],
-    left: [SEEDELF_BE, 4],
+    calls: ([, , , messaging]) => [messagingAccept(messaging, request), messagingRequestsInfo(requests)],
+    left: [MESSAGING_BE, 4],
   },
 ];
 for (const { name, calls, left: [secret, least] } of copying) {

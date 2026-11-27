@@ -7051,6 +7051,126 @@ impl SeedelfKey {
     }
 }
 
+/// The wallet's messaging key `x_m` (protocol.md §21.2, chunk 55): what
+/// Seedelf Messaging reads, writes and proves with, for one network. Held
+/// as [`SeedelfKey`] is, in an allocation of its own (`Wiped`) that
+/// `free()` overwrites. It has none of the funds methods: no `isOwned`,
+/// `createProof`, `baseRegister` or one-time key, and every `messaging*`
+/// call takes it and never a [`SeedelfKey`], so the Seedelf key can't be
+/// passed where Messages' belongs (joint-security.md, rule 8). The one
+/// call that takes both is `messagingCertificate`.
+///
+/// A key is one network's, `preprod` or `mainnet`, named when it's made and
+/// kept: every call whose request names a network refuses another, so one
+/// network's key never reads or writes the other's (protocol.md §21.2).
+#[wasm_bindgen]
+pub struct MessagingKey {
+    sk: Wiped<Scalar>,
+    network: &'static str,
+}
+
+/// A network's name as Messages takes it, strictly (`preprod` or
+/// `mainnet`), and its byte in the key's derivation (protocol.md §21.2).
+/// Anything else throws: a missing or mistyped name never falls back to a
+/// network.
+fn messaging_network(network: &str) -> Result<(&'static str, u8), JsError> {
+    match network {
+        "preprod" => Ok(("preprod", derivation::MESSAGING_PREPROD)),
+        "mainnet" => Ok(("mainnet", derivation::MESSAGING_MAINNET)),
+        other => Err(JsError::new(&format!(
+            "a messaging key is for `preprod` or `mainnet`, not `{other}`"
+        ))),
+    }
+}
+
+impl MessagingKey {
+    fn of(sk: Scalar, network: &'static str) -> MessagingKey {
+        MessagingKey {
+            sk: Wiped::new(sk),
+            network,
+        }
+    }
+
+    /// The scalar where it's kept, by reference, as [`SeedelfKey::scalar`].
+    fn scalar(&self) -> &Scalar {
+        &self.sk
+    }
+
+    /// Refuses a request for another network than the key's.
+    fn for_network(&self, network: &str) -> Result<(), JsError> {
+        if network == self.network {
+            Ok(())
+        } else {
+            Err(JsError::new(&format!(
+                "this messaging key is {}'s, and the request is for `{network}`",
+                self.network
+            )))
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl MessagingKey {
+    /// The wallet's messaging key for `network`, from the recovery phrase's
+    /// BIP39 entropy as the vault stores it, at generation 0
+    /// (`seedelf_crypto::derivation::messaging_key_v1_from_entropy`).
+    /// WebAssembly's copy of the entropy is wiped.
+    #[wasm_bindgen(js_name = fromEntropy)]
+    pub fn from_entropy(
+        entropy: Vec<u8>,
+        account: u32,
+        network: &str,
+    ) -> Result<MessagingKey, JsError> {
+        let entropy = Zeroizing::new(entropy);
+        let (name, byte) = messaging_network(network)?;
+        derivation::messaging_key_v1_from_entropy(
+            &entropy,
+            account,
+            byte,
+            derivation::MESSAGING_GENERATION_V1,
+        )
+        .map(|sk| MessagingKey::of(sk, name))
+        .map_err(js_error)
+    }
+
+    /// The same from a recovery phrase. WebAssembly's copy of the phrase is
+    /// wiped.
+    #[wasm_bindgen(js_name = fromPhrase)]
+    pub fn from_phrase(
+        phrase: String,
+        account: u32,
+        network: &str,
+    ) -> Result<MessagingKey, JsError> {
+        let phrase = Zeroizing::new(phrase);
+        let (name, byte) = messaging_network(network)?;
+        derivation::messaging_key_v1(&phrase, account, byte, derivation::MESSAGING_GENERATION_V1)
+            .map(|sk| MessagingKey::of(sk, name))
+            .map_err(js_error)
+    }
+
+    /// A fresh random key for `network`. For development and tests only.
+    pub fn random(network: &str) -> Result<MessagingKey, JsError> {
+        let (name, _) = messaging_network(network)?;
+        Ok(MessagingKey::of(schnorr::random_scalar(), name))
+    }
+
+    /// Imports a key for `network` from 32 big-endian bytes in hex. For
+    /// development and tests only.
+    #[wasm_bindgen(js_name = fromHex)]
+    pub fn from_hex(sk_hex: &str, network: &str) -> Result<MessagingKey, JsError> {
+        let (name, _) = messaging_network(network)?;
+        api::scalar_from_hex(sk_hex)
+            .map(|sk| MessagingKey::of(sk, name))
+            .map_err(js_error)
+    }
+
+    /// The network the key is for: `preprod` or `mainnet`.
+    #[wasm_bindgen(getter)]
+    pub fn network(&self) -> String {
+        self.network.to_string()
+    }
+}
+
 /// Which Cardano network an address is for.
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
@@ -8190,7 +8310,7 @@ fn to_secret_json<T: serde::Serialize>(value: &T) -> Result<js_sys::JsString, Js
 /// envelope, in order, `1` where it's the key's: as long as the batch
 /// whatever matched, and not JSON (`messaging::scan`).
 #[wasm_bindgen(js_name = messagingScan)]
-pub fn messaging_scan(key: &SeedelfKey, envelopes: &str) -> Result<String, JsError> {
+pub fn messaging_scan(key: &MessagingKey, envelopes: &str) -> Result<String, JsError> {
     let envelopes: Vec<String> = from_json(envelopes)?;
     messaging::scan(key.scalar(), &envelopes).map_err(js_error)
 }
@@ -8198,24 +8318,26 @@ pub fn messaging_scan(key: &SeedelfKey, envelopes: &str) -> Result<String, JsErr
 /// Opens an envelope, hex, and says which conversation it's for, and
 /// nothing secret (`messaging::open`).
 #[wasm_bindgen(js_name = messagingOpen)]
-pub fn messaging_open(key: &SeedelfKey, envelope: &str) -> Result<String, JsError> {
+pub fn messaging_open(key: &MessagingKey, envelope: &str) -> Result<String, JsError> {
     to_json(&messaging::open(key.scalar(), envelope).map_err(js_error)?)
 }
 
 /// Takes an envelope under protocol.md §5 and §6's rules, with the records
 /// it needs (`messaging::ReceiveRequest` → `messaging::ReceiveResult`).
 #[wasm_bindgen(js_name = messagingReceive)]
-pub fn messaging_receive(key: &SeedelfKey, request: String) -> Result<js_sys::JsString, JsError> {
+pub fn messaging_receive(key: &MessagingKey, request: String) -> Result<js_sys::JsString, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::ReceiveRequest = from_json(&request)?;
+    key.for_network(&request.network)?;
     to_secret_json(&messaging::receive(key.scalar(), request).map_err(js_error)?)
 }
 
 /// Starts a conversation with a Seedelf's owner, before its stamp
 /// (`messaging::StartRequest` → `messaging::Started`).
 #[wasm_bindgen(js_name = messagingStart)]
-pub fn messaging_start(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
+pub fn messaging_start(key: &MessagingKey, request: &str) -> Result<js_sys::JsString, JsError> {
     let request: messaging::StartRequest = from_json(request)?;
+    key.for_network(&request.network)?;
     to_secret_json(&messaging::start(key.scalar(), request).map_err(js_error)?)
 }
 
@@ -8223,7 +8345,7 @@ pub fn messaging_start(key: &SeedelfKey, request: &str) -> Result<js_sys::JsStri
 /// (`messaging::ContinueRequest` → `messaging::Started`).
 #[wasm_bindgen(js_name = messagingStartContinuing)]
 pub fn messaging_start_continuing(
-    key: &SeedelfKey,
+    key: &MessagingKey,
     request: String,
 ) -> Result<js_sys::JsString, JsError> {
     let request = Zeroizing::new(request);
@@ -8252,7 +8374,7 @@ pub fn messaging_send(request: String) -> Result<js_sys::JsString, JsError> {
 /// Replies to a request: its conversation, built from what arrived
 /// (`messaging::RequestOf` → `messaging::Accepted`).
 #[wasm_bindgen(js_name = messagingAccept)]
-pub fn messaging_accept(key: &SeedelfKey, request: &str) -> Result<js_sys::JsString, JsError> {
+pub fn messaging_accept(key: &MessagingKey, request: &str) -> Result<js_sys::JsString, JsError> {
     let request: messaging::RequestOf = from_json(request)?;
     to_secret_json(&messaging::accept(key.scalar(), request).map_err(js_error)?)
 }
@@ -8261,7 +8383,7 @@ pub fn messaging_accept(key: &SeedelfKey, request: &str) -> Result<js_sys::JsStr
 /// (`messaging::RequestOf` → `messaging::RequestTexts`).
 #[wasm_bindgen(js_name = messagingReadRequest)]
 pub fn messaging_read_request(
-    key: &SeedelfKey,
+    key: &MessagingKey,
     request: &str,
 ) -> Result<js_sys::JsString, JsError> {
     let request: messaging::RequestOf = from_json(request)?;
@@ -8298,9 +8420,10 @@ pub fn messaging_conversation_info(record: String) -> Result<String, JsError> {
 /// initiator, once answered (`messaging::RevealRequest` →
 /// `messaging::Revealed`). The reveal is then sent with `messagingSend`.
 #[wasm_bindgen(js_name = messagingReveal)]
-pub fn messaging_reveal(key: &SeedelfKey, request: String) -> Result<String, JsError> {
+pub fn messaging_reveal(key: &MessagingKey, request: String) -> Result<String, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::RevealRequest = from_json(&request)?;
+    key.for_network(&request.network)?;
     to_json(&messaging::reveal(key.scalar(), request).map_err(js_error)?)
 }
 
@@ -8312,6 +8435,49 @@ pub fn messaging_check_reveal(request: String) -> Result<String, JsError> {
     let request = Zeroizing::new(request);
     let request: messaging::CheckRevealRequest = from_json(&request)?;
     to_json(&messaging::check_reveal(request).map_err(js_error)?)
+}
+
+/// Makes the certificate of one of the wallet's own Seedelfs (protocol.md
+/// §21.4): the only call in Messages that takes the Seedelf key, beside the
+/// messaging key (`messaging::CertificateRequest` → `messaging::Certified`).
+#[wasm_bindgen(js_name = messagingCertificate)]
+pub fn messaging_certificate(
+    spend: &SeedelfKey,
+    messaging: &MessagingKey,
+    request: &str,
+) -> Result<String, JsError> {
+    let request: messaging::CertificateRequest = from_json(request)?;
+    messaging.for_network(&request.network)?;
+    to_json(&messaging::certificate(spend.scalar(), messaging.scalar(), request).map_err(js_error)?)
+}
+
+/// The wallet's own messaging value m_S for one of its Seedelfs, from the
+/// messaging key alone (`messaging::ValueRequest` → `messaging::Value`): how
+/// the switch tells its own certificate from one naming another key.
+#[wasm_bindgen(js_name = messagingValue)]
+pub fn messaging_value(key: &MessagingKey, request: &str) -> Result<String, JsError> {
+    let request: messaging::ValueRequest = from_json(request)?;
+    key.for_network(&request.network)?;
+    to_json(&messaging::value(key.scalar(), request).map_err(js_error)?)
+}
+
+/// Withdraws one of the wallet's own certificates from the relay's list,
+/// with the messaging key alone (`messaging::WithdrawalRequest` →
+/// `messaging::Withdrawn`, protocol.md §21.7): the bytes to post and the
+/// digest their stamp is solved over.
+#[wasm_bindgen(js_name = messagingWithdrawal)]
+pub fn messaging_withdrawal(key: &MessagingKey, request: &str) -> Result<String, JsError> {
+    let request: messaging::WithdrawalRequest = from_json(request)?;
+    key.for_network(&request.network)?;
+    to_json(&messaging::withdrawal(key.scalar(), request).map_err(js_error)?)
+}
+
+/// Checks a certificate from the relay's list, with no key
+/// (`messaging::CheckCertificateRequest` → `messaging::CertificateChecked`).
+#[wasm_bindgen(js_name = messagingCheckCertificate)]
+pub fn messaging_check_certificate(request: &str) -> Result<String, JsError> {
+    let request: messaging::CheckCertificateRequest = from_json(request)?;
+    to_json(&messaging::check_certificate(request).map_err(js_error)?)
 }
 
 /// The requests' record, hex, read without their texts
@@ -8326,6 +8492,14 @@ pub fn messaging_requests_info(record: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = messagingFindStamp)]
 pub fn messaging_find_stamp(request: &str) -> Result<String, JsError> {
     to_json(&messaging::find_stamp(from_json(request)?).map_err(js_error)?)
+}
+
+/// A certificate's listing digest under `pool`, hex: what its post's stamp
+/// is solved over, and what a removal in the list names it by
+/// (`messaging::listing_digest`, protocol.md §21.7).
+#[wasm_bindgen(js_name = messagingListingDigest)]
+pub fn messaging_listing_digest(pool: &str, certificate: &str) -> Result<String, JsError> {
+    messaging::listing_digest(pool, certificate).map_err(js_error)
 }
 
 /// What a post's stamp is over: the envelope, hex, in `pool`.

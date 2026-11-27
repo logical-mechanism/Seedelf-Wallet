@@ -35,11 +35,12 @@ use anyhow::{Result, anyhow};
 use blstrs::Scalar;
 use seedelf_messaging::relay::{self, MAX_STAMP_BITS};
 use seedelf_messaging::session::{
-    Continues, Conversation, ConversationId, ENVELOPE_SIZES, FIRST_CONTACT_MAX_AGE,
-    FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_STAMP_BITS, Handle, Inbox, MAX_AUTH_STEPS,
-    MAX_ONE_REQUEST_BYTES, MAX_REQUEST_BYTES, MAX_REQUEST_MESSAGES, MAX_REQUESTS,
-    RATCHET_HEADER_LEN, RATCHET_OVERHEAD, REQUESTS_VERSION, Received, Requests, Reveal, Role,
-    SKIPPED_KEY_LIFETIME, STAMP_LEN, Tombstones,
+    Certificate, Chain, Continues, Conversation, ConversationId, ENVELOPE_SIZES,
+    FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_MAX_AHEAD, FIRST_CONTACT_STAMP_BITS, Handle, Inbox,
+    MAX_AUTH_STEPS, MAX_ONE_REQUEST_BYTES, MAX_REQUEST_BYTES, MAX_REQUEST_MESSAGES, MAX_REQUESTS,
+    NETWORK_MAINNET, NETWORK_PREPROD, POLICY_LEN, RATCHET_HEADER_LEN, RATCHET_OVERHEAD,
+    REQUESTS_VERSION, Received, Requests, Reveal, Role, SKIPPED_KEY_LIFETIME, STAMP_LEN, Seedelf,
+    Tombstones, Withdrawal,
 };
 use seedelf_messaging::{Error, POINT_LEN, Register, SecretKey, matches_envelope};
 use serde::{Deserialize, Serialize};
@@ -194,6 +195,11 @@ pub fn code(error: Error) -> &'static str {
         Error::WrongEnvelopeRegister => "wrong_envelope_register",
         Error::RevealNotAllowed => "reveal_not_allowed",
         Error::InvalidReveal => "invalid_reveal",
+        Error::InvalidCertificate => "invalid_certificate",
+        Error::NotOwned => "not_owned",
+        Error::SameKey => "same_key",
+        Error::UnknownNetwork => "unknown_network",
+        Error::InvalidWithdrawal => "invalid_withdrawal",
     }
 }
 
@@ -242,20 +248,47 @@ pub struct HandleHex {
     pub registers: Vec<RegisterHex>,
 }
 
-/// The crate's handles, one for each register. The wallet's own registers
-/// are its to pass, and the crate takes a base proof only against a register
-/// of the reader's key: one that doesn't read throws.
-fn handles(given: &[HandleHex]) -> Result<Vec<Handle>> {
+/// The chain a network's Seedelfs live under: its network byte and the
+/// Seedelf policy of the contract variant the wallet reads, from
+/// seedelf-core's constants, never from JavaScript (protocol.md §21.3).
+/// A network other than `preprod` or `mainnet` throws.
+pub fn chain(network: &str) -> Result<Chain> {
+    let (byte, preprod) = match network {
+        "preprod" => (NETWORK_PREPROD, true),
+        "mainnet" => (NETWORK_MAINNET, false),
+        other => return Err(anyhow!("no Messages on the network `{other}`")),
+    };
+    let config = seedelf_core::constants::get_config(seedelf_core::constants::VARIANT, preprod)?;
+    let policy: [u8; POLICY_LEN] = hex::decode(&config.contract.seedelf_policy_id)?
+        .try_into()
+        .map_err(|_| anyhow!("the Seedelf policy isn't 28 bytes"))?;
+    Chain::new(byte, policy).map_err(|e| anyhow!("the chain: {e}"))
+}
+
+/// A Seedelf from its asset name, hex, and its datum's register as the
+/// chain read gives it, under `chain`: the crate's refusal of a point or a
+/// name, or a throw for hex that doesn't read.
+fn seedelf_of(chain: &Chain, name: &str, register: &RegisterHex) -> Result<Result<Seedelf, Error>> {
+    let name = decode(name, "the Seedelf's name")?;
+    Ok(register
+        .read("the Seedelf's register")?
+        .and_then(|register| Seedelf::new(*chain, &name, register)))
+}
+
+/// The reader's handles, one for each register a Seedelf has held: each
+/// the Seedelf's messaging register M_S = (h_S, [x_m]h_S) under the
+/// reader's messaging key, its base computed here from the Seedelf
+/// (protocol.md §21.3). One that doesn't read throws.
+fn handles(chain: &Chain, key: &SecretKey, given: &[HandleHex]) -> Result<Vec<Handle>> {
     let mut out = Vec::new();
     for handle in given {
-        let name = decode(&handle.name, "a handle's name")?;
         for register in &handle.registers {
-            let register = register
-                .read("a handle's register")?
-                .map_err(|e| anyhow!("a handle's register isn't one: {e}"))?;
+            let seedelf = seedelf_of(chain, &handle.name, register)?
+                .map_err(|e| anyhow!("a handle isn't one: {e}"))?;
             out.push(
-                Handle::new(&name, register)
-                    .map_err(|_| anyhow!("a handle's name must be 1 to 32 bytes"))?,
+                seedelf
+                    .handle(key)
+                    .map_err(|e| anyhow!("a handle's base: {e}"))?,
             );
         }
     }
@@ -288,7 +321,7 @@ fn conversation(record: &Secret) -> Result<Conversation> {
 
 /// A conversation's record, for JavaScript to seal and keep. Never a state
 /// whose ratchet key is the conversation's own identity key: that key's
-/// secret is the Seedelf key itself, which no record may hold. The crate
+/// secret is the messaging key itself, which no record may hold. The crate
 /// returns no such state and reads none back; `to_bytes` can't refuse one,
 /// so this does, and throws.
 fn record_of(held: &Conversation) -> Result<Secret> {
@@ -401,6 +434,8 @@ pub fn open(sk: impl Borrow<Scalar>, envelope: &str) -> Result<Answer<Opened>> {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveRequest {
+    /// The network, `preprod` or `mainnet`: whose Seedelfs `handles` are.
+    pub network: String,
     /// The envelope, as the scan matched it.
     pub envelope: String,
     /// The reader's clock, Unix seconds.
@@ -475,7 +510,7 @@ pub struct ReceiveResult {
 pub fn receive(sk: impl Borrow<Scalar>, request: ReceiveRequest) -> Result<Answer<ReceiveResult>> {
     let key = secret_key(sk.borrow())?;
     let envelope = decode(&request.envelope, "the envelope")?;
-    let handles = handles(&request.handles)?;
+    let handles = handles(&chain(&request.network)?, &key, &request.handles)?;
     let conversations = request
         .conversations
         .iter()
@@ -541,10 +576,16 @@ pub fn receive(sk: impl Borrow<Scalar>, request: ReceiveRequest) -> Result<Answe
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRequest {
-    /// The Seedelf's register, as the chain read gives it.
-    pub handle: RegisterHex,
+    /// The network, `preprod` or `mainnet`.
+    pub network: String,
     /// The Seedelf's asset name, hex: 1 to 32 bytes.
-    pub to: String,
+    pub name: String,
+    /// The Seedelf's register, as the wallet's own read of the contract
+    /// gives it now.
+    pub register: RegisterHex,
+    /// The Seedelf's certificate, hex, from the relay's list (protocol.md
+    /// §21.7): the one good certificate for that register (§21.5).
+    pub certificate: String,
     /// The writer's clock, Unix seconds: the conversation's `t`.
     pub now: u64,
 }
@@ -570,18 +611,28 @@ fn started(conversation: &Conversation) -> Result<Started> {
     })
 }
 
-/// Starts a conversation with a Seedelf's owner (protocol.md §3): both
-/// identities, F with its proof, the session key and the sending chain. A
-/// register that isn't valid, a `to` that isn't 1 to 32 bytes and a
-/// register of `sk`'s own are refused.
+/// Starts a conversation with a Seedelf's owner (protocol.md §3, §21.8):
+/// both identities, F with its proof, the session key and the sending
+/// chain, on the Seedelf's messaging register from its certificate. `sk` is
+/// the writer's messaging key. The certificate must check
+/// (`invalid_certificate`, or its point's own code) and name exactly the
+/// Seedelf the chain read gives (`invalid_certificate` otherwise); a
+/// register or name that doesn't read, and a Seedelf of `sk`'s own, are
+/// refused.
 pub fn start(sk: impl Borrow<Scalar>, request: StartRequest) -> Result<Answer<Started>> {
     let key = secret_key(sk.borrow())?;
-    let to = decode(&request.to, "`to`")?;
-    let handle = match request.handle.read("the handle")? {
-        Ok(handle) => handle,
+    let chain = chain(&request.network)?;
+    let seedelf = match seedelf_of(&chain, &request.name, &request.register)? {
+        Ok(seedelf) => seedelf,
         Err(error) => return Ok(answer(Err(error))),
     };
-    match Conversation::start(&key, &handle, &to, request.now) {
+    let certificate = decode(&request.certificate, "the certificate")?;
+    let certificate = match Certificate::from_bytes(&chain, &certificate) {
+        Ok(certificate) if certificate.is_for(&seedelf) => certificate,
+        Ok(_) => return Ok(refusal(Error::InvalidCertificate)),
+        Err(error) => return Ok(refusal(error)),
+    };
+    match Conversation::start(&key, certificate.handle(), request.now) {
         Ok(conversation) => Ok(Answer::Done(started(&conversation)?)),
         Err(error) => Ok(refusal(error)),
     }
@@ -700,12 +751,17 @@ pub fn send(request: SendRequest) -> Result<Answer<Sent>> {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct RevealRequest {
+    /// The network, `preprod` or `mainnet`.
+    pub network: String,
     /// The conversation's record: its initiator's, once a reply has come.
     pub conversation: Secret,
     /// The Seedelf's asset name, hex: 1 to 32 bytes.
     pub name: String,
     /// The Seedelf's register now, as the chain read gives it.
     pub register: RegisterHex,
+    /// The Seedelf's certificate, hex: the one good certificate for that
+    /// register, which must name this key's messaging value (§21.5, §21.9).
+    pub certificate: String,
 }
 
 /// A reveal, to send as a message of its own kind (protocol.md §18).
@@ -716,24 +772,39 @@ pub struct Revealed {
     pub reveal: String,
 }
 
-/// Shows the other side of a conversation which Seedelf `sk` holds
-/// (protocol.md §19): a proof only that side can check, bound to the
-/// conversation. Only its initiator, once a reply has come
-/// (`reveal_not_allowed`); the Seedelf's register must be `sk`'s, as the
-/// conversation's own identity must (`not_for_this_key`). The record is
+/// Shows the other side of a conversation which Seedelf the wallet holds
+/// (protocol.md §19, §21.9): a proof only that side can check, bound to the
+/// conversation, on the Seedelf's messaging register under `sk`, the
+/// messaging key. Only its initiator, once a reply has come
+/// (`reveal_not_allowed`); the conversation's own identity must be `sk`'s
+/// (`not_for_this_key`). The certificate must check and name that Seedelf
+/// (`invalid_certificate`) and this key's messaging value
+/// (`not_for_this_key`), so the wallet reveals only a Seedelf its own
+/// certificate binds to `sk` (§21.9). That the register is the chain's now
+/// is the worker's to check, by the read it passes. The record is
 /// unchanged: the wallet then sends the reveal with [`send`].
 pub fn reveal(sk: impl Borrow<Scalar>, request: RevealRequest) -> Result<Answer<Revealed>> {
     let key = secret_key(sk.borrow())?;
     let held = conversation(&request.conversation)?;
-    let name = decode(&request.name, "the Seedelf's name")?;
-    let seedelf = match request
-        .register
-        .read("the Seedelf's register")?
-        .and_then(|register| Handle::new(&name, register))
+    let chain = chain(&request.network)?;
+    let (seedelf, own) = match seedelf_of(&chain, &request.name, &request.register)?
+        .and_then(|seedelf| seedelf.handle(&key).map(|own| (seedelf, own)))
     {
-        Ok(seedelf) => seedelf,
+        Ok(found) => found,
         Err(error) => return Ok(answer(Err(error))),
     };
+    let certificate = decode(&request.certificate, "the certificate")?;
+    match Certificate::from_bytes(&chain, &certificate) {
+        Ok(certificate) if !certificate.is_for(&seedelf) => {
+            return Ok(refusal(Error::InvalidCertificate));
+        }
+        Ok(certificate) if certificate.handle() != &own => {
+            return Ok(refusal(Error::NotForThisKey));
+        }
+        Ok(_) => {}
+        Err(error) => return Ok(refusal(error)),
+    }
+    let seedelf = own;
     Ok(answer(held.reveal(&key, &seedelf).map(|reveal| Revealed {
         reveal: hex::encode(reveal.to_bytes()),
     })))
@@ -743,6 +814,9 @@ pub fn reveal(sk: impl Borrow<Scalar>, request: RevealRequest) -> Result<Answer<
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckRevealRequest {
+    /// The network, `preprod` or `mainnet`: the reveal's h_S is computed
+    /// under its chain.
+    pub network: String,
     /// The conversation's record, as it stands after the message that
     /// carried the reveal.
     pub conversation: Secret,
@@ -757,8 +831,12 @@ pub struct CheckRevealRequest {
 pub struct RevealChecked {
     /// The Seedelf's asset name, hex.
     pub name: String,
-    /// The register the proof is for.
+    /// The Seedelf's datum register the reveal names: the press checks the
+    /// chain gives the name this register now.
     pub register: RegisterHex,
+    /// Its messaging value m_S, hex: the press checks a good certificate
+    /// names it, and none names another (protocol.md §21.5).
+    pub messaging: String,
 }
 
 /// Checks a reveal the other side of a conversation sent (protocol.md
@@ -769,16 +847,195 @@ pub struct RevealChecked {
 pub fn check_reveal(request: CheckRevealRequest) -> Result<Answer<RevealChecked>> {
     let held = conversation(&request.conversation)?;
     let bytes = decode(&request.reveal, "the reveal")?;
-    Ok(answer(Reveal::from_bytes(&bytes).and_then(|reveal| {
-        held.verify_reveal(&reveal)?;
-        Ok(RevealChecked {
-            name: hex::encode(reveal.name()),
-            register: RegisterHex {
-                generator: hex::encode(reveal.register().generator_bytes()),
-                public_value: hex::encode(reveal.register().public_value_bytes()),
-            },
-        })
-    })))
+    let chain = chain(&request.network)?;
+    Ok(answer(Reveal::from_bytes(&chain, &bytes).and_then(
+        |reveal| {
+            held.verify_reveal(&reveal)?;
+            Ok(RevealChecked {
+                name: hex::encode(reveal.name()),
+                register: RegisterHex {
+                    generator: hex::encode(reveal.register().generator_bytes()),
+                    public_value: hex::encode(reveal.register().public_value_bytes()),
+                },
+                messaging: hex::encode(reveal.messaging_register().public_value_bytes()),
+            })
+        },
+    )))
+}
+
+// ---------------------------------------------------------------------------
+// Certificates (protocol.md §21.4, §21.5)
+// ---------------------------------------------------------------------------
+
+/// [`certificate`]'s request: one of the wallet's own Seedelfs.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateRequest {
+    /// The network, `preprod` or `mainnet`.
+    pub network: String,
+    /// The Seedelf's asset name, hex: 1 to 32 bytes.
+    pub name: String,
+    /// The Seedelf's register now, as the chain read gives it.
+    pub register: RegisterHex,
+}
+
+/// A certificate, to post to the relay's list.
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Certified {
+    /// The certificate's bytes, hex: 273 to 304.
+    pub certificate: String,
+}
+
+/// Makes the certificate of one of the wallet's Seedelfs (protocol.md
+/// §21.4): `spend` is the Seedelf key x, `messaging` the messaging key x_m.
+/// The only call in Messages that takes x. Refuses one key for both
+/// (`same_key`) and a register that isn't x's (`not_owned`).
+pub fn certificate(
+    spend: impl Borrow<Scalar>,
+    messaging: impl Borrow<Scalar>,
+    request: CertificateRequest,
+) -> Result<Answer<Certified>> {
+    let spend = secret_key(spend.borrow())?;
+    let messaging = secret_key(messaging.borrow())?;
+    let chain = chain(&request.network)?;
+    let seedelf = match seedelf_of(&chain, &request.name, &request.register)? {
+        Ok(seedelf) => seedelf,
+        Err(error) => return Ok(answer(Err(error))),
+    };
+    Ok(answer(Certificate::make(&spend, &messaging, &seedelf).map(
+        |certificate| Certified {
+            certificate: hex::encode(certificate.to_bytes()),
+        },
+    )))
+}
+
+/// [`value`]'s request: one of the wallet's own Seedelfs.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ValueRequest {
+    /// The network, `preprod` or `mainnet`.
+    pub network: String,
+    /// The Seedelf's asset name, hex: 1 to 32 bytes.
+    pub name: String,
+    /// The Seedelf's register, as the chain read gives it.
+    pub register: RegisterHex,
+}
+
+/// The wallet's own messaging value for a Seedelf.
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Value {
+    /// m_S = [x_m]h_S, hex: what the wallet's own certificate for that
+    /// register names.
+    pub messaging: String,
+}
+
+/// The wallet's own messaging value m_S = [x_m]h_S for a Seedelf at a
+/// register (protocol.md §21.3), from the messaging key alone: how the
+/// switch tells a certificate of its own from one naming another key
+/// (§21.8), with no use of the Seedelf key. h_S is a hash of the Seedelf,
+/// so the value answers no one's static Diffie–Hellman question.
+pub fn value(sk: impl Borrow<Scalar>, request: ValueRequest) -> Result<Answer<Value>> {
+    let key = secret_key(sk.borrow())?;
+    let chain = chain(&request.network)?;
+    Ok(answer(
+        seedelf_of(&chain, &request.name, &request.register)?
+            .and_then(|seedelf| seedelf.handle(&key))
+            .map(|handle| Value {
+                messaging: hex::encode(handle.register().public_value_bytes()),
+            }),
+    ))
+}
+
+/// [`withdrawal`]'s request: one of the wallet's own certificates.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawalRequest {
+    /// The network, `preprod` or `mainnet`.
+    pub network: String,
+    /// The certificate to withdraw, hex, as the list holds it.
+    pub certificate: String,
+}
+
+/// A withdrawal, to post to the relay (protocol.md §21.7).
+#[derive(Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Withdrawn {
+    /// The withdrawal's bytes, hex: 98.
+    pub withdrawal: String,
+    /// What its post's stamp is solved over, hex.
+    pub digest: String,
+}
+
+/// Withdraws one of the wallet's own certificates (protocol.md §21.7), with
+/// the messaging key alone: a certificate that doesn't check is refused with
+/// its code, and one whose messaging value isn't `sk`'s is
+/// `not_for_this_key`.
+pub fn withdrawal(
+    sk: impl Borrow<Scalar>,
+    request: WithdrawalRequest,
+) -> Result<Answer<Withdrawn>> {
+    let key = secret_key(sk.borrow())?;
+    let chain = chain(&request.network)?;
+    let certificate = decode(&request.certificate, "the certificate")?;
+    Ok(answer(
+        Certificate::from_bytes(&chain, &certificate)
+            .and_then(|certificate| Withdrawal::make(&key, &certificate))
+            .and_then(|withdrawal| {
+                let bytes = withdrawal.to_bytes();
+                let digest = relay::unlisting_digest(chain.pool(), &bytes)?;
+                Ok(Withdrawn {
+                    withdrawal: hex::encode(bytes),
+                    digest: hex::encode(digest),
+                })
+            }),
+    ))
+}
+
+/// [`check_certificate`]'s request.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckCertificateRequest {
+    /// The network, `preprod` or `mainnet`: the pool the list is from.
+    pub network: String,
+    /// The certificate's bytes, hex.
+    pub certificate: String,
+}
+
+/// A certificate that checks, and what it names: the worker counts it good
+/// for its Seedelf when the chain read gives the name this register now
+/// (protocol.md §21.5).
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateChecked {
+    /// The Seedelf's asset name, hex.
+    pub name: String,
+    /// The Seedelf's datum register it names.
+    pub register: RegisterHex,
+    /// Its messaging value m_S, hex.
+    pub messaging: String,
+}
+
+/// Checks a certificate from the relay's list under the network's chain
+/// (protocol.md §21.4): a refusal's code for one that doesn't, and what it
+/// names for one that does. It takes no key. Bytes that aren't hex throw.
+pub fn check_certificate(request: CheckCertificateRequest) -> Result<Answer<CertificateChecked>> {
+    let chain = chain(&request.network)?;
+    let bytes = decode(&request.certificate, "the certificate")?;
+    Ok(answer(Certificate::from_bytes(&chain, &bytes).map(
+        |certificate| {
+            let seedelf = certificate.seedelf();
+            CertificateChecked {
+                name: hex::encode(seedelf.name()),
+                register: RegisterHex {
+                    generator: hex::encode(seedelf.register().generator_bytes()),
+                    public_value: hex::encode(seedelf.register().public_value_bytes()),
+                },
+                messaging: hex::encode(certificate.handle().register().public_value_bytes()),
+            }
+        },
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,6 +1486,16 @@ pub fn find_stamp(request: FindStampRequest) -> Result<Answer<Found>> {
 pub fn relay_digest(pool: &str, envelope: &str) -> Result<String> {
     let envelope = decode(envelope, "the envelope")?;
     relay::stamp_digest(pool, &envelope)
+        .map(hex::encode)
+        .map_err(|_| anyhow!("a pool's name is at most 255 bytes"))
+}
+
+/// A certificate's listing digest under `pool`, hex (protocol.md §21.7):
+/// what its post's stamp is solved over, and what a removal entry in the
+/// list names it by.
+pub fn listing_digest(pool: &str, certificate: &str) -> Result<String> {
+    let certificate = decode(certificate, "the certificate")?;
+    relay::listing_digest(pool, &certificate)
         .map(hex::encode)
         .map_err(|_| anyhow!("a pool's name is at most 255 bytes"))
 }
