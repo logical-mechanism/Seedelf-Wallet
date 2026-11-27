@@ -378,6 +378,16 @@ export interface MessagingSeedelf {
   made: boolean;
   /** First messages to it are taken now. */
   on: boolean;
+  /**
+   * Its good certificate on the relay's list names another key (chunk 55, protocol.md §21.8): another holder of the
+   * Seedelf key, or another wallet's derivation, takes its messages, so nothing was posted for it here.
+   */
+  elsewhere?: true;
+  /**
+   * The relay won't list it again at its register (protocol.md §21.7's check 3″): its certificates were withdrawn too
+   * often there. Moving the Seedelf lists it afresh.
+   */
+  tooOften?: true;
 }
 
 /** One message of a thread or a request. */

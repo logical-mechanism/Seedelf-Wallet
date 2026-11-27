@@ -3210,7 +3210,7 @@
   "vote.status.retired": "Retirado",
   "vote.statusLabel": "Estado",
   "vote.warn.callsItself": "Este DRep se ha puesto el nombre de una de las opciones de la propia billetera. Tu poder de voto va a este DRep, no a esa opción.",
-  "vote.warn.inactive":"Este DRep no ha votado últimamente, así que sus votos no cuentan. Delegar en él te sigue permitiendo retirar recompensas.",
+  "vote.warn.inactive": "Este DRep no ha votado últimamente, así que sus votos no cuentan. Delegar en él te sigue permitiendo retirar recompensas.",
   "vote.warn.sharedName": "{{shared}}. Solo el ID los distingue: compáralo con el que publica el DRep.",
   "vote.whereLabel": "A dónde va tu poder de voto",
   "welcome.create": "Crear una billetera nueva",
@@ -3588,5 +3588,18 @@
   "worker.messaging.cantRevealYet": "Solo quien escribió primero puede mostrar un Seedelf, y solo cuando la otra parte ya respondió.",
   "worker.messaging.waitForReply": "Espera una respuesta: hasta que llegue, su billetera no acepta más mensajes tuyos aquí.",
   "worker.messaging.full": "No hay espacio para él en Mensajes: elimina una conversación y vuelve a enviarlo.",
-  "worker.messaging.notOpenHere": "Los Mensajes todavía no se pueden activar en {{network}}."
+  "worker.messaging.notOpenHere": "Los Mensajes todavía no se pueden activar en {{network}}.",
+  "worker.messaging.noCertificate": "Ese Seedelf no recibe mensajes.",
+  "worker.messaging.warn.otherKey": "Una clave que no está en esta billetera recibe los mensajes de este Seedelf, así que no se puede mostrar este Seedelf: puede que otra persona tenga la clave de este Seedelf.",
+  "messages.warn.otherKey": "Una clave que no está en esta billetera recibe los mensajes de este Seedelf: puede que otra persona tenga la clave de este Seedelf.",
+  "worker.messaging.listBehind": "Todavía se está consultando qué Seedelfs reciben mensajes. Inténtalo de nuevo en un momento.",
+  "worker.messaging.notListedYet": "Tu Seedelf todavía se está añadiendo a la lista. Inténtalo de nuevo en unos minutos.",
+  "worker.messaging.tooOften": "Este Seedelf se quitó de la lista demasiadas veces. Cuando se mueva, podrá volver a incluirse.",
+  "messages.tooOften": "Se quitó de la lista demasiadas veces: cuando el Seedelf se mueva, podrá volver a incluirse.",
+  "messages.privacy.listsSeedelfs": "Al activar Mensajes, tus Seedelfs aparecen en una lista pública como Seedelfs que reciben mensajes.",
+  "messages.privacy.listsSeedelf": "Al activar un Seedelf, aparece en una lista pública como Seedelf que recibe mensajes.",
+  "settings.remove.warn.listed": "Después de esto, tus Seedelfs que reciben mensajes seguirán en la lista: desactiva Mensajes primero.",
+  "worker.messaging.listOffline": "No se puede contactar con el servidor para ver si ese Seedelf recibe mensajes. Inténtalo de nuevo en un momento.",
+  "worker.messaging.listPaused": "Mensajes está en pausa, así que ahora no se puede escribir un primer mensaje.",
+  "worker.messaging.listDayRead": "Esta conexión alcanzó su límite diario de lecturas. Inténtalo de nuevo más tarde."
 }

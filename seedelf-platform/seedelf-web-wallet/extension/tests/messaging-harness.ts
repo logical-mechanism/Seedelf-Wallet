@@ -5,6 +5,11 @@
 // order: the relay's requests, the chain's reads, WebAssembly's scan, open
 // and receive, and every read and write of a sealed record. The tests of
 // what the wallet sends, and when, are assertions on that order.
+//
+// Each wallet holds both keys (chunk 55's 55e): its Seedelf key and a
+// messaging key for each network the harness opens. Its turn-on posts its
+// Seedelfs' certificates to the relay's list, which checks them with the
+// WebAssembly's own check, and a writer reads that list before it writes.
 import { type ConversationFile, MessagingService, storedBytes } from "../src/background/messaging";
 import { rememberRegister } from "../src/background/minted-by";
 import { PreferencesService } from "../src/background/preferences";
@@ -249,6 +254,8 @@ export interface ServiceOptions {
   reserveBytes?: number;
   /** The take record's room, as its JSON, for tests: 128 KiB otherwise (the 1.10.0 gate's round 5). */
   takeRoomBytes?: number;
+  /** The list record's room, as its JSON, for tests: 256 KiB otherwise (chunk 55's 55e). */
+  listRoomBytes?: number;
   /**
    * chrome.storage as Chrome answers it, over IPC (round 5): every get and set of either area resolves a macrotask later,
    * and the service's own turns of the event loop are the worker's (a setTimeout of 0) in place of a setImmediate.
@@ -262,6 +269,11 @@ export interface ServiceOptions {
   firstContactBits?: number;
   /** The call a solve makes between its slices so Chrome keeps the worker (`keepAlive`): none otherwise. */
   keepAlive?: () => Promise<void>;
+  /**
+   * The wait between the wallet's own certificates' posts (`certificateSpacing`): none here, so a Seedelf turned on takes
+   * first messages at once; undefined, the worker's own random wait (messaging-certificates.test.ts).
+   */
+  certificateSpacing?: (() => number) | undefined;
 }
 
 function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, directory: Directory, options: ServiceOptions, given?: Wasm): MessagingService {
@@ -371,6 +383,8 @@ function service(p: Omit<Party, "messaging" | "restart">, relay: FakeRelay, dire
     },
     // Cheap first-contact stamps for tests; the worker never sets it.
     firstContactBits: 6,
+    // The wallet's own certificates posted with no wait between them, unless a test asks for the worker's own.
+    certificateSpacing: () => 0,
     ...rest,
   });
 }
@@ -432,7 +446,7 @@ export async function party(
 ): Promise<Party> {
   // A number is the history's budget, as the first tests gave it.
   const given: ServiceOptions = typeof options === "number" ? { budgetBytes: options } : options;
-  const t = testWallet({ local: memoryArea(), session: memoryArea(), clock });
+  const t = testWallet({ local: memoryArea(), session: memoryArea(), clock, messagingNetworks: BOTH_OPEN });
   await t.wallet.create(phrase(words), PASSWORD);
   const base: Omit<Party, "messaging" | "restart"> = {
     wallet: t.wallet,
@@ -483,9 +497,51 @@ export async function party(
   return p;
 }
 
+/**
+ * The relay the harness's wallets share: §21.7's certificate list checks a certificate's points and proof with the
+ * WebAssembly's own check, as the relay does with its copy of the crate's.
+ */
+export function checkedRelay(): FakeRelay {
+  const relay = fakeRelay(clock);
+  const wasm = loadTestWasm();
+  relay.checkCertificate = (pool, certificate) => {
+    try {
+      return !("refused" in JSON.parse(wasm.messagingCheckCertificate(JSON.stringify({ network: pool, certificate }))));
+    } catch {
+      return false;
+    }
+  };
+  return relay;
+}
+
+/**
+ * The certificate of `p`'s Seedelf `name` at `register` on `network`, made with both its keys as its worker makes one
+ * (messaging.ts `certify`): what a test puts on the relay's list itself, or hands a writer it drives by hand.
+ */
+export async function certificateOf(p: Pick<Party, "wallet">, name: string, register: RegisterHex, network: NetworkName = "preprod"): Promise<string> {
+  const wasm = loadTestWasm();
+  return p.wallet.withKeys((keys) => {
+    const answer = JSON.parse(wasm.messagingCertificate(keys.seedelf, keys.messaging[network]!, JSON.stringify({ network, name, register }))) as {
+      certificate: string;
+    };
+    return answer.certificate;
+  });
+}
+
+/**
+ * Puts `p`'s certificate for its Seedelf `name` at `register` on the relay's list, as another browser of its phrase,
+ * the one it was minted in, posted it there: what lets a writer write to a Seedelf `p`'s own worker hasn't certified
+ * (chunk 55's 55e), a restored wallet's, or one it takes no first messages at. Returns the certificate.
+ */
+export async function listed(relay: FakeRelay, p: Pick<Party, "wallet">, name: string, register: RegisterHex, network: NetworkName = "preprod"): Promise<string> {
+  const certificate = await certificateOf(p, name, register, network);
+  relay.putCertificate(network, certificate);
+  return certificate;
+}
+
 /** Two wallets, Messages on for preprod, each holding a Seedelf. */
 export async function pair(options: ServiceOptions | number = {}) {
-  const relay = fakeRelay(clock);
+  const relay = checkedRelay();
   const directory: Directory = new Map();
   const alice = await party(12, relay, directory, ALICE_SEEDELF, options);
   const bob = await party(24, relay, directory, BOB_SEEDELF, options);
@@ -494,10 +550,28 @@ export async function pair(options: ServiceOptions | number = {}) {
   return { relay, directory, alice, bob };
 }
 
-/** Turns preprod's Messages on for each wallet and waits for the first read. */
+/**
+ * Turns preprod's Messages on for each wallet and waits for the first read: each posts its Seedelfs' certificates at
+ * its turn-on (chunk 55's 55e). Then each reads the certificate list to its end again (`relist`), so every copy holds
+ * every wallet's certificate, its cursor at the list's end whoever turned on first.
+ */
 export async function turnOn(...parties: Party[]) {
   for (const p of parties) {
     await p.messaging.switch("preprod", true);
+    await p.messaging.whenIdle();
+    p.trace.length = 0;
+    p.changed.length = 0;
+  }
+  if (parties.length > 1) await relist(...parties);
+}
+
+/**
+ * Each of `parties` reads the certificate list again, to its end (chunk 55's 55e): whoever turned on first, every copy
+ * then holds every party's certificate with its cursor at the list's end, so two wallets' next reads of it ask the same.
+ */
+export async function relist(...parties: Party[]) {
+  for (const p of parties) {
+    await (p.messaging as unknown as { readList(network: NetworkName): Promise<unknown> }).readList("preprod");
     await p.messaging.whenIdle();
     p.trace.length = 0;
     p.changed.length = 0;

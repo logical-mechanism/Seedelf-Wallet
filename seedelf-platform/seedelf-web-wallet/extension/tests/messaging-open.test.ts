@@ -25,6 +25,7 @@ import {
   CAROL_SEEDELF,
   clock,
   fakeRelay,
+  listed,
   outboxOf,
   party,
   type Party,
@@ -214,6 +215,8 @@ async function leftOnMainnet() {
   const carol = await party(15, relay, chain, CAROL_SEEDELF);
   await rememberRegister(alice.store, "mainnet", ALICE_SEEDELF, chain.get(ALICE_SEEDELF)!);
   await rememberRegister(bob.store, "mainnet", BOB_SEEDELF, chain.get(BOB_SEEDELF)!);
+  // Carol's too: her turn-on posts its certificate there (chunk 55's 55e), so Alice can write to her first.
+  await rememberRegister(carol.store, "mainnet", CAROL_SEEDELF, chain.get(CAROL_SEEDELF)!);
   for (const p of [alice, bob, carol]) {
     await p.messaging.switch("mainnet", true);
     await p.messaging.whenIdle();
@@ -232,12 +235,15 @@ async function leftOnMainnet() {
   const request = await carol.messaging.start("mainnet", ALICE_SEEDELF, "hello Alice");
   await carol.messaging.whenIdle();
   await read(alice);
-  // The server unreachable: what's sealed from here waits.
-  relay.up = false;
+  // The server unreachable for posts: what's sealed from here waits. Its list still answers, since a first message is
+  // written only once the list is read to its end (the review's second round, finding 6).
+  const reachable = relay.fetch;
+  relay.fetch = async (url, init) => (init.method === "POST" ? Promise.reject(new TypeError("Failed to fetch")) : reachable(url, init));
   const unanswered = await alice.messaging.start("mainnet", CAROL_SEEDELF, "anyone there?");
   await alice.messaging.send("mainnet", answered, "waiting in the outbox");
   await alice.messaging.whenIdle();
   expect((await outboxOf(alice, "mainnet"))?.length).toBe(2);
+  relay.fetch = reachable;
 
   // 1.10.0: the worker's own settings (no list passed), a fresh worker, the server reachable.
   alice.preferences = new PreferencesService(alice.local);
@@ -273,7 +279,7 @@ async function leftOnMainnet() {
     expect({ register: chain.reads, own: alice.freshReads, reveal: alice.revealReads }).toEqual({ register: 0, own: 0, reveal: 0 });
     expect(used).toEqual([]);
   };
-  return { relay, chain, alice, answered, unanswered, request, used, quiet };
+  return { relay, chain, alice, bob, answered, unanswered, request, used, quiet };
 }
 
 describe("the worker, on mainnet, over what a development build left there", { timeout: 30_000 }, () => {
@@ -338,16 +344,27 @@ describe("the worker, on mainnet, over what a development build left there", { t
     quiet();
   });
 
-  it("changes nothing where Messages is open and its switch is off: a first message waits, its Seedelf looked up", async () => {
-    const { relay, chain, alice, used } = await leftOnMainnet();
-    expect(await alice.messaging.isOn("preprod")).toBe(false);
-    const cid = await alice.messaging.start("preprod", BOB_SEEDELF, "waits for the switch");
+  it("changes nothing where Messages is open and its switch is off: a first message is refused, before any read", async () => {
+    const { relay, chain, alice, bob, used } = await leftOnMainnet();
+    // Bob's preprod certificate on the list, and Alice's copy of it, read while her preprod switch was on (chunk 55's
+    // 55e): with it off, a first message isn't written on the list as last read (the review's second round, finding
+    // 6: the writer reads the list to its end before it decides).
+    await listed(relay, bob, BOB_SEEDELF, bob.own[0]!.register);
+    await alice.messaging.switch("preprod", true);
     await alice.messaging.whenIdle();
-    // Looked up on the chain at the press, its stamp solved, sealed, and kept waiting: nothing posted while off.
-    expect(chain.reads).toBe(1);
-    expect(used).toEqual(expect.arrayContaining(["start", "findStamp", "setStamp", "send"]));
+    await alice.messaging.switch("preprod", false);
+    // Her own certificate withdrawn at the switch off (chunk 55's call 9): its post, then nothing more.
+    await alice.messaging.whenIdle();
+    relay.calls.length = 0;
+    chain.reads = 0;
+    used.length = 0;
+    await expect(alice.messaging.start("preprod", BOB_SEEDELF, "waits for the switch")).rejects.toThrow(/Turn Messages on/);
+    await alice.messaging.whenIdle();
+    // Nothing looked up, solved, sealed or posted, and nothing kept.
+    expect(chain.reads).toBe(0);
+    expect(used).toEqual([]);
     expect(relay.calls).toEqual([]);
-    expect((await alice.messaging.overview("preprod")).conversations.map((c) => [c.cid, c.outbox])).toEqual([[cid, 1]]);
-    expect((await outboxOf(alice, "preprod"))?.map((w) => w.cid)).toEqual([cid]);
+    expect((await alice.messaging.overview("preprod")).conversations).toEqual([]);
+    expect(await outboxOf(alice, "preprod")).toBeUndefined();
   });
 });

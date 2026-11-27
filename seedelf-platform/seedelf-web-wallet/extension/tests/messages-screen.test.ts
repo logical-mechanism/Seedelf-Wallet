@@ -714,6 +714,52 @@ describe("the list's states (S4)", () => {
     act(() => root.unmount());
   });
 
+  it("says under a Seedelf's switch when its entry on the list names another key (chunk 55, protocol.md §21.8), and only there", async () => {
+    const { container, root } = await mount(
+      overviewOf([], {
+        seedelfs: [
+          { name: MINE, register: REGISTER, made: true, on: true, elsewhere: true },
+          { name: LOOKALIKE, register: REGISTER, made: false, on: false },
+        ],
+      }),
+    );
+    click(one(container, "messages-seedelfs-row"));
+    const notes = byTest(container, "messages-seedelf-elsewhere");
+    expect(notes.map((n) => n.textContent)).toEqual(["A key not in this wallet takes its messages: someone else may hold this Seedelf's key."]);
+    // Under the first switch's Seedelf, not the second's.
+    const rows = byTest(container, "messages-seedelf");
+    expect(byTest(rows[0]!, "messages-seedelf-elsewhere")).toHaveLength(1);
+    expect(byTest(rows[1]!, "messages-seedelf-elsewhere")).toHaveLength(0);
+    act(() => root.unmount());
+  });
+
+  it("says a Seedelf's switch lists it publicly, and under one the relay won't list again until it moves (chunk 55's review)", async () => {
+    const { container, root } = await mount(
+      overviewOf([], {
+        seedelfs: [
+          { name: MINE, register: REGISTER, made: true, on: true, tooOften: true },
+          { name: LOOKALIKE, register: REGISTER, made: false, on: false },
+        ],
+      }),
+    );
+    click(one(container, "messages-seedelfs-row"));
+    expect(one(container, "messages-seedelfs-listed").textContent).toBe("Turning a Seedelf on lists it publicly as taking messages.");
+    const rows = byTest(container, "messages-seedelf");
+    expect(byTest(rows[0]!, "messages-seedelf-too-often").map((n) => n.textContent)).toEqual([
+      "Taken off the list too many times: once the Seedelf moves, it can be listed again.",
+    ]);
+    expect(byTest(rows[1]!, "messages-seedelf-too-often")).toHaveLength(0);
+    // On, the network's switch says nothing more: what it lists was said before it was turned on.
+    expect(byTest(container, "messages-lists")).toHaveLength(0);
+    act(() => root.unmount());
+  });
+
+  it("says, while Messages are off, that turning them on lists the Seedelfs publicly (the owner's call 2)", async () => {
+    const off = await mount(overviewOf([], { on: false }));
+    expect(one(off.container, "messages-lists").textContent).toBe("Turning Messages on lists your Seedelfs publicly as taking messages.");
+    act(() => off.root.unmount());
+  });
+
   it("shows no Seedelfs' switches while Messages are off, and says nothing of them when all were made here", async () => {
     const off = await mount(overviewOf([], { on: false, seedelfs: [{ name: MINE, register: REGISTER, made: true, on: true }] }));
     expect(byTest(off.container, "messages-seedelfs")).toHaveLength(0);
@@ -1125,6 +1171,10 @@ describe("Settings and the wallet's removal (S5, S6)", () => {
   it("says Remove wallet and Forgot password delete conversations, which the phrase doesn't bring back (docs-claims#8)", () => {
     expect(plain(renderToStaticMarkup(createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined })))).toContain(
       "Conversations in Messages are deleted too, and your recovery phrase doesn't bring them back.",
+    );
+    // Its Seedelfs stay on Messages' public list (protocol.md §21.7: Remove wallet doesn't withdraw).
+    expect(plain(renderToStaticMarkup(createElement(RemoveWallet, { onBack: () => undefined, onRemoved: () => undefined })))).toContain(
+      "Your Seedelfs taking messages stay listed after this: turn Messages off first.",
     );
     expect(plain(renderToStaticMarkup(createElement(Reset, { onCancel: () => undefined, onReset: () => undefined })))).toContain(
       "Conversations in Messages are deleted too, and your phrase doesn't bring them back.",

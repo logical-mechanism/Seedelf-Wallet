@@ -79,8 +79,9 @@ function watchPosts(x: World): void {
   const parties = [x.carol, x.a, x.b];
   const real = x.relay.fetch;
   x.relay.fetch = async (url, init) => {
-    if (init.method !== "POST") return real(url, init);
     const u = new URL(url);
+    // A certificate's post (chunk 55's 55e), the turn-on's, is no envelope: what these tests compare are the envelopes.
+    if (init.method !== "POST" || u.pathname.endsWith("/certificates")) return real(url, init);
     const bare = `POST ${u.pathname}${u.search}`;
     const owners = parties.filter((p) => p.trace.at(-1) === bare);
     if (owners.length !== 1) throw new Error(`a post whose poster can't be told (${owners.length})`);
@@ -192,7 +193,7 @@ function paired(name: string, a: string[], b: string[]): { identical: boolean; a
 
 /** What Carol's key opens `envelope` as: its kind (session or first-contact), and F's t and to for a first message. */
 async function opened(carol: Party, envelope: string): Promise<{ kind?: string; t?: number | null; to?: string | null; refused?: string }> {
-  return carol.wallet.withKeys((keys) => JSON.parse(String(wasm.messagingOpen(keys.seedelf, envelope))));
+  return carol.wallet.withKeys((keys) => JSON.parse(String(wasm.messagingOpen(keys.messaging.preprod!, envelope))));
 }
 
 const answeredIn = async (p: Party, cid: string) => (await p.store.get<Inbox>("messaging.preprod"))!.conversations[cid]!.answered === true;

@@ -41,6 +41,8 @@ import {
   type Party,
   PASSWORD,
   recordName,
+  relist,
+  listed,
   synced,
   takesOf,
   talking,
@@ -117,6 +119,9 @@ async function world(): Promise<World> {
   const cid = await talking(w, a, ALICE_SEEDELF);
   await synced(a);
   await synced(b);
+  // Both copies of the certificate list at its end (chunk 55's 55e), whoever turned on first: their next reads of it,
+  // at an unlock's first sync or a Seedelf's turn-on, ask the same.
+  await relist(a, b);
   const record = await recordName(a, cid);
   const x: World = { relay, directory, w, a, b, cid, record, writing: false, answer: () => keptNew(), posted: 0, n: 0, notes: { a: [], b: [] } };
   const real = relay.fetch;
@@ -141,6 +146,11 @@ async function seconds(x: World): Promise<{ a: RegisterHex; b: RegisterHex }> {
   x.b.own.push({ name: BOB2, register: b });
   x.directory.set(ALICE2, a);
   x.directory.set(BOB2, b);
+  // Each one's certificate on the list, as another browser of each phrase posted it (chunk 55's 55e): W can write to
+  // either, which neither reader's worker certified, its first messages off here.
+  await listed(x.relay, x.a, ALICE2, a);
+  await listed(x.relay, x.b, BOB2, b);
+  await relist(x.a, x.b);
   return { a, b };
 }
 
@@ -889,8 +899,10 @@ describe("what two wallets ask when the same pages hold one's envelopes and none
     // Different by design (W9, W13): WebAssembly that traps locks the wallet that ran it, here only A, which took the
     // envelope, and A's Messages read nothing by themselves until Try again. Then A reads on from where its last read
     // ended, never that read's pages again (finding 8), and the take goes on from the take record past the envelope that
-    // trapped: the same pages as B's, in the same order, A's later. A trap anyone can cause would be high anyway.
-    const gets = (t: string[]) => t.filter((s) => s.startsWith("GET "));
+    // trapped: the same pages as B's, in the same order, A's later. A trap anyone can cause would be high anyway. And
+    // A's unlock's first sync reads the certificate list's new entries (chunk 55's 55e), as every unlock's does: B's
+    // wallet never locked.
+    const gets = (t: string[]) => t.filter((s) => s.startsWith("GET /messaging/v1/preprod/envelopes"));
     expect(gets(r.a)).toEqual(gets(r.b));
     const tryAgain = r.a.indexOf("# try again");
     expect(r.a.slice(r.a.indexOf("# tick 2"), tryAgain).filter((s) => s.startsWith("GET "))).toEqual([]);
@@ -928,7 +940,9 @@ describe("what two wallets ask when the same pages hold one's envelopes and none
           await reader.wallet.unlock(PASSWORD);
         }
         await reader.messaging.whenIdle();
-        asked.push(relay.calls.slice(before).filter((c) => c.startsWith("GET ")));
+        // The pool's pages: the unlock's first sync reads the certificate list's new entries beside them (chunk 55's
+        // 55e), for both readers alike.
+        asked.push(relay.calls.slice(before).filter((c) => c.startsWith("GET /messaging/v1/preprod/envelopes")));
         cursors.push(await cursorOf(reader));
       }
       return { asked, cursors, openedAtLock, opened: reader.trace.filter((s) => s === "open").length, takes: await takesOf(reader) };

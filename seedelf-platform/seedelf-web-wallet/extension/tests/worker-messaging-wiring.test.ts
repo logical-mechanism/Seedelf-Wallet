@@ -217,8 +217,9 @@ describe("Messages as the worker wires it (round 5)", () => {
     await vi.waitFor(() => expect(held.runs.length).toBe(before + 1), { timeout: 30_000 });
     await vi.waitFor(() => expect(held.fetched.length).toBeGreaterThan(0), { timeout: 30_000 });
     expect((await ask({ type: "lock" })).ok).toBe(true);
-    // Nothing in this file reached a server: every request was the relay's read, answered here.
-    for (const url of held.fetched) expect(url).toMatch(/\/messaging\/v1\/preprod\/envelopes/);
+    // Nothing in this file reached a server: every request was the relay's, answered here: its pool's pages, and the
+    // certificate list read at the switch with the wallet's own certificate posted (chunk 55's 55e).
+    for (const url of held.fetched) expect(url).toMatch(/\/messaging\/v1\/preprod\/(envelopes|certificates)/);
     // Unlocked with a Messages switch on, through an alarm and a lock: the trivial call was never made.
     expect(held.pings).toBe(0);
   });

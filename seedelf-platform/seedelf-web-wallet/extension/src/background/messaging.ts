@@ -41,6 +41,12 @@
 //                                    one write moves them all. `id` is 16
 //                                    random bytes the inbox maps to the
 //                                    conversation: nothing at rest names it.
+//   messagingList.<network>          The relay's list of certificates as
+//                                    the wallet last read it, behind its
+//                                    cursor, and the wallet's own
+//                                    certificates waiting to be posted or
+//                                    withdrawn (chunk 55's 55e), in a room
+//                                    of its own (LIST_ROOM_BYTES).
 //
 // The crate's records and the envelopes are stored as base64; this service
 // works with them in hex, as the exports take them.
@@ -147,6 +153,24 @@
 // mint one under the sum of two of the wallet's registers, and answering at
 // it, or showing it, would tell them the two are one wallet's.
 //
+// Two keys (chunk 55's 55e, protocol.md §21). Messages reads, writes and
+// proves with a key of its own, x_m, one a network it's open on (wallet.ts
+// `Keys.messaging`), never with the Seedelf key, which spends: every call that
+// takes a key here takes x_m (`withKey`, `laneKey`). The Seedelf key x makes
+// one thing for Messages, a Seedelf's certificate (`certify`), which binds
+// the Seedelf's messaging register M_S = (h_S, [x_m]h_S) to the Seedelf, and
+// which the relay keeps on a list per pool (protocol.md §21.7). A writer
+// writes to a Seedelf only with exactly one good certificate for it, read from
+// that list, never by name; a Seedelf with none, or with good ones naming two
+// keys, takes no first messages. The wallet makes its own at the switch, at a
+// Seedelf's turn-on and where one of its own is missing from the list, and
+// posts them apart, from a queue kept in the list's record that the minute's
+// alarm and every lane work: no timer keeps the worker for it. It withdraws
+// them (chunk 55's call 9) at a network's switch off and at a Seedelf's
+// turn-off, from the same queue, apart, a proof of x_m's for each: the alarm
+// runs on while one waits, Messages off, and one a lock caught waits for the
+// next unlock.
+//
 // The verified reveal (protocol.md §19, 54f): the side that wrote first may
 // show the other one of its Seedelfs, once answered, as a message of kind
 // 0x02. Its reader checks the proof as the message is received, with no
@@ -154,7 +178,9 @@
 // pay-by-name finds a Seedelf, is read only when the user asks, in the thread
 // (`checkReveals`): a read right after a reveal came would tell the server
 // whom it was for. Only then does the conversation name it; a reveal that
-// fails never shows its name.
+// fails never shows its name. Since chunk 55 a reveal carries the Seedelf's
+// m_S, and its press reads the certificate list too: verified only where
+// exactly one good certificate names that m_S.
 
 import { t } from "../i18n";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -185,6 +211,9 @@ import {
   UnreadableRecordError,
 } from "./private-store";
 import {
+  type CertificateAnswer,
+  type CertificatePage,
+  type WithdrawalAnswer,
   DAY_READ_MAX_MS,
   PAGES_A_SYNC,
   POST_WAIT_MAX_MS,
@@ -201,7 +230,7 @@ import {
   RelayUnknown,
 } from "./relay";
 import { fromBase64, toBase64, type Area } from "./storage";
-import { type Admit, NotAdmitted, phrasePin, type PhrasePin, SESSION_UNLOCKED_AT, type Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
+import { type Admit, type Keys, NotAdmitted, phrasePin, type PhrasePin, SESSION_UNLOCKED_AT, type Wallet, WalletLocked, WASM_BROKEN } from "./wallet";
 import { isTrap } from "./wasm";
 
 /** Envelopes scanned in one turn of the wallet's queue: about 0.2 s (protocol.md §8). */
@@ -349,6 +378,56 @@ export const SESSION_POSTS = "seedelf.messaging.posts";
 
 /** chrome.storage.session: until when (ms) each network's pages wait for the day's reading (W16). A lock clears it. */
 export const SESSION_READ_AFTER = "seedelf.messaging.readAfter";
+
+/**
+ * chrome.storage.session: each network whose certificate list was read in this unlock, and the wallet's own
+ * certificates set right against it (chunk 55's 55e, `certify`): so a worker Chrome started again in the same unlock
+ * doesn't read the list again at its first sync. A lock clears it; the switch, a Seedelf's turn-on and a Seedelf made
+ * here take a network off it (`askList`).
+ */
+export const SESSION_LISTED = "seedelf.messaging.listed";
+
+/**
+ * The list copy's room (chunk 55's 55e [choice]): 256 KiB of JSON a network, 349,568 bytes as stored, about 600
+ * certificates and the wallet's own waiting to be posted. Past it the oldest Seedelfs' certificates go, each Seedelf's
+ * together and never one naming a pair of the wallet's own (the review of 55e, M3), so a Seedelf whose certificates
+ * went reads as taking no messages here, and a reveal's check on it stays unchecked. Kept apart from MESSAGES_BUDGET_BYTES, and counted as taken in
+ * every look at the area's reserve, as the requests' and the take's rooms are (O5): what strangers post never decides
+ * whether the user's write fits.
+ */
+export const LIST_ROOM_BYTES = 256 * 1024;
+
+/** The most pages of the certificate list one read asks, one after the other: 1 MiB of entries, four rooms' worth. */
+export const LIST_PAGES_A_READ = 16;
+
+/**
+ * The most reads of the list a press makes before it decides (a first message's, a reveal's check; the review of 55e,
+ * M3): it reads the list to its end, a read after a read while the relay says more follows, at most this many, 2 MiB of
+ * entries. Still not at the end, it decides nothing and says to try again (ListBehind): its copy's cursor is kept, so
+ * the next press goes on from there.
+ */
+export const LIST_READS_A_PRESS = 2;
+
+/**
+ * The waits before a certificate of the wallet's own is posted again after the relay answered that its register isn't
+ * the Seedelf's now (the review of 55e, H1; protocol.md §21.8): a Seedelf minted while Messages are on is posted before
+ * its mint is on the chain the relay reads, whose answers it keeps a minute. Each longer than that; after the last, it
+ * waits for the next unlock, and goes then only once the wallet's own view of the contract holds its pair. A
+ * withdrawal the relay refused, or answered with a 404 that isn't its own words, waits the same, and an hour after the
+ * last, for as long as it waits (X-L6): it's what the switch asked.
+ */
+export const MOVED_BACKOFF_MS = [2, 5, 10, 20, 40].map((m) => m * 60_000);
+
+/**
+ * How far apart the wallet's own certificates are posted (chunk 55's 55e [choice]; protocol.md §21.7): a random wait,
+ * from 2 to 10 minutes, after the last one went, so a reader of the list doesn't see them arrive together. The first
+ * goes at once. Each waits in the list's record with its time on this device's clock, and goes at the first lane after
+ * it, the minute's alarm's at the latest: no timer of its own.
+ */
+export const CERTIFICATE_SPACING_MS = { least: 2 * 60_000, most: 10 * 60_000 } as const;
+
+/** A certificate's network byte (protocol.md §21.2). */
+const NETWORK_BYTE: Record<NetworkName, number> = { preprod: 0x00, mainnet: 0x01 };
 
 /**
  * The inbox, `messaging.<network>`, as this service works with it: the tombstones in hex. Stored (`StoredInbox`) with
@@ -577,13 +656,14 @@ export interface Entry {
   /**
    * A reveal (`kind` KIND_REVEAL, protocol.md §19). Sent: the Seedelf this wallet showed. Received: `unchecked`, its
    * proof verified and the chain's register not yet compared (the user's press compares it, `checkReveals`), which the
-   * name and register are kept for; `verified`; or `failed`, with nothing of the name kept. A received reveal with
+   * name, the register and the Seedelf's m_S (`messaging`, which the press holds to the certificate list, protocol.md
+   * §21.9) are kept for; `verified`; or `failed`, with nothing of the name kept. A received reveal with
    * none was never checked: one in a request's message, or a first-contact message's. Builds before the 1.10.0 gate
    * kept an unchecked one as `checking`, which reads as `unchecked`.
    */
   reveal?:
     | { dir: "out"; name: string }
-    | { status: "unchecked"; name: string; register: RegisterHex }
+    | { status: "unchecked"; name: string; register: RegisterHex; messaging?: string }
     | { status: "verified"; name: string }
     | { status: "failed" };
 }
@@ -643,6 +723,8 @@ export interface MessagingDeps {
   shareBytes?: number;
   /** The take record's room, as its JSON, for tests: TAKE_ROOM_BYTES otherwise. */
   takeRoomBytes?: number;
+  /** The list record's room, as its JSON, for tests: LIST_ROOM_BYTES otherwise. */
+  listRoomBytes?: number;
   /**
    * For tests only: told of each throw a take passes over without a word (W9; the 1.10.0 gate's f2), so a test meets
    * any it didn't mean to. The worker never sets it.
@@ -683,6 +765,11 @@ export interface MessagingDeps {
   takeMarginMs?: number;
   /** A wait of `ms` (monotonic) for the gate, for tests: a timer otherwise. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * The wait before the wallet's next own certificate may go (ms), for tests: a random one within CERTIFICATE_SPACING_MS
+   * otherwise. The worker never sets it.
+   */
+  certificateSpacing?: () => number;
   /**
    * For tests only: told as each lane starts and ends, as each run of `syncAll` starts and ends (the alarm's, an
    * unlock's), as each runner step starts and ends, as the gate lets a call into the wallet's queue through, and as a
@@ -883,6 +970,157 @@ interface Requests {
 
 const requestsRecord = (network: NetworkName): RecordName => `messagingRequests.${network}`;
 
+/**
+ * The list record, `messagingList.<network>` (sealed; chunk 55's 55e), as stored: the relay's certificate list as this
+ * wallet last read it (protocol.md §21.7), in base64, in the list's order, with the cursor its next read goes on from;
+ * the wallet's own certificates waiting to be posted, each with the time it may go (ms, this device's clock); the
+ * wallet's own pairs whose good certificate names another key's m_S (`elsewhere`, by `pairKey`); when its last own
+ * certificate went (`lastAt`); and the pairs its last pass set right (`pairs`). Within LIST_ROOM_BYTES as JSON, its
+ * oldest certificates going past it.
+ */
+interface StoredList {
+  v: 1;
+  cursor?: string;
+  certificates?: string[];
+  queue?: Array<{ certificate: string; after: number; withdraw?: true; tries?: number; parked?: number }>;
+  elsewhere?: string[];
+  lastAt?: number;
+  pairs?: string[];
+  trimmed?: true;
+  tooOften?: string[];
+  behind?: true;
+  intents?: string[];
+  evicted?: string;
+  evictedAll?: true;
+}
+
+/** The list record as this service works with it: each certificate in hex, by its listing digest, in the list's order. */
+interface ListState {
+  cursor?: string;
+  certificates: Map<string, string>;
+  /** The wallet's own certificates waiting to be posted, or, `withdraw`, to be withdrawn, each when it may go. */
+  queue: QueueEntry[];
+  elsewhere: string[];
+  lastAt?: number;
+  /** The pairs the last pass set right (`certify`), by `pairKey`: one that takes first messages and isn't is new. */
+  pairs: string[];
+  /**
+   * Certificates went past the copy's room since it was last started from the list's start (`listToStored`): a pair
+   * with none on the copy may have had some, so a reveal's check decides nothing on it (the review of 55e, L1).
+   */
+  trimmed: boolean;
+  /**
+   * The wallet's own pairs the relay won't list again until their Seedelf moves (§21.7's check 3″, 409 `this Seedelf
+   * was withdrawn too often at this register`), by `pairKey`: none is posted for them, and the overview says so.
+   */
+  tooOften: string[];
+  /**
+   * The last read of the list stopped with more to read (`more`): the copy is part of the list, which a press never
+   * decides on (the review of 55e, M3), even where the relay can't be read now.
+   */
+  behind: boolean;
+  /**
+   * The Seedelfs turned off whose choice may not be written yet, by `pairKey` (the review's finding 2): written before
+   * the choice, in the press's own step, so a pass that runs before the choice lands keeps the withdrawals' mark;
+   * cleared once the choices say so (`reconcile`) or the Seedelf is turned on again (`answerAt`).
+   */
+  intents: string[];
+  /**
+   * The Seedelfs whose certificates went past the copy's room since its last start from the list's oldest (finding 4),
+   * each by `groupHash`: a certificate for one of them read later isn't kept, since the copy would hold it alone where
+   * the relay holds others, so the Seedelf reads as unknown (refused, unchecked), the safe way. Past EVICTED_MOST, none
+   * is kept by name and `evictedAll` says that every Seedelf not on the copy is unknown so. A gap clears both.
+   */
+  evicted: Set<string>;
+  evictedAll: boolean;
+}
+
+/**
+ * One of the wallet's own certificates waiting in the list record's queue: to be posted, or (`withdraw`) to be taken off
+ * the list (protocol.md §21.7's withdrawals), when it may go (ms, this device's clock).
+ */
+interface QueueEntry {
+  certificate: string;
+  after: number;
+  withdraw?: true;
+  /**
+   * How many times the relay has answered it with a wait of MOVED_BACKOFF_MS's (H1, X-L6): a certificate's 409 `not this
+   * Seedelf's register now`, a withdrawal's refusal.
+   */
+  tries?: number;
+  /**
+   * A certificate whose waits ran out (H1): the unlock (`unlockedAt`) they ran out in. It goes again only in a later
+   * one, once the wallet's own view of the contract holds its pair (`certify`).
+   */
+  parked?: number;
+}
+
+/** The list record as this service holds it, as `ReadHeld` holds the read record. */
+interface ListHeld extends ListState {
+  /** The unlock it was read or written in (`unlockedAt`). */
+  at: number | undefined;
+  /** The phrase it's sealed under (`phrasePin`'s ID): another's is never used. */
+  phrase: string;
+  /** Changed in memory since it was last written. */
+  dirty: boolean;
+}
+
+const listRecord = (network: NetworkName): RecordName => `messagingList.${network}`;
+
+/**
+ * The mark that withdrawals of the wallet's own may wait on `network`, `messagingWithdraw.<network>` (`markWithdrawals`):
+ * not sealed, so a run finds them with no key and no record read; written before the switch or the choice it's for, so
+ * no lock loses the intent (the review of 55e, M2). A random value, which says only that something may wait.
+ */
+const withdrawKey = (network: NetworkName) => `${PRIVATE_PREFIX}messagingWithdraw.${network}`;
+
+/** The withdrawals' mark as stored (`markWithdrawals`): a random `id` for each write, and `off` for a switch turned off. */
+interface Mark {
+  id: string;
+  off?: true;
+}
+
+/**
+ * What a certificate (hex) names, read from its bytes (protocol.md §21.4): its network byte, its Seedelf's name and
+ * register, and its m_S. Nothing of its proof: `messagingCheckCertificate` checks that, and a certificate is good only
+ * once it has (`goodFor`). Undefined for bytes whose shape isn't a certificate's.
+ */
+function certificateNames(certificate: string): { network: number; name: string; register: RegisterHex; messaging: string } | undefined {
+  const length = certificate.length / 2;
+  if (!Number.isInteger(length) || length < 273 || length > 304 || !/^[0-9a-f]+$/.test(certificate)) return undefined;
+  const byte = (i: number) => Number.parseInt(certificate.slice(2 * i, 2 * i + 2), 16);
+  const n = byte(31);
+  if (byte(0) !== 1 || byte(2) !== 0 || n < 1 || n > 32 || length !== 272 + n) return undefined;
+  // version, network, generation, policy (28), len(N), N, g_S, u_S, m_S, then the proof.
+  const at = 2 * (32 + n);
+  return {
+    network: byte(1),
+    name: certificate.slice(64, 64 + 2 * n),
+    register: { generator: certificate.slice(at, at + 96), publicValue: certificate.slice(at + 96, at + 192) },
+    messaging: certificate.slice(at + 192, at + 288),
+  };
+}
+
+/**
+ * The most Seedelfs the list's copy remembers letting go by name (finding 4): 4,096, 64 KiB of the room. Past it, it
+ * remembers that some went (`evictedAll`).
+ */
+const EVICTED_MOST = 4096;
+
+/** A Seedelf's (name, register), as `pairKey` gives it, by the first 8 bytes of its SHA-256, in hex: sealed with the copy. */
+function groupHash(group: string): string {
+  return Array.from(sha256(new TextEncoder().encode(group)).subarray(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** A certificate's post's bytes (protocol.md §21.7): its nonce, 8 bytes big-endian, then the certificate. */
+function certificateBody(nonce: number, certificate: string): Uint8Array {
+  const bytes = bytesOf(certificate);
+  const body = new Uint8Array(8 + bytes.length);
+  new DataView(body.buffer).setBigUint64(0, BigInt(nonce));
+  body.set(bytes, 8);
+  return body;
+}
+
 /** What a posting run's answer was for one envelope, for the runner's bookkeeping after the lane. */
 interface Posted {
   cid: string;
@@ -893,6 +1131,13 @@ interface Posted {
   /** The phrase the posting run began under: another's marks nothing. */
   pin: PhrasePin;
 }
+
+/**
+ * How a read of the certificate list ended (`listNow`): `ended`, at the list's end; `more`, with pages still to read
+ * after its last (a read asks LIST_PAGES_A_READ at most); `failed`, not read through: the relay didn't answer, said its
+ * stop or its day's hold, the switch is off, or the wallet locked.
+ */
+type ListRead = "ended" | "more" | "failed";
 
 /** A tick the worker expects (`ticks`): when (monotonic ms), and whether a lane of Messages' own serves it. */
 interface Tick {
@@ -938,6 +1183,12 @@ const markRecord = (network: NetworkName, step: MarkStep): RecordName =>
  */
 const trapKey = (network: NetworkName) => `${PRIVATE_PREFIX}messagingTrap.${network}`;
 
+/** False for what failed, but a trap, which locks the wallet as ever: a withdrawal that couldn't be queued (`switch`). */
+const quietly = (e: unknown): false => {
+  if (isTrap(e)) throw e;
+  return false;
+};
+
 /** A refusal the crate gives, as its code (54d). */
 interface Refused {
   refused: string;
@@ -963,8 +1214,11 @@ const isRecordRefusal = (answer: unknown) => isRefused(answer) && RECORD_REFUSAL
 
 /** The message a refusal is said with, when a request of the user's is refused. */
 export class MessagingRefused extends Error {
-  constructor(readonly code: string) {
-    super(t("worker.messaging.refused", { code }));
+  constructor(
+    readonly code: string,
+    words?: string,
+  ) {
+    super(words ?? t("worker.messaging.refused", { code }));
   }
 }
 
@@ -1006,6 +1260,63 @@ export class ShareUsedUp extends MessagingRefused {
   constructor() {
     super("request_full");
     this.message = t("worker.messaging.waitForReply");
+  }
+}
+
+/**
+ * The Seedelf written to takes no first messages (protocol.md §21.5, §21.8; chunk 55's 55e): no good certificate for it
+ * on the relay's list, as its register is now, or good ones naming two keys. Refused before any work is done or anything
+ * is posted: nothing is written, sealed or solved for it. The screens say it doesn't take messages.
+ */
+export class NoCertificate extends MessagingRefused {
+  constructor() {
+    super("no_certificate");
+    this.message = t("worker.messaging.noCertificate");
+  }
+}
+
+/**
+ * The certificate list not read to its end at a press (the review of 55e, M3): a first message, or a reveal's check,
+ * decides nothing on part of it. Its copy goes on from where the reads ended, so pressed again, it's nearer the end.
+ */
+export class ListBehind extends MessagingRefused {
+  constructor() {
+    super("list_behind");
+    this.message = t("worker.messaging.listBehind");
+  }
+}
+
+/**
+ * A Seedelf of the wallet's own that the relay won't list again at its register (§21.7's check 3″): withdrawn too often
+ * there. Moved, at a new register, it's listed afresh.
+ */
+export class TooOften extends MessagingRefused {
+  constructor() {
+    super("too_often");
+    this.message = t("worker.messaging.tooOften");
+  }
+}
+
+/**
+ * Show my Seedelf before the Seedelf's own certificate is listed (the review of 55e, L1): it's posted first, a while
+ * after the wallet's last one, and the reveal goes once the relay has it, so the reader's check can find it.
+ */
+export class NotListedYet extends MessagingRefused {
+  constructor() {
+    super("not_listed_yet");
+    this.message = t("worker.messaging.notListedYet");
+  }
+}
+
+/**
+ * A Seedelf of the wallet's own whose good certificate on the list names another key's m_S (protocol.md §21.8): another
+ * holder of the Seedelf key, or another wallet's derivation, takes its messages. Nothing is posted for it, and it isn't
+ * shown (Show my Seedelf): a second certificate would leave it taking no first messages at all.
+ */
+export class OtherKey extends MessagingRefused {
+  constructor() {
+    super("other_key");
+    this.message = t("worker.messaging.warn.otherKey");
   }
 }
 
@@ -1076,6 +1387,13 @@ const envelopeHash = (envelope: string) => hexOf(sha256(bytesOf(envelope)));
 
 const sameRegister = (a: RegisterHex, b: RegisterHex) => a.generator === b.generator && a.publicValue === b.publicValue;
 const pairKey = (name: string, register: RegisterHex) => `${name}:${register.generator}${register.publicValue}`;
+/** The pair a `pairKey` names: undefined for one that doesn't read. */
+const pairOfKey = (key: string): { name: string; register: RegisterHex } | undefined => {
+  const at = key.indexOf(":");
+  const rest = key.slice(at + 1);
+  if (at < 0 || !/^[0-9a-f]{192}$/.test(rest)) return undefined;
+  return { name: key.slice(0, at), register: { generator: rest.slice(0, 96), publicValue: rest.slice(96) } };
+};
 const isRegister = (r: unknown): r is RegisterHex =>
   typeof r === "object" &&
   r !== null &&
@@ -1580,6 +1898,43 @@ export class MessagingService {
   private expired = new Map<NetworkName, number>();
   /** The relay's holds (`hold`), without session storage. */
   private holds = new Map<string, Partial<Record<NetworkName, number>>>();
+  /** Each network's list record as this service holds it (`listFor`, chunk 55's 55e). */
+  private lists = new Map<NetworkName, ListHeld>();
+  /** Each network's list record's writes, one after another, in a chain of their own. */
+  private listWrites = new Map<NetworkName, Promise<unknown>>();
+  /** The list read running on each network, if one is: one asked meanwhile is that one (`readList`). */
+  private listReads = new Map<NetworkName, Promise<ListRead>>();
+  /** The post of the wallet's own certificate running on each network, if one is (`postCertificates`). */
+  private certificatePosts = new Map<NetworkName, Promise<void>>();
+  /** The price the last list page named for a certificate's post (protocol.md §21.7), by network. */
+  private listPrices = new Map<NetworkName, number>();
+  /** No certificate post before this (monotonic ms), by network: the edge or the server asked every post to wait. */
+  private certificateAfter = new Map<NetworkName, number>();
+  /** Answers this version doesn't know, in a row, to a certificate's post, by its listing digest. */
+  private certificateStrikes = new Map<string, number>();
+  /**
+   * What each certificate of the list checked to (`checkedCertificate`): its m_S, or null for one that doesn't check, by
+   * network and listing digest. Each is checked once a worker, whatever reads it.
+   */
+  private certificateChecks = new Map<string, string | null>();
+  /** The wallet's own m_S for each of its pairs (`ownValues`), by network, phrase and pair: from its messaging key alone. */
+  private values = new Map<string, string>();
+  /** Each network's asks for its list to be read again (`askList`): a pass that began before the last one lists nothing. */
+  private listAsks = new Map<NetworkName, number>();
+  /**
+   * The withdrawals' mark (`messagingWithdraw.<network>`) each network's last pass set the queue right for (`reconcile`):
+   * a mark written after that pass began is an intent no pass has looked at yet, which nothing clears (the review of
+   * 55e, M2). None after a worker starts: every mark is then one to look at.
+   */
+  private reconciled = new Map<NetworkName, { id: string | undefined; opened: number | undefined; full: boolean }>();
+  /**
+   * The wallet's own certificates the relay said it holds in this worker (`kept`, new or already), by network, pair and
+   * m_S, whichever bytes it holds: so Show my Seedelf goes once it's listed, and the switch makes none again for it while
+   * the copy waits for the bytes the relay holds (the review of 55e, L1 and M3).
+   */
+  private confirmed = new Set<string>();
+  /** What each network's overview last read of its list record (`listShown`, L2), by unlock. */
+  private shownList = new Map<NetworkName, { at: number; elsewhere: Set<string>; tooOften: Set<string> }>();
   /**
    * The private store as minted-by.ts reads and writes it outside a lane: each call admitted (`admitted`), so the
    * runner's and the presses' calls into the wallet's queue keep off the lanes and the ticks (round 5).
@@ -1619,15 +1974,35 @@ export class MessagingService {
     if (on && !this.deps.preferences.messagingOpen(network)) {
       throw new Error(t("worker.messaging.notOpenHere", { network: NETWORKS[network].label }));
     }
+    const open = this.deps.preferences.messagingOpen(network);
+    // Off: the intent to withdraw written before the switch is (the review of 55e, M2), with no key and nothing
+    // sealed, so a lock or a worker stop at any point after leaves it for the next unlock's run (`syncAll`), which
+    // sets the queue right from the switch as it then stands (`reconcile`).
+    if (!on && open) await this.markWithdrawals(network, true);
     // This network's switch alone: the settings' writes are one at a time (preferences.ts `set`), the other kept.
-    const switches = (await this.deps.preferences.set({ messaging: { [network]: on } as never })).messaging;
+    await this.deps.preferences.set({ messaging: { [network]: on } as never });
     // Whatever the relay did before the switch, the next read says again.
     this.offline.delete(network);
     if (on) {
+      // A withdrawal still waiting from the switch off goes first, its certificate staying listed; then the list read,
+      // and the wallet's own certificates set right against it (protocol.md §21.8): its sync's.
+      // The switch on undoes the mark's switch off (finding 2), whatever else it holds.
+      const mark = open ? await this.markOf(network) : undefined;
+      if (mark?.off) await this.markWithdrawals(network, false);
+      // A records' failure never keeps the switch from turning on (finding 7): the list is still asked for, the alarm
+      // started and the pool read, and the mark stays for the next run.
+      if (mark) await this.reconcile(network).catch(quietly);
+      await this.askList(network);
       await this.deps.alarm?.start();
       this.behind(this.sync(network));
-    } else if (!Object.values(switches).some(Boolean)) {
-      await this.deps.alarm?.stop();
+    } else {
+      // Off: the wallet's own certificates withdrawn from the list, the first at once, the rest apart, worked by the
+      // alarm, which runs on while any waits (protocol.md §21.7, chunk 55's call 9).
+      // A records' failure never keeps the switch on: its mark stays, and the next run sets the queue right.
+      const due = open ? await this.reconcile(network).catch(quietly) : false;
+      // Every network's withdrawals counted (L5): another's still waiting keeps the alarm on.
+      await this.alarmAsNeeded();
+      if (due) this.behind(this.postCertificates(network));
     }
     this.notify(network);
   }
@@ -1672,7 +2047,7 @@ export class MessagingService {
         }),
       )
       .sort((a, b) => b.lastAt - a.lastAt);
-    const seedelfs = await this.seedelfsOf(network, inbox);
+    const seedelfs = await this.seedelfsOf(network, inbox, at);
     // What wasn't kept, apart (the 1.10.0 gate's f5): messages there was no room for, which deleting a conversation
     // makes room for; and the key's envelopes dropped unopened, which may be anyone's, and which nothing brings back.
     const dropped = (inbox.dropped ?? 0) + takes.noRoom;
@@ -1752,7 +2127,7 @@ export class MessagingService {
     if (Number.isSafeInteger(count) && count > 0) {
       await this.serial(async () => {
         const pin = phrasePin();
-        await this.withKey((_key, keys) => pin(keys));
+        await this.withKeys((keys) => pin(keys));
         await this.gate();
         await this.onChain(this.takeWrites, network, async () => {
           const held = await this.takesOf(network, pin);
@@ -1794,7 +2169,10 @@ export class MessagingService {
       }
       // Where this wallet wrote first and has a reply the thread shows (O4), the Seedelfs it can show (§19): those it
       // made or the user turned on (W8), from what the wallet holds, with no request.
-      const seedelfs = meta.role === "initiator" && meta.answered && !info.sendsFirstContact ? (await this.handlesNow(network, inbox)).shown : undefined;
+      // Of those, only one with a good certificate of its own, on the list's copy or waiting to be posted (§21.8): the
+      // reader's check holds a reveal to it.
+      const seedelfs =
+        meta.role === "initiator" && meta.answered && !info.sendsFirstContact ? await this.certified(network, (await this.handlesNow(network, inbox)).pairs) : undefined;
       const now = this.deps.now();
       const key = keyOf(network, cid);
       const work = this.work.get(key);
@@ -1842,7 +2220,7 @@ export class MessagingService {
         inbox,
         held,
         () =>
-          this.withKey((key) =>
+          this.withKey(network, (key) =>
             this.parse<{ messages: Array<{ at: number; plaintext?: string; refused?: string }> }>(
               this.deps.wasm.messagingReadRequest(key, JSON.stringify({ requests, cid })),
             ),
@@ -1866,22 +2244,43 @@ export class MessagingService {
   /**
    * Starts a conversation with the owner of the Seedelf `name` (asset name, hex), its first message `text`. The
    * first-contact stamp is then solved, about 7 s, and the message sealed and posted. Returns its cid.
+   *
+   * Written only on the Seedelf's one good certificate (protocol.md §21.8; chunk 55's 55e): the press reads the
+   * contract, as now, then the certificate list's new entries, never by name, and takes the certificate exactly one m_S
+   * among the good ones for that name and register gives. None, or two, refuses (NoCertificate) before any work is done
+   * or anything posted. With the switch off, nothing reaches the relay: only the list as last read is looked at, and a
+   * Seedelf it holds no certificate of can't be written to until Messages are on.
    */
   async start(network: NetworkName, name: string, text: string, replacing?: string): Promise<string> {
     // Before the chain read: on a network Messages isn't open on, no server is asked anything for it.
     this.openHere(network);
     this.checkText(text);
+    // The press's unlock, taken before anything is asked (the review of 55e, L3): what's read in another is none of
+    // this press's, which is refused as a lock refuses it.
+    const began = this.opened();
+    // Off, nothing is decided (the review's finding 6): the writer reads the list to its end before it decides (§21.8),
+    // and with the switch off it reads nothing, the chain included.
+    if (!(await this.isOn(network))) throw new Error(t("messages.noneOff"));
     // The press's own chain read: its request, at once.
     const register = await this.deps.seedelfRegister(network, name);
+    // Then the list's new entries, the press's own request too: lanes, read whole whoever is written to, to the list's
+    // end (M3): never decided on part of it, nor on the copy as an earlier read left it.
+    const read = await this.readToEnd(network);
+    if (this.opened() !== began) throw new WalletLocked(t("worker.wallet.locked"));
+    if (read === "more") throw new ListBehind();
+    if (read === "failed") throw await this.unread(network);
+    const certificate = await this.certificateTo(network, name, register);
+    // And again after it, which may wait at the gate (finding 3); the write below is then this unlock's (`serial`).
+    if (this.opened() !== began) throw new WalletLocked(t("worker.wallet.locked"));
     const cid = await this.serial(async () => {
       const pin = phrasePin();
       const now = this.deps.now();
       // F's t: this device's clock, rounded down (W14), never the relay's.
       const startT = tOf(now);
-      const started = await this.withKey((key, keys) => {
+      const started = await this.withKey(network, (key, keys) => {
         pin(keys);
         return this.parse<{ cid: string; conversation: string; digest: string }>(
-          this.deps.wasm.messagingStart(key, JSON.stringify({ handle: register, to: name, now: startT })),
+          this.deps.wasm.messagingStart(key, JSON.stringify({ network, name, register, certificate, now: startT })),
         );
       });
       if (isRefused(started)) {
@@ -1948,7 +2347,7 @@ export class MessagingService {
       if (!meta || !old) throw new Error(t("worker.messaging.noConversation"));
       const now = this.deps.now();
       const startT = tOf(now);
-      const started = await this.withKey((key, keys) => {
+      const started = await this.withKey(network, (key, keys) => {
         pin(keys);
         return this.parse<{ cid: string; conversation: string; digest: string }>(
           this.deps.wasm.messagingStartContinuing(key, JSON.stringify({ conversation: old.state, now: startT })),
@@ -2068,6 +2467,9 @@ export class MessagingService {
     // A pair, never a name alone: one the chain now shows under another register (a sum someone minted, or a chain
     // source that says so) isn't the one this browser put it under, nor one the user turned on.
     if (!(await this.showsAt(network, await this.inbox(network), name, register))) throw new Error(t("worker.messaging.notYourSeedelf"));
+    // Its own certificate (protocol.md §21.8), which the reveal carries and the reader's check holds it to: from the
+    // list's copy, or made and posted first where it's missing.
+    const certificate = await this.ownCertificate(network, name, register);
     await this.serial(async () => {
       const pin = phrasePin();
       const inbox = await this.inbox(network);
@@ -2077,15 +2479,15 @@ export class MessagingService {
       // Only once a reply the thread shows has come (O4): the crate allows a reveal after any reply that decrypts, a
       // control kind's too, and what the user can do here changes only with what the thread shows.
       if (!meta.answered) throw new Error(t("worker.messaging.cantRevealYet"));
-      const made = await this.withKey((key, keys) => {
+      const made = await this.withKey(network, (key, keys) => {
         pin(keys);
         return this.parse<{ reveal: string }>(
-          this.deps.wasm.messagingReveal(key, JSON.stringify({ conversation: file.state, name, register })),
+          this.deps.wasm.messagingReveal(key, JSON.stringify({ network, conversation: file.state, name, register, certificate })),
         );
       });
       if (isRefused(made)) {
         if (made.refused === "reveal_not_allowed") throw new Error(t("worker.messaging.cantRevealYet"));
-        if (made.refused === "not_for_this_key") throw new Error(t("worker.messaging.notYourSeedelf"));
+        if (made.refused === "not_for_this_key" || made.refused === "invalid_certificate") throw new Error(t("worker.messaging.notYourSeedelf"));
         throw new MessagingRefused(made.refused);
       }
       const now = this.deps.now();
@@ -2146,7 +2548,7 @@ export class MessagingService {
         inbox,
         held,
         () =>
-          this.withKey((key, keys) => {
+          this.withKey(network, (key, keys) => {
             pin(keys);
             return [
               this.parse<{ messages: Array<{ at: number; plaintext?: string }> }>(this.deps.wasm.messagingReadRequest(key, asked)),
@@ -2318,10 +2720,25 @@ export class MessagingService {
    * again from its oldest (W12): the first messages to it still on the relay are taken, and every envelope taken before
    * is refused as a duplicate or by its tombstone. The relay sees a fresh read from this address, which says only that
    * the wallet started over. Returns the overview. Throws if locked.
+   *
+   * Turned on while Messages are on, the certificate list is read, and the wallet's own certificates set right against
+   * it (protocol.md §21.8): this Seedelf's made and posted, apart from the others, where none is good; none where a good
+   * one names another key, which the overview then says. A list that can't be read now is read at the next sync.
    */
   async answerAt(network: NetworkName, name: string, register: RegisterHex, on: boolean): Promise<MessagingOverview> {
     if (!isRegister(register)) throw new Error(t("worker.messaging.notYourSeedelf"));
     const pair = { generator: register.generator, publicValue: register.publicValue };
+    const open = this.deps.preferences.messagingOpen(network);
+    // The press's unlock, taken before anything is asked (the review of 55e, L3): a read that ends in another is none of
+    // this press's, which is refused as a lock refuses it.
+    const began = this.opened();
+    // Turned on, the list read first: the press's own request, at once, whole and whoever is turned on, never behind a
+    // step of the take's in the service's queue (protocol.md §21.8).
+    const read = on && open && (await this.isOn(network)) ? await this.readList(network) : undefined;
+    if (this.opened() !== began) throw new WalletLocked(t("worker.wallet.locked"));
+    // Off: the intent to withdraw written before the choice is (M2), as the switch writes its own: a lock after it
+    // leaves it for the next unlock's run, which sets the queue right from the choices as they then stand.
+    if (!on && open) await this.markWithdrawals(network);
     await this.serial(async () => {
       const inbox = await this.inbox(network);
       if (on) {
@@ -2346,8 +2763,42 @@ export class MessagingService {
       // begun before writes no cursor at its end; one begun after reads from the oldest. The take of what it finds
       // waits in the runner for the choice below.
       if (on && !was) await this.rewind(network);
+      const key = pairKey(name, pair);
+      // Off: the turn-off kept sealed in the list record before its choice is written (finding 2), so a pass that runs
+      // between the two keeps the mark, and one a lock catches after the choice finds it.
+      if (!on && open) await this.listIntent(network, (held) => (held.intents.includes(key) ? false : (held.intents = [...held.intents, key]) && true));
       await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      // On: its turn-off undone, and, the switch on, its withdrawals still waiting dropped, beside the choice (finding
+      // 1): its certificate stays listed, and no lane posts them before the next pass.
+      if (on && open) {
+        const switchOn = await this.isOn(network);
+        await this.listIntent(network, (held) => {
+          const intents = held.intents.filter((k) => k !== key);
+          const queue = switchOn
+            ? held.queue.filter((q) => {
+                const named = q.withdraw ? certificateNames(q.certificate) : undefined;
+                return !named || pairKey(named.name, named.register) !== key;
+              })
+            : held.queue;
+          if (intents.length === held.intents.length && queue.length === held.queue.length) return false;
+          held.intents = intents;
+          held.queue = queue;
+          return true;
+        });
+      }
     });
+    if (on) {
+      // A mark standing (its turn-off undone above, say): a pass looks at it again, and clears it where it's done.
+      if (open && (await this.markOf(network))) await this.reconcile(network).catch(quietly);
+      // The wallet's own certificates set right against it, this Seedelf's among them; a read that didn't reach the
+      // list's end leaves it for the next sync.
+      await this.askList(network);
+      if (read) await this.certifyNow(network, read);
+    } else if (open) {
+      // Off: its certificates withdrawn from the list (protocol.md §21.7, chunk 55's call 9), apart from any others.
+      if (await this.reconcile(network).catch(quietly)) this.behind(this.postCertificates(network));
+      await this.alarmAsNeeded();
+    }
     this.notify(network);
     return this.overview(network);
   }
@@ -2400,14 +2851,28 @@ export class MessagingService {
    */
   async clear(network: NetworkName): Promise<MessagingOverview> {
     if ((await this.deps.wallet.state()) !== "unlocked") throw new WalletLocked(t("worker.wallet.locked"));
+    // The epoch moves at once, outside the queue: a take under way stops before its next write (W13).
     this.forget(network);
+    // Then the withdrawals (the review's finding 5, [choice] over refusing to start again): the wallet's own
+    // certificates the copy holds for the Seedelfs that take first messages only by a choice the inbox keeps (turned on
+    // here, not made here) are queued for withdrawal, and every withdrawal waiting is kept through the clear, with its
+    // mark. So starting again never leaves listed a Seedelf that no longer takes messages here. A copy that won't open
+    // keeps none: its certificates are unknown here.
+    const keep = this.deps.preferences.messagingOpen(network)
+      ? await this.withdrawalsThrough(network).catch((e: unknown) => {
+          if (isTrap(e) || e instanceof WalletLocked) throw e;
+          return undefined;
+        })
+      : undefined;
     this.readRecords.delete(network);
+    this.lists.delete(network);
     const names = [
       `messaging.${network}`,
       takeRecord(network),
       readRecord(network),
       outboxRecord(network),
       requestsRecord(network),
+      listRecord(network),
       markRecord(network, "scan"),
       markRecord(network, "take"),
     ];
@@ -2415,7 +2880,7 @@ export class MessagingService {
       // Asked of this unlock's Messages: never another's, restored while it waited here (`mine`).
       this.mine();
       const records = await this.deps.local.keys(PRIVATE_PREFIX + CONVERSATION_RECORDS + network + ".");
-      await this.deps.local.remove(...names.map((n) => PRIVATE_PREFIX + n), trapKey(network), ...records);
+      await this.deps.local.remove(...names.map((n) => PRIVATE_PREFIX + n), trapKey(network), ...(keep ? [] : [withdrawKey(network)]), ...records);
     });
     // And again in each record's chain, after any write of it that began before the epoch moved: none outlives this.
     const removeIn = (chain: Map<NetworkName, Promise<unknown>>, name: RecordName) =>
@@ -2436,11 +2901,13 @@ export class MessagingService {
       removeIn(this.takeWrites, takeRecord(network)),
       removeIn(this.readWrites, readRecord(network)),
       removeIn(this.outboxWrites, outboxRecord(network)),
+      removeIn(this.listWrites, listRecord(network)),
       removeMark("scan"),
       removeMark("take"),
     ]);
     this.forget(network);
     this.readRecords.delete(network);
+    this.lists.delete(network);
     this.unopenable.delete(network);
     this.full.delete(network);
     this.blocked.delete(network);
@@ -2451,8 +2918,47 @@ export class MessagingService {
     this.outboxNoted.delete(network);
     for (const step of ["scan", "take"] as const) this.marked.set(markRecord(network, step), false);
     this.oneByOne.delete(network);
+    this.reconciled.delete(network);
+    this.shownList.delete(network);
+    for (const key of [...this.confirmed]) if (key.startsWith(`${network}:`)) this.confirmed.delete(key);
+    // What it kept, in a list record of its own: the withdrawals, and when the last own post went, so the next goes
+    // apart from it; and their mark, looked at by the next run.
+    if (keep) {
+      const stored: StoredList = {
+        v: 1,
+        queue: keep.queue.map((q) => ({ certificate: base64OfHex(q.certificate), after: q.after, withdraw: true as const, ...(q.tries ? { tries: q.tries } : {}) })),
+        ...(keep.lastAt !== undefined ? { lastAt: keep.lastAt } : {}),
+      };
+      await this.chained(this.listWrites, network, (admit) => this.deps.store.set(listRecord(network), stored, admit));
+      await this.markWithdrawals(network);
+      await this.alarmAsNeeded();
+    }
+    // The list read again from its start at the next sync, and the wallet's own certificates set right against it.
+    await this.askList(network);
     this.notify(network);
     return this.overview(network);
+  }
+
+  /**
+   * What `clear` keeps of `network`'s list record (finding 5): the withdrawals waiting, with one queued for each of the
+   * wallet's own certificates the copy holds for a pair its last pass set right that this browser didn't make, the
+   * pairs the clear stops taking first messages at; and `lastAt`. Undefined where nothing waits. A step in the service's
+   * queue, with no request: the inbox isn't read, since a clear is for one that won't open.
+   */
+  private withdrawalsThrough(network: NetworkName): Promise<{ queue: QueueEntry[]; lastAt?: number } | undefined> {
+    return this.serial(async () => {
+      const pin = phrasePin();
+      const held = await this.listFor(network, pin, true);
+      const made = await mintedAt(this.gatedStore, network);
+      const leaving = held.pairs.flatMap((key) => {
+        const pair = pairOfKey(key);
+        return pair && !made[pair.name]?.some((r) => sameRegister(r, pair.register)) ? [pair] : [];
+      });
+      const values = await this.ownValues(network, pin, leaving);
+      this.queueWithdrawals(network, held, leaving, values, this.deps.now());
+      const queue = held.queue.filter((q) => q.withdraw);
+      return queue.length ? { queue, ...(held.lastAt !== undefined ? { lastAt: held.lastAt } : {}) } : undefined;
+    });
   }
 
   /**
@@ -2518,11 +3024,15 @@ export class MessagingService {
     // The lane starts here, before the first await: a screen's read that comes after a page's sync waits for it.
     this.laneStart(network);
     const run = (async () => {
+      let listed: ListRead | undefined;
       try {
         if (await this.isStopped(network)) return;
-        await this.syncNow(network);
+        listed = await this.syncNow(network);
       } finally {
         this.syncs.delete(network);
+        // After the lane, at its list read's end: the wallet's own certificates set right against it, then one posted.
+        // Queued before the lane's end wakes the runner, so the take's look at the Seedelfs comes after the pass.
+        if (listed) this.behind(this.certifyNow(network, listed));
         this.laneEnd(network);
       }
     })();
@@ -2548,13 +3058,31 @@ export class MessagingService {
       const switches = (await this.deps.preferences.get()).messaging;
       const unlocked = (await this.deps.wallet.state()) === "unlocked";
       const on = networks.filter((n) => switches[n]);
-      if (!on.length || !unlocked) await this.deps.alarm?.stop();
+      // Every network with the withdrawals' mark (chunk 55's call 9), its switch on or off: one turned off, or a
+      // Seedelf turned off, whose withdrawals still wait, or whose intent a lock caught before it was queued (M2).
+      const marks = unlocked ? await this.marksOf(networks.filter((n) => this.deps.preferences.messagingOpen(n))) : new Map<NetworkName, Mark>();
+      const marked = [...marks.keys()];
+      // Off, worked here, one at a time apart, the alarm running on for them; an unlock's run finds them too.
+      const withdrawing = marked.filter((n) => !switches[n]);
+      if ((!on.length && !withdrawing.length) || !unlocked) await this.deps.alarm?.stop();
       else {
         await this.deps.alarm?.start();
+        // A mark no pass of this worker's has looked at: the queue set right from the switches and the choices as they
+        // stand now (`reconcile`), in the service's queue after the lanes, and its first post then.
+        for (const n of marked) {
+          // Looked at in full, or in part in this unlock (a press's own pass follows its write): once is enough.
+          const done = this.reconciled.get(n);
+          if (done && done.id === marks.get(n)!.id && (done.full || done.opened === this.opened())) continue;
+          this.behind(
+            this.reconcile(n)
+              .catch(quietly)
+              .then((due) => (due ? this.postCertificates(n) : undefined)),
+          );
+        }
         // The reads first, at the tick, each network's lane marked before its first await, so the runner and the
         // screens' work keep off them: nothing of another network's comes before them but its own lane's fixed reads
         // (W13, round 5).
-        await Promise.all(on.map((n) => this.sync(n).catch(rethrowTrap)));
+        await Promise.all([...on.map((n) => this.sync(n).catch(rethrowTrap)), ...withdrawing.map((n) => this.postCertificates(n).catch(rethrowTrap))]);
       }
       if (unlocked) for (const n of networks) if (!switches[n]) this.dueRest(n, { sweep: true, expire: true });
     } finally {
@@ -2570,19 +3098,20 @@ export class MessagingService {
    * Nothing else is read or written, nothing is opened, and nothing is told to the screens until it ends. What it found
    * and posted goes to the runner, which saves, takes and marks it after the lane.
    */
-  private async syncNow(network: NetworkName): Promise<void> {
-    if (!(await this.isOn(network))) return;
-    if ((await this.deps.wallet.state()) !== "unlocked") return;
+  private async syncNow(network: NetworkName): Promise<ListRead | undefined> {
+    if (!(await this.isOn(network))) return undefined;
+    if ((await this.deps.wallet.state()) !== "unlocked") return undefined;
     // An inbox this service found won't open: nothing is read until Messages are started again (W9, cross-feature#8).
-    if (this.unopenable.has(network)) return;
+    if (this.unopenable.has(network)) return undefined;
     // Bound to the phrase now, before anything is asked: a wallet removed and another restored while the first page
     // is on its way gets nothing of this one's (worker-state#8).
     const pin = phrasePin();
-    await this.laneKey((_key, keys) => pin(keys));
+    await this.laneKeys((keys) => pin(keys));
     const epoch = this.epochOf(network);
     const out: ReadOut = { found: [], gap: false, envelopes: false, marked: false, trapped: false };
     const held = await this.readFor(network, pin);
     out.from = held.cursor;
+    let listed: ListRead | undefined;
     try {
       // 1. The read: pages and the scan, nothing else. Not while this address has read its day's share of the pool
       // (W16). While the relay is stopped (W15; the freeze's fix A), one page alone, the probe, once it's due (an hour
@@ -2597,11 +3126,18 @@ export class MessagingService {
       // 2. What's waiting, right after the read, from the outbox record alone. While the relay is stopped nothing is
       // solved or posted (W15).
       if (!(await this.stopOf(network))) await this.post(network);
+      // 3. The certificate list (chunk 55's 55e): read at the first sync of each unlock while the switch is on, and
+      // where the switch, a Seedelf's turn-on or a Seedelf made here asked for it; the wallet's own set right against
+      // it once the lane ends (`sync`). Then one of the wallet's own certificates, where one's time has come: the
+      // minute's alarm works the queue, so they go apart with no timer of their own.
+      if (!(await this.listedNow(network))) listed = await this.readList(network, true, pin);
+      await this.postCertificates(network, true, pin);
     } finally {
-      // 3. The lane's end: the scan's mark cleared (never between two pages, nor before the posts), and the read record
+      // 4. The lane's end: the scan's mark cleared (never between two pages, nor before the posts), and the read record
       // written once, where the pages moved it. What the read found goes to the runner.
       await this.laneDone(network, epoch, pin, held, out);
     }
+    return listed;
   }
 
   /**
@@ -2760,7 +3296,7 @@ export class MessagingService {
    * `outside`: a press's or the runner's (`readHeld`), each of its calls into the wallet's queue admitted.
    */
   private async readFor(network: NetworkName, pin: PhrasePin, outside = false): Promise<ReadHeld> {
-    const phrase = await (outside ? this.withKey((_key, keys) => pin(keys)) : this.laneKey((_key, keys) => pin(keys)));
+    const phrase = await (outside ? this.withKeys((keys) => pin(keys)) : this.laneKeys((keys) => pin(keys)));
     const at = await (outside ? this.stampNow() : this.unlockStamp());
     const held = this.readRecords.get(network);
     if (held && held.phrase === phrase && held.at === at) return held;
@@ -2788,7 +3324,7 @@ export class MessagingService {
   private async readHeld(network: NetworkName, pin: PhrasePin): Promise<ReadHeld> {
     const held = this.readRecords.get(network);
     if (held) {
-      const phrase = await this.withKey((_key, keys) => pin(keys));
+      const phrase = await this.withKeys((keys) => pin(keys));
       if (held.phrase === phrase) return held;
     }
     return this.readFor(network, pin, true);
@@ -2804,7 +3340,7 @@ export class MessagingService {
     const write = async (admit?: Admit) => {
       if (this.readRecords.get(network) !== held || !held.dirty) return;
       // Only under the phrase it was read under: a wallet removed and another restored meanwhile gets nothing of it.
-      if ((await this.laneKey((_key, keys) => phrasePin()(keys), admit)) !== held.phrase) return;
+      if ((await this.laneKeys((keys) => phrasePin()(keys), admit)) !== held.phrase) return;
       held.dirty = false;
       try {
         await this.deps.store.set(readRecord(network), readToStored(held), admit);
@@ -2871,7 +3407,7 @@ export class MessagingService {
           for (const envelope of envelopes) {
             out.marked = true;
             await mark({ envelope: envelopeHash(envelope) });
-            const bits = await this.scan(step, pin, [envelope]);
+            const bits = await this.scan(network, step, pin, [envelope]);
             found[kept] = envelope;
             kept += bits.charCodeAt(0) - 48;
             await this.wait();
@@ -2882,7 +3418,7 @@ export class MessagingService {
           await mark({ page: { ...(asked !== undefined ? { from: asked } : {}), to: page.cursor } });
           for (let at = 0; at < envelopes.length; at += SCAN_BATCH) {
             const batch = envelopes.slice(at, at + SCAN_BATCH);
-            const bits = await this.scan(step, pin, batch);
+            const bits = await this.scan(network, step, pin, batch);
             for (let i = 0; i < batch.length; i++) {
               found[kept] = batch[i]!;
               kept += bits.charCodeAt(i) - 48;
@@ -2950,8 +3486,8 @@ export class MessagingService {
    * is another build's module's (one before call 16 gave the matches' indexes, as JSON): nothing of it is kept, and the
    * read stops there. A lane's: in the wallet's queue at once.
    */
-  private scan(step: Step, pin: PhrasePin, batch: string[]): Promise<string> {
-    return this.laneKey((key, keys) => {
+  private scan(network: NetworkName, step: Step, pin: PhrasePin, batch: string[]): Promise<string> {
+    return this.laneKey(network, (key, keys) => {
       pin(keys);
       const bits = String(this.watch(step, () => this.deps.wasm.messagingScan(key, JSON.stringify(batch))));
       if (bits.length !== batch.length || !/^[01]*$/.test(bits)) {
@@ -3018,7 +3554,7 @@ export class MessagingService {
     const pin = phrasePin();
     let waiting: Waiting[];
     try {
-      await this.laneKey((_key, keys) => pin(keys));
+      await this.laneKeys((keys) => pin(keys));
       waiting = await this.outboxNow(network);
     } catch (e) {
       if (e instanceof WalletLocked) return;
@@ -3263,11 +3799,13 @@ export class MessagingService {
     /** Whether the post may still go (`mayAsk`): asked while its work is solved (`solve`). */
     wanted: () => Promise<boolean>,
     onSolve?: (bits: number) => void,
+    /** Whether the worker is kept alive while it's solved (`solve`): a certificate's post isn't (`postCertificateNow`). */
+    keep = true,
   ): Promise<number> {
     const kept = this.solved.get(digest);
     if (kept && kept.bits >= bits) return kept.nonce;
     onSolve?.(bits);
-    const nonce = await this.solve(digest, bits, kept?.nonce ?? 0, network, wanted);
+    const nonce = await this.solve(digest, bits, kept?.nonce ?? 0, network, wanted, keep);
     this.solved.set(digest, { bits, nonce });
     return nonce;
   }
@@ -3288,7 +3826,7 @@ export class MessagingService {
    * within 10 seconds and a slice. Nothing keeps the worker alive between solves: the continuous keep-alive is
    * allowed on managed devices only, and not used (sw.ts).
    */
-  private async solve(digest: string, bits: number, start = 0, network?: NetworkName, wanted?: () => Promise<boolean>): Promise<number> {
+  private async solve(digest: string, bits: number, start = 0, network?: NetworkName, wanted?: () => Promise<boolean>, keep = true): Promise<number> {
     // On the monotonic clock (W14, clock#8): a device clock stepped back mid-solve never skips the keep-alive.
     let lastKept = this.mono();
     for (let from = start; ; from += STAMP_SLICE) {
@@ -3307,7 +3845,7 @@ export class MessagingService {
         lastKept = this.mono();
         // No longer wanted: given up, and no call made for it. A look that fails says nothing, and the work goes on.
         if (wanted && !(await wanted().catch(() => true))) throw new StopMet();
-        await this.deps.keepAlive?.().catch(() => undefined);
+        if (keep) await this.deps.keepAlive?.().catch(() => undefined);
       }
     }
   }
@@ -3340,7 +3878,7 @@ export class MessagingService {
     }
     const waiting = outboxFromStored(stored);
     if (!this.outboxNoted.get(network)?.length) return waiting;
-    const phrase = await this.laneKey((_key, keys) => phrasePin()(keys));
+    const phrase = await this.laneKeys((keys) => phrasePin()(keys));
     const mine = (this.outboxNoted.get(network) ?? []).filter((w) => w.phrase === phrase);
     if (mine.length) this.outboxNoted.set(network, mine);
     else this.outboxNoted.delete(network);
@@ -3382,7 +3920,7 @@ export class MessagingService {
 
   /** `shrinkOutbox`'s write, in the outbox's chain: at once, or, `admit` given, each call admitted (`chained`). */
   private async shrunk(network: NetworkName, gone: (w: Waiting) => boolean, pin?: PhrasePin, admit?: Admit): Promise<void> {
-    if (pin) await this.laneKey((_key, keys) => pin(keys), admit);
+    if (pin) await this.laneKeys((keys) => pin(keys), admit);
     const kept = await this.outboxStored(network, (name) => this.rawGot<StoredOutbox>(name, admit));
     const next = kept.waiting.filter((w) => !gone(w));
     if (next.length === kept.waiting.length) return;
@@ -3426,7 +3964,7 @@ export class MessagingService {
    */
   private async noteWaiting(network: NetworkName, waiting: readonly Waiting[]): Promise<void> {
     if (!waiting.length) return;
-    const phrase = await this.withKey((_key, keys) => phrasePin()(keys)).catch(() => undefined);
+    const phrase = await this.withKeys((keys) => phrasePin()(keys)).catch(() => undefined);
     if (phrase === undefined) return;
     const noted = this.outboxNoted.get(network) ?? [];
     const have = new Set(noted.map((w) => `${w.cid}:${w.id}`));
@@ -3450,6 +3988,1256 @@ export class MessagingService {
       if (!(e instanceof UnreadableRecordError)) throw e;
       return { waiting: [], bytes: await this.storedSize(outboxRecord(network)) };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // The certificate list (chunk 55's 55e, protocol.md §21.7 and §21.8)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Reads `network`'s certificate list from where the last read ended (protocol.md §21.7): read whole, never by name, so
+   * no read tells the relay whom the wallet will write to. A lane (`inLane`: part of a sync's, already marked), since
+   * it's a run of the wallet's requests to the relay; one at a time per network, one asked meanwhile being that one.
+   * What it reads and writes is the list's record alone, whose size the list sets, the same for every wallet. Made at a
+   * network's switch on and a Seedelf's turn-on (`answerAt`), before a first message (`start`) and at a reveal's check
+   * press (`checkNow`), each to the list's end (`readToEnd`), and at the first sync of an unlock while the switch is on,
+   * or once something asked for it again (`syncNow`, `askList`).
+   */
+  private readList(network: NetworkName, inLane = false, pin: PhrasePin = phrasePin()): Promise<ListRead> {
+    const running = this.listReads.get(network);
+    if (running) return running;
+    if (!inLane) this.laneStart(network);
+    const run = (async () => {
+      try {
+        return await this.listNow(network, pin);
+      } finally {
+        this.listReads.delete(network);
+        if (!inLane) this.laneEnd(network);
+      }
+    })();
+    this.listReads.set(network, run);
+    return run;
+  }
+
+  /**
+   * One read of the list (`readList`): pages after the copy's cursor, at most LIST_PAGES_A_READ, one after the other,
+   * whatever they hold. A certificate entry joins the copy, by its listing digest; a removal takes one out; a gap drops
+   * the copy, the page then starting from the oldest entry the list holds (§21.7). Nothing is checked here but each
+   * certificate's shape and network: a writer checks the certificates it uses, as it uses them (`goodFor`). The copy is
+   * written once, at the end, where it moved. Nothing while the switch is off, the wallet is locked, the relay is
+   * stopped (W15) or this address has read its day's share (W16): those are `failed`, the copy as it was.
+   */
+  private async listNow(network: NetworkName, pin: PhrasePin): Promise<ListRead> {
+    if (!(await this.isOn(network))) return "failed";
+    if ((await this.deps.wallet.state()) !== "unlocked") return "failed";
+    try {
+      await this.laneKeys((keys) => pin(keys));
+    } catch (e) {
+      if (e instanceof WalletLocked) return "failed";
+      throw e;
+    }
+    const held = await this.listFor(network, pin);
+    if (await this.stopOf(network)) return "failed";
+    if ((await this.heldUntil(SESSION_READ_AFTER, network, DAY_READ_MAX_MS)) !== undefined) return "failed";
+    const relay = this.deps.relay(network);
+    const pool = NETWORKS[network].relay.pool;
+    let cursor = held.cursor;
+    let changed = false;
+    let read: ListRead = "failed";
+    /** The Seedelfs the copy holds a certificate of, where the copy's room let some go by no name (`evictedAll`). */
+    let present: Set<string> | undefined;
+    for (let pages = 0; pages < LIST_PAGES_A_READ; pages++) {
+      let page: CertificatePage;
+      try {
+        // Asked again before each page: a switch turned off, or a lock, mid-read stops it there.
+        page = await relay.certificates(cursor, () => this.mayAsk(network));
+      } catch (e) {
+        await this.relayRefused(network, e);
+        if (e instanceof RelayDown) {
+          read = "failed";
+          break;
+        }
+        throw e;
+      }
+      const answering = this.offline.delete(network);
+      if ((await this.endStop(network)) || answering) this.notify(network);
+      this.listPrices.set(network, page.price);
+      const asked = cursor;
+      if (page.gap) {
+        // Entries after the copy's cursor were lost, or the cursor isn't one the list gave out: the copy goes, and the
+        // page starts from the oldest entry the list holds.
+        if (held.certificates.size || held.trimmed) changed = true;
+        held.certificates.clear();
+        // Started again from the list's oldest: nothing has gone past the room since.
+        held.trimmed = false;
+        held.evicted.clear();
+        held.evictedAll = false;
+      }
+      for (const entry of page.entries) {
+        if ("removed" in entry) {
+          if (held.certificates.delete(entry.removed)) changed = true;
+          continue;
+        }
+        const named = certificateNames(entry.certificate);
+        if (named?.network !== NETWORK_BYTE[network]) continue;
+        const digest = this.listingDigest(pool, entry.certificate);
+        if (held.certificates.has(digest)) continue;
+        // One of a Seedelf the copy's room let go (finding 4): not kept alone, where the relay may hold others.
+        const group = pairKey(named.name, named.register);
+        if (held.evicted.has(groupHash(group))) continue;
+        if (held.evictedAll && !(present ??= this.groupsOf(held)).has(group)) continue;
+        present?.add(group);
+        held.certificates.set(digest, entry.certificate);
+        changed = true;
+      }
+      cursor = page.cursor;
+      read = page.more ? "more" : "ended";
+      // A page that says more follows but moved nothing is a relay that isn't §21.7's: the read stops there.
+      if (!page.more || page.cursor === asked) break;
+    }
+    const moved = cursor !== held.cursor;
+    if (moved) {
+      if (cursor === undefined) delete held.cursor;
+      else held.cursor = cursor;
+      changed = true;
+    }
+    // Where the read stopped with more to read, or failed after a page that said more follows, the copy is part of the
+    // list; at its end, the whole of it.
+    const behind = read === "more" || (read === "failed" && moved) ? true : read === "ended" ? false : held.behind;
+    if (behind !== held.behind) {
+      held.behind = behind;
+      changed = true;
+    }
+    if (changed) {
+      held.dirty = true;
+      await this.writeList(network, held, false);
+    }
+    return read;
+  }
+
+  /** The Seedelfs `held`'s copy holds a certificate of, by `pairKey`. */
+  private groupsOf(held: ListState): Set<string> {
+    const out = new Set<string>();
+    for (const c of held.certificates.values()) {
+      const named = certificateNames(c);
+      if (named) out.add(pairKey(named.name, named.register));
+    }
+    return out;
+  }
+
+  /** A certificate's listing digest (`messagingListingDigest`, §21.7): its post's stamp is over it, and a removal names it. */
+  private listingDigest(pool: string, certificate: string): string {
+    return this.wasmCall(() => this.deps.wasm.messagingListingDigest(pool, certificate));
+  }
+
+  /**
+   * `network`'s list record (chunk 55's 55e), as `readFor` holds the read record: as held, under this phrase, in this
+   * unlock; otherwise one read of it, after which memory's copy is still the one kept where a write of it failed. One
+   * that won't open holds nothing the list can't give again: the next read goes from the list's start, and a missing
+   * certificate of the wallet's own is made again. `outside`: a press's or the runner's, each of its calls admitted.
+   */
+  private async listFor(network: NetworkName, pin: PhrasePin, outside = false): Promise<ListHeld> {
+    const phrase = await (outside ? this.withKeys((keys) => pin(keys)) : this.laneKeys((keys) => pin(keys)));
+    const at = await (outside ? this.stampNow() : this.unlockStamp());
+    const held = this.lists.get(network);
+    if (held && held.phrase === phrase && held.at === at) return held;
+    let stored: StoredList | undefined;
+    try {
+      stored = await (outside ? this.got<StoredList>(listRecord(network)) : this.rawGot<StoredList>(listRecord(network)));
+    } catch (e) {
+      if (!(e instanceof UnreadableRecordError)) throw e;
+    }
+    if (held && held.dirty && held.phrase === phrase && this.lists.get(network) === held) {
+      held.at = at;
+      return held;
+    }
+    const now: ListHeld = { ...this.listFromStored(network, stored), at, phrase, dirty: false };
+    this.lists.set(network, now);
+    return now;
+  }
+
+  /** The list record as this service works with it, from what's stored (none: no record, or one that won't open). */
+  private listFromStored(network: NetworkName, stored: StoredList | undefined): ListState {
+    const pool = NETWORKS[network].relay.pool;
+    const certificates = new Map<string, string>();
+    for (const c of Array.isArray(stored?.certificates) ? stored.certificates : []) {
+      if (typeof c !== "string") continue;
+      const certificate = hexOfBase64(c);
+      if (certificateNames(certificate)?.network !== NETWORK_BYTE[network]) continue;
+      certificates.set(this.listingDigest(pool, certificate), certificate);
+    }
+    const count = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n > 0;
+    const queue = (Array.isArray(stored?.queue) ? stored.queue : [])
+      .filter((q) => typeof q?.certificate === "string" && typeof q.after === "number" && Number.isFinite(q.after))
+      .map(
+        (q): QueueEntry => ({
+          certificate: hexOfBase64(q.certificate),
+          after: q.after,
+          ...(q.withdraw === true ? { withdraw: true as const } : {}),
+          ...(count(q.tries) ? { tries: q.tries } : {}),
+          ...(typeof q.parked === "number" && Number.isFinite(q.parked) ? { parked: q.parked } : {}),
+        }),
+      )
+      .filter((q) => certificateNames(q.certificate)?.network === NETWORK_BYTE[network]);
+    return {
+      ...(typeof stored?.cursor === "string" && /^\d{1,20}$/.test(stored.cursor) ? { cursor: stored.cursor } : {}),
+      certificates,
+      queue,
+      elsewhere: Array.isArray(stored?.elsewhere) ? stored.elsewhere.filter((k) => typeof k === "string") : [],
+      ...(typeof stored?.lastAt === "number" && Number.isFinite(stored.lastAt) ? { lastAt: stored.lastAt } : {}),
+      pairs: Array.isArray(stored?.pairs) ? stored.pairs.filter((k) => typeof k === "string") : [],
+      trimmed: stored?.trimmed === true,
+      tooOften: Array.isArray(stored?.tooOften) ? stored.tooOften.filter((k) => typeof k === "string") : [],
+      behind: stored?.behind === true,
+      intents: Array.isArray(stored?.intents) ? stored.intents.filter((k) => typeof k === "string") : [],
+      evicted: new Set(typeof stored?.evicted === "string" && /^([0-9a-f]{16})*$/.test(stored.evicted) ? (stored.evicted.match(/.{16}/g) ?? []) : []),
+      evictedAll: stored?.evictedAll === true,
+    };
+  }
+
+  /**
+   * The list record as stored, within LIST_ROOM_BYTES as JSON (from `held` too, so memory says what's stored). Where it
+   * would pass it, certificates go by their Seedelf (the review of 55e, M3): every one naming a (name, register) or none,
+   * oldest first by each one's first, so no reader holds one of two conflicting m_S without the other, and finding
+   * neither it refuses, the safe way. Never those naming one of the wallet's own pairs (those its last pass set right,
+   * `pairs`, and those its queue names): its own certificates, and another key's for one of its Seedelfs, which
+   * `elsewhere` stands on. What goes marks the copy `trimmed`.
+   */
+  private listToStored(held: ListState): StoredList {
+    const certificates = [...held.certificates.entries()].map(([digest, c]) => {
+      const named = certificateNames(c);
+      return { digest, stored: base64OfHex(c), group: named ? pairKey(named.name, named.register) : digest };
+    });
+    const base: StoredList = {
+      v: 1,
+      ...(held.cursor !== undefined ? { cursor: held.cursor } : {}),
+      ...(held.queue.length
+        ? {
+            queue: held.queue.map((q) => ({
+              certificate: base64OfHex(q.certificate),
+              after: q.after,
+              ...(q.withdraw ? { withdraw: true as const } : {}),
+              ...(q.tries ? { tries: q.tries } : {}),
+              ...(q.parked !== undefined ? { parked: q.parked } : {}),
+            })),
+          }
+        : {}),
+      ...(held.elsewhere.length ? { elsewhere: held.elsewhere } : {}),
+      ...(held.lastAt !== undefined ? { lastAt: held.lastAt } : {}),
+      ...(held.pairs.length ? { pairs: held.pairs } : {}),
+      ...(held.tooOften.length ? { tooOften: held.tooOften } : {}),
+      ...(held.behind ? { behind: true as const } : {}),
+      ...(held.intents.length ? { intents: held.intents } : {}),
+    };
+    const evictedOf = () => ({
+      ...(held.evicted.size ? { evicted: [...held.evicted].join("") } : {}),
+      ...(held.evictedAll ? { evictedAll: true as const } : {}),
+    });
+    // `"certificates":[` and `]`, a comma before each but the first, and each quoted; and `,"trimmed":true`.
+    const each = (c: { stored: string }) => c.stored.length + 3;
+    let length = utf8Length(JSON.stringify({ ...base, ...evictedOf() })) + 17 + certificates.reduce((n, c) => n + each(c), 0) + (held.trimmed ? 15 : 0);
+    const room = this.deps.listRoomBytes ?? LIST_ROOM_BYTES;
+    if (length > room) {
+      const own = new Set([...held.pairs, ...held.intents]);
+      for (const q of held.queue) {
+        const named = certificateNames(q.certificate);
+        if (named) own.add(pairKey(named.name, named.register));
+      }
+      // Each Seedelf's certificates together, in the order of its first on the copy.
+      const groups = new Map<string, typeof certificates>();
+      for (const c of certificates) {
+        if (own.has(c.group)) continue;
+        const at = groups.get(c.group);
+        if (at) at.push(c);
+        else groups.set(c.group, [c]);
+      }
+      if (!held.trimmed) length += 15;
+      for (const group of groups.values()) {
+        if (length <= room) break;
+        for (const c of group) {
+          length -= each(c);
+          held.certificates.delete(c.digest);
+        }
+        held.trimmed = true;
+        // Remembered, so a certificate of it read later isn't kept alone (finding 4): 16 hex characters each, and the
+        // key and its quotes with the first.
+        if (!held.evictedAll) {
+          if (!held.evicted.size) length += 13;
+          held.evicted.add(groupHash(group[0]!.group));
+          length += 16;
+          if (held.evicted.size > EVICTED_MOST) {
+            length -= 13 + 16 * held.evicted.size;
+            held.evicted.clear();
+            held.evictedAll = true;
+            length += 18;
+          }
+        }
+      }
+      if (!held.trimmed) length -= 15;
+    }
+    const kept = certificates.filter((c) => held.certificates.has(c.digest));
+    return { ...base, ...evictedOf(), ...(kept.length ? { certificates: kept.map((c) => c.stored) } : {}), ...(held.trimmed ? { trimmed: true as const } : {}) };
+  }
+
+  /**
+   * Writes `network`'s list record as `held` stands, in its chain, as `writeRead` writes the read record: a fixed write,
+   * never looked at against the area's reserve, since its room is counted as taken in every look (`roomsHeld`). One the
+   * browser refuses leaves it to write again at the next chance. `gated`: a press's or the runner's, which joins the
+   * chain once the gate opens, each of its calls admitted.
+   */
+  private async writeList(network: NetworkName, held: ListHeld, gated: boolean): Promise<void> {
+    const write = async (admit?: Admit) => {
+      if (this.lists.get(network) !== held || !held.dirty) return;
+      // Only under the phrase it was read under: a wallet removed and another restored meanwhile gets nothing of it.
+      if ((await this.laneKeys((keys) => phrasePin()(keys), admit)) !== held.phrase) return;
+      held.dirty = false;
+      try {
+        await this.deps.store.set(listRecord(network), this.listToStored(held), admit);
+      } catch (e) {
+        held.dirty = true;
+        if (e instanceof WalletLocked || e instanceof NotAdmitted || isTrap(e)) throw e;
+      }
+    };
+    if (gated) await this.chained(this.listWrites, network, write);
+    else await this.onChain(this.listWrites, network, () => write());
+  }
+
+  /**
+   * The good certificates for the Seedelf `name` at `register` in `held` (protocol.md §21.5), by the m_S each names:
+   * each checked (§21.4, `checkedCertificate`) and naming that Seedelf and that register, the register being the one the
+   * caller's own read of the contract gives it (a first message's, a reveal's press), or the pair the wallet put it under
+   * (its own). Several with one m_S are one.
+   */
+  private goodFor(network: NetworkName, held: ListState, name: string, register: RegisterHex): Map<string, string> {
+    const good = new Map<string, string>();
+    for (const [digest, certificate] of held.certificates) {
+      const named = certificateNames(certificate);
+      if (!named || named.name !== name || !sameRegister(named.register, register)) continue;
+      const messaging = this.checkedCertificate(network, digest, certificate);
+      if (messaging !== undefined && !good.has(messaging)) good.set(messaging, certificate);
+    }
+    return good;
+  }
+
+  /**
+   * A certificate checked under `network`'s chain (`messagingCheckCertificate`, §21.4): its m_S where it checks and names
+   * what its bytes say, undefined otherwise. Once a worker for each, by its listing digest.
+   */
+  private checkedCertificate(network: NetworkName, digest: string, certificate: string): string | undefined {
+    const key = `${network}:${digest}`;
+    const known = this.certificateChecks.get(key);
+    if (known !== undefined) return known ?? undefined;
+    const named = certificateNames(certificate);
+    let messaging: string | null = null;
+    try {
+      const checked = this.parse<{ name: string; register: RegisterHex; messaging: string }>(
+        this.wasmCall(() => this.deps.wasm.messagingCheckCertificate(JSON.stringify({ network, certificate }))),
+      );
+      if (!isRefused(checked) && named && checked.name === named.name && sameRegister(checked.register, named.register) && checked.messaging === named.messaging) {
+        messaging = checked.messaging;
+      }
+    } catch (e) {
+      if (e instanceof WalletLocked) throw e;
+    }
+    if (this.certificateChecks.size > 20_000) this.certificateChecks.clear();
+    this.certificateChecks.set(key, messaging);
+    return messaging ?? undefined;
+  }
+
+  /** Whether the wallet's own certificate for `pair`, naming `mine`, waits in `held`'s queue to be posted. */
+  private queuedFor(held: ListState, pair: { name: string; register: RegisterHex }, mine: string): QueueEntry | undefined {
+    return held.queue.find((q) => {
+      if (q.withdraw) return false;
+      const named = certificateNames(q.certificate);
+      return !!named && named.name === pair.name && sameRegister(named.register, pair.register) && named.messaging === mine;
+    });
+  }
+
+  /**
+   * The wallet's own m_S for each of `pairs` (`messagingValue`), from `network`'s messaging key alone, under `pin`: only
+   * ever for the pairs the wallet put a Seedelf under or the user turned on (W8, W12), never one a stranger's data named.
+   * Undefined for one the bindings refuse. Kept in memory by phrase and pair: h_S is a hash of the Seedelf.
+   */
+  private async ownValues(network: NetworkName, pin: PhrasePin, pairs: ReadonlyArray<{ name: string; register: RegisterHex }>): Promise<Array<string | undefined>> {
+    if (!pairs.length) return [];
+    return this.withKey(network, (key, keys) => {
+      const phrase = pin(keys);
+      return pairs.map((p) => {
+        const at = `${network}:${phrase}:${pairKey(p.name, p.register)}`;
+        const kept = this.values.get(at);
+        if (kept !== undefined) return kept;
+        try {
+          const value = this.parse<{ messaging: string }>(
+            this.deps.wasm.messagingValue(key, JSON.stringify({ network, name: p.name, register: { generator: p.register.generator, publicValue: p.register.publicValue } })),
+          );
+          if (isRefused(value)) return undefined;
+          this.values.set(at, value.messaging);
+          return value.messaging;
+        } catch (e) {
+          if (isTrap(e)) throw e;
+          return undefined;
+        }
+      });
+    });
+  }
+
+  /**
+   * The wallet's own certificates set right against the list (protocol.md §21.8; the owner, 2026-11-26): for each
+   * Seedelf that takes first messages here (W8, W12), with its own m_S (`messagingValue`), a good certificate naming it
+   * is used as it is; a good one naming another m_S means another key holds it, so nothing is posted and the overview
+   * says so (`elsewhere`); with none, and none waiting to be posted, one is made (`messagingCertificate`, the one call
+   * of Messages' that takes the Seedelf key) and put in the queue, each after the one before it by a random wait
+   * (`nextAfter`). A step in the service's queue, after a read of the list. Whether one is due to be posted now.
+   *
+   * Nothing at all while the switch is off (the review of 55e, M1): a pass asked before a switch off would otherwise
+   * drop the withdrawals the switch queued, and make certificates with the Seedelf key for a network that takes none.
+   * What waits to be posted for a pair that no longer takes first messages here (moved, gone, turned off) or whose
+   * Seedelf another key holds leaves the queue (L4). One whose waits ran out in an earlier unlock (H1) goes again once
+   * the wallet's own view of the contract holds its pair.
+   */
+  private certify(network: NetworkName): Promise<boolean> {
+    return this.serial(async () => {
+      if (!(await this.isOn(network))) return false;
+      const pin = phrasePin();
+      const asked = this.listAsks.get(network) ?? 0;
+      const inbox = await this.inbox(network);
+      // A Seedelf minted here before 1.10.0 is adopted first, as the take's look at the Seedelfs would (`noteOwn`).
+      await this.withKeys((keys) => pin(keys));
+      if (await this.adopt(network, inbox)) await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+      const { handles } = await this.handlesNow(network, inbox);
+      const pairs = Object.entries(handles).flatMap(([name, registers]) => registers.map((register) => ({ name, register })));
+      const held = await this.listFor(network, pin, true);
+      const values = await this.ownValues(network, pin, pairs);
+      const now = this.deps.now();
+      const unlock = await this.stampNow();
+      const elsewhere = new Set(held.elsewhere);
+      const tooOften = new Set(held.tooOften);
+      const make: typeof pairs = [];
+      pairs.forEach((pair, i) => {
+        const mine = values[i];
+        if (mine === undefined) return;
+        const good = this.goodFor(network, held, pair.name, pair.register);
+        const other = [...good.keys()].some((m) => m !== mine);
+        if (other) elsewhere.add(pairKey(pair.name, pair.register));
+        else elsewhere.delete(pairKey(pair.name, pair.register));
+        // Held by the relay already, its bytes on their way to the copy (`confirmed`): nothing made again for it. Nor
+        // for one the relay won't list again at its register (check 3″): until it moves.
+        const listedNow = good.has(mine) || this.confirmed.has(this.confirmedKey(network, pair, mine));
+        if (!other && !listedNow && !tooOften.has(pairKey(pair.name, pair.register)) && !this.queuedFor(held, pair, mine)) make.push(pair);
+      });
+      const before = held.elsewhere;
+      const beforeTooOften = held.tooOften;
+      held.elsewhere = [...elsewhere].sort();
+      const looked = pairs.map((p) => pairKey(p.name, p.register)).sort();
+      const taking = new Set(looked);
+      // Only the pairs that still take first messages: one that moved is a new pair, which the relay lists afresh.
+      held.tooOften = held.tooOften.filter((k) => taking.has(k));
+      let changed = !sameList(before, held.elsewhere) || !sameList(looked, held.pairs) || !sameList(beforeTooOften, held.tooOften);
+      held.pairs = looked;
+      // A Seedelf turned on again before its withdrawal went: the withdrawal goes, its certificate staying listed. And
+      // what waits to be posted for a pair that takes none now, or whose Seedelf another key holds, goes (L4).
+      const view = held.queue.some((q) => q.parked !== undefined && q.parked !== unlock) ? await this.keptView(network) : undefined;
+      const kept = held.queue.filter((q) => {
+        const named = certificateNames(q.certificate);
+        if (!named) return false;
+        const key = pairKey(named.name, named.register);
+        return q.withdraw ? !taking.has(key) : taking.has(key) && !elsewhere.has(key) && !tooOften.has(key);
+      });
+      if (kept.length !== held.queue.length) {
+        held.queue = kept;
+        changed = true;
+      }
+      // Waits run out in an earlier unlock (H1): again once the wallet's own view holds the pair, its mint on the chain.
+      for (const q of held.queue) {
+        if (q.parked === undefined || q.parked === unlock) continue;
+        const named = certificateNames(q.certificate)!;
+        if (!view?.some((v) => v.name === named.name && sameRegister(v.register, named.register))) continue;
+        delete q.parked;
+        delete q.tries;
+        q.after = now;
+        changed = true;
+      }
+      if (make.length) {
+        const made = await this.withKeys((keys) => {
+          pin(keys);
+          const key = keys.messaging[network];
+          if (!key) throw new Error(t("worker.messaging.notOpenHere", { network: NETWORKS[network].label }));
+          return make.map((pair) => this.made(keys.seedelf, key, network, pair));
+        });
+        for (const certificate of made) {
+          if (certificate === undefined) continue;
+          held.queue.push({ certificate, after: this.nextAfter(held, now) });
+          changed = true;
+        }
+      }
+      if (changed) {
+        held.dirty = true;
+        await this.writeList(network, held, true);
+      }
+      await this.unmarkIfDone(network, held);
+      // Listed in this unlock, unless the list was asked for again meanwhile (a Seedelf turned on, say).
+      if ((this.listAsks.get(network) ?? 0) === asked) await this.hold(SESSION_LISTED, network, 1);
+      if (!sameList(before, held.elsewhere) || !sameList(beforeTooOften, held.tooOften)) this.notify(network);
+      return this.postDue(held, now);
+    });
+  }
+
+  /**
+   * `change` made to `network`'s list record, in the step running now, and written where it says it changed (a fixed
+   * write in the record's chain). Nothing where the record can't be read: what it would hold, the next pass sets right.
+   */
+  private async listIntent(network: NetworkName, change: (held: ListHeld) => boolean): Promise<void> {
+    const held = await this.listFor(network, phrasePin(), true);
+    if (!change(held)) return;
+    held.dirty = true;
+    await this.writeList(network, held, true);
+  }
+
+  /** Whether `held`'s queue has a post due now: its first whose time has come, a parked certificate never. */
+  private postDue(held: ListState, now: number): boolean {
+    return held.queue.some((q) => q.after <= now && q.parked === undefined);
+  }
+
+  /** `confirmed`'s key: a network, a pair and an m_S. */
+  private confirmedKey(network: NetworkName, pair: { name: string; register: RegisterHex }, mine: string): string {
+    return `${network}:${pairKey(pair.name, pair.register)}:${mine}`;
+  }
+
+  /**
+   * A certificate of the wallet's own Seedelf `pair` (`messagingCertificate`): the Seedelf key's one use in Messages,
+   * beside the messaging key, in the wallet's queue (a trap there locks the wallet, as any). Undefined where the bindings
+   * refuse it (a register that isn't x's, `not_owned`; one key as both, `same_key`) or the pair doesn't read.
+   */
+  private made(seedelf: Wasm.SeedelfKey, key: Wasm.MessagingKey, network: NetworkName, pair: { name: string; register: RegisterHex }): string | undefined {
+    try {
+      const answer = this.parse<{ certificate: string }>(
+        this.deps.wasm.messagingCertificate(
+          seedelf,
+          key,
+          JSON.stringify({ network, name: pair.name, register: { generator: pair.register.generator, publicValue: pair.register.publicValue } }),
+        ),
+      );
+      return isRefused(answer) ? undefined : answer.certificate;
+    } catch (e) {
+      if (isTrap(e)) throw e;
+      return undefined;
+    }
+  }
+
+  /** When a certificate put in `held`'s queue now may go (ms, this device's clock): a random wait after the last one. */
+  private nextAfter(held: ListState, now: number): number {
+    const last = held.queue.at(-1)?.after ?? held.lastAt;
+    return last === undefined ? now : Math.max(now, last + this.spacing());
+  }
+
+  /** A random wait within CERTIFICATE_SPACING_MS (a test's own, given one). */
+  private spacing(): number {
+    if (this.deps.certificateSpacing) return this.deps.certificateSpacing();
+    const draw = new Uint32Array(1);
+    crypto.getRandomValues(draw);
+    const { least, most } = CERTIFICATE_SPACING_MS;
+    return least + Math.floor((draw[0]! / 2 ** 32) * (most - least));
+  }
+
+  /**
+   * Asks for `network`'s list to be read at its next sync, and the wallet's own certificates set right after it
+   * (`certify`): the switch turned on, a Seedelf turned on, one made here. In session storage, so a worker Chrome
+   * starts again meanwhile reads it all the same.
+   */
+  private async askList(network: NetworkName): Promise<void> {
+    this.listAsks.set(network, (this.listAsks.get(network) ?? 0) + 1);
+    await this.hold(SESSION_LISTED, network, undefined);
+  }
+
+  /** Whether `network`'s list was read, and the wallet's certificates set right against it, in this unlock. */
+  private async listedNow(network: NetworkName): Promise<boolean> {
+    const session = this.deps.session;
+    const kept = session ? await session.get<Partial<Record<NetworkName, number>>>(SESSION_LISTED).catch(() => undefined) : this.holds.get(SESSION_LISTED);
+    return kept?.[network] !== undefined;
+  }
+
+  /**
+   * The list read, then the wallet's own certificates set right, then one posted where it's due: what a sync's lane asks
+   * for after it ends (`sync`), and a Seedelf's turn-on. A read that didn't reach the list's end leaves it all for the
+   * next sync.
+   */
+  private async certifyNow(network: NetworkName, read?: ListRead): Promise<void> {
+    const ended = read ?? (await this.readList(network));
+    if (ended !== "ended") return;
+    if (await this.certify(network)) await this.postCertificates(network);
+  }
+
+  /**
+   * Posts the wallet's own certificate, or withdrawal, first in `network`'s queue whose time has come
+   * (`postCertificateNow`): a lane (`inLane`: part of a sync's, under its phrase `pin`); one at a time per network.
+   */
+  private postCertificates(network: NetworkName, inLane = false, pin: PhrasePin = phrasePin()): Promise<void> {
+    const running = this.certificatePosts.get(network);
+    if (running) return running;
+    if (!inLane) this.laneStart(network);
+    const run = (async () => {
+      try {
+        await this.postCertificateNow(network, pin);
+      } finally {
+        this.certificatePosts.delete(network);
+        if (!inLane) this.laneEnd(network);
+      }
+    })();
+    this.certificatePosts.set(network, run);
+    return run;
+  }
+
+  /**
+   * One post of the wallet's own (§21.7): the queue's first entry whose time has come, and only it, so no two go
+   * together. A certificate's, while the switch is on; a withdrawal's, whatever the switch, since it's what turning
+   * Messages or a Seedelf off asks, and only while unlocked, its proof being the messaging key's (`messagingWithdrawal`).
+   * Its stamp is solved over its digest (a certificate's listing digest, a withdrawal's unlisting digest) at the price
+   * the last list page named (the pool's base before any page), again at the price a 402 names, never past the
+   * bindings' ceiling, and with no keep-alive: a worker Chrome stops meanwhile leaves it waiting, and the next lane, or
+   * the next unlock's, tries again. A wait the relay asks is kept on its time; one of every post's (the edge, the list
+   * full) holds them all. No answer leaves it as it was.
+   *
+   * A certificate kept (new, its own digest named; or held already, F10) leaves the queue, the copy following with the
+   * bytes the relay named, and the next waits a random while after it. Where the relay holds other bytes for its pair,
+   * the copy reads the list again from its start for them, never evicting them (`listToStored`), since a withdrawal is
+   * made from the bytes it withdraws. Refused (a 400, a 413, a 409) it leaves the queue: the next pass looks again; but
+   * one whose register isn't its Seedelf's yet on the relay's view of the chain waits and goes again (H1), its mint maybe
+   * not on that chain yet, MOVED_BACKOFF_MS apart, then not before a later unlock; and one the relay won't list again at
+   * its register (check 3″) is marked, the overview saying so, and isn't made again until its Seedelf moves.
+   *
+   * A withdrawal is done once taken, or at a 404 in the relay's own words (X-L6); any other refusal, or an answer this
+   * version doesn't know, leaves it waiting, MOVED_BACKOFF_MS apart and hourly after. While the relay is stopped (its
+   * 410), a withdrawal alone goes, once the stop's hour is up (X-L7): the post is the probe, the switch on or off.
+   */
+  private async postCertificateNow(network: NetworkName, pin: PhrasePin): Promise<void> {
+    const stop = await this.stopOf(network);
+    if (stop && stop.probe > this.mono()) return;
+    if ((this.certificateAfter.get(network) ?? 0) > this.mono()) return;
+    if ((await this.deps.wallet.state()) !== "unlocked") return;
+    try {
+      await this.laneKeys((keys) => pin(keys));
+    } catch (e) {
+      if (e instanceof WalletLocked) return;
+      throw e;
+    }
+    const on = await this.isOn(network);
+    const held = await this.listFor(network, pin);
+    const now = this.deps.now();
+    const head = held.queue.find((q) => q.after <= now && q.parked === undefined && (q.withdraw || (on && !stop)));
+    if (!head) {
+      await this.unmarkIfDone(network, held);
+      return;
+    }
+    const pool = NETWORKS[network].relay.pool;
+    const listed = this.listingDigest(pool, head.certificate);
+    // A withdrawal of a Seedelf that takes first messages as it would go, the switch on (finding 1): turned on again
+    // since it was queued, by the inbox this service holds now. It leaves the queue, its certificate staying listed.
+    if (head.withdraw && on && (await this.takesAgain(network, head.certificate))) {
+      await this.settledEntry(network, held, head, "dropped", listed);
+      return;
+    }
+    /**
+     * Whether the post may still go: the phrase unlocked, the switch on for a certificate's, and the relay not stopped,
+     * or, for a withdrawal that's the stop's probe, stopped as it was.
+     */
+    const may = async () =>
+      head.withdraw ? (await this.pinned(pin)) && (stop !== undefined || !(await this.stopOf(network))) : (await this.mayAsk(network, pin)) && !(await this.stopOf(network));
+    // A withdrawal's bytes, made once for this run with the messaging key: one the bindings refuse (a certificate that
+    // isn't this key's) leaves the queue.
+    let withdrawal: { withdrawal: string; digest: string } | undefined;
+    if (head.withdraw) {
+      const made = await this.laneKey(network, (key, keys) => {
+        pin(keys);
+        try {
+          return this.parse<{ withdrawal: string; digest: string }>(
+            this.deps.wasm.messagingWithdrawal(key, JSON.stringify({ network, certificate: head.certificate })),
+          );
+        } catch (e) {
+          if (isTrap(e)) throw e;
+          return { refused: "invalid_certificate" } as Refused;
+        }
+      });
+      if (isRefused(made)) {
+        await this.settledEntry(network, held, head, "dropped", listed);
+        return;
+      }
+      withdrawal = made;
+    }
+    const digest = withdrawal ? withdrawal.digest : listed;
+    const body = (nonce: number) => certificateBody(nonce, withdrawal ? withdrawal.withdrawal : head.certificate);
+    const relay = this.deps.relay(network);
+    const ceiling = this.constantsOf().priceCeilingBits;
+    let bits = this.listPrices.get(network) ?? RELAY_BASE_BITS[network];
+    type Outcome = { kind: "done"; keptAs?: string } | { kind: "dropped" } | { kind: "wait"; ms: number } | { kind: "again" };
+    let outcome: Outcome | undefined;
+    let remake = false;
+    /** Not one of §21.7's answers: a minute's wait; after three in a row a certificate is dropped, for the next pass. */
+    const unknown = (): Outcome => {
+      const times = (this.certificateStrikes.get(listed) ?? 0) + 1;
+      this.certificateStrikes.set(listed, times);
+      if (head.withdraw) return { kind: "again" };
+      return times < UNKNOWN_ANSWERS ? { kind: "wait", ms: CEILING_WAIT_MS } : { kind: "dropped" };
+    };
+    for (let tries = 0; tries < 4 && !outcome; tries++) {
+      if (bits > ceiling) {
+        outcome = { kind: "wait", ms: CEILING_WAIT_MS };
+        break;
+      }
+      let nonce: number;
+      try {
+        nonce = bits === 0 ? 0 : await this.workFor(digest, bits, network, may, undefined, false);
+      } catch (e) {
+        if (e instanceof StopMet) return;
+        throw e;
+      }
+      const shows = bits === 0 ? 0 : Math.max(bits, this.solved.get(digest)?.bits ?? 0);
+      let answer: CertificateAnswer | WithdrawalAnswer;
+      try {
+        answer = withdrawal ? await relay.postWithdrawal(body(nonce), may) : await relay.postCertificate(body(nonce), may);
+      } catch (e) {
+        if (e instanceof RelayStopped) {
+          await this.setStop(network);
+          return;
+        }
+        if (e instanceof RelayNotAsked) return;
+        if (relayAnswered(e) && (await this.endStop(network))) this.notify(network);
+        if (e instanceof RelayUnknown) {
+          outcome = unknown();
+          break;
+        }
+        if (e instanceof RelayDown) return;
+        throw e;
+      }
+      if (await this.endStop(network)) this.notify(network);
+      if (answer.kind === "price") {
+        this.certificateStrikes.delete(listed);
+        if (answer.bits > ceiling) outcome = { kind: "wait", ms: answer.retryAfterMs ?? CEILING_WAIT_MS };
+        else if (answer.bits <= shows) outcome = { kind: "wait", ms: CEILING_WAIT_MS };
+        else bits = answer.bits;
+        continue;
+      }
+      if (answer.kind === "wait") {
+        this.certificateStrikes.delete(listed);
+        if (answer.scope === "network") this.certificateAfter.set(network, this.mono() + answer.retryAfterMs);
+        outcome = { kind: "wait", ms: answer.retryAfterMs };
+        break;
+      }
+      this.solved.delete(digest);
+      if (answer.kind === "kept") {
+        // The listing digest of what the relay holds (F10): a new one must be these bytes', and one that's missing or
+        // isn't is an answer this version doesn't know.
+        if (answer.digest === undefined || (answer.fresh && answer.digest !== listed)) {
+          outcome = unknown();
+          break;
+        }
+        this.certificateStrikes.delete(listed);
+        outcome = { kind: "done", keptAs: answer.digest };
+        break;
+      }
+      this.certificateStrikes.delete(listed);
+      if (answer.kind === "withdrawn" || answer.kind === "gone") {
+        outcome = { kind: "done" };
+        break;
+      }
+      // Refused. A withdrawal's never leaves the queue (X-L6): it's what the switch asked, so it waits and goes again.
+      if (head.withdraw) {
+        outcome = { kind: "again" };
+        break;
+      }
+      const conflict = "conflict" in answer ? answer.conflict : undefined;
+      const named = certificateNames(head.certificate);
+      const key = named ? pairKey(named.name, named.register) : undefined;
+      // Its register not the Seedelf's yet on the relay's view of the chain (H1): its mint may not be there yet.
+      if (conflict === "moved") {
+        outcome = { kind: "again" };
+        break;
+      }
+      outcome = { kind: "dropped" };
+      // Two certificates held for its Seedelf already: two other keys' at least, so another holds it (§21.8).
+      if (conflict === "two" && key && !held.elsewhere.includes(key)) held.elsewhere = [...held.elsewhere, key].sort();
+      // Withdrawn too often at its register (check 3″): not listed here again until the Seedelf moves.
+      if (conflict === "tooOften" && key && !held.tooOften.includes(key)) held.tooOften = [...held.tooOften, key].sort();
+      // These very bytes withdrawn before (check 3′): a new certificate, a fresh aux and so another digest, is made and
+      // posted in their place, after the next read of the list.
+      if (conflict === "withdrawn") remake = true;
+    }
+    // Four 402s: no answer, as for an envelope's post.
+    if (!outcome) return;
+    if (outcome.kind === "wait" || outcome.kind === "again") {
+      // Into the record as it is now: a lock, or another phrase, meanwhile writes nothing (`writeList`).
+      if (!held.queue.includes(head)) return;
+      if (outcome.kind === "wait") head.after = this.deps.now() + outcome.ms;
+      else {
+        const tries = (head.tries ?? 0) + 1;
+        head.tries = tries;
+        const wait = MOVED_BACKOFF_MS[tries - 1];
+        if (wait !== undefined) head.after = this.deps.now() + wait;
+        else if (head.withdraw) head.after = this.deps.now() + PAUSED_ASK_MS;
+        // A certificate's waits run out: not before a later unlock, once the wallet's own view holds its pair.
+        else head.parked = (await this.unlockStamp()) ?? 0;
+      }
+      held.dirty = true;
+      await this.writeList(network, held, false);
+      return;
+    }
+    await this.settledEntry(network, held, head, outcome.kind, listed, outcome.kind === "done" ? outcome.keptAs : undefined);
+    if (remake) {
+      await this.askList(network);
+      this.behind(this.certifyNow(network));
+    }
+  }
+
+  /**
+   * `head` done with (`postCertificateNow`): out of the queue; a certificate kept joins the copy, a withdrawal done takes
+   * its certificate out of it, as the list's next page will say; the next waits a random while after this one. Written
+   * at once, a lane's fixed write. `keptAs`: the listing digest of the certificate the relay holds for a certificate's
+   * pair and m_S (F10): another posting's bytes where it isn't `listed`, which the copy doesn't hold, so it reads the
+   * list again from its start for them.
+   */
+  private async settledEntry(network: NetworkName, held: ListHeld, head: QueueEntry, kind: "done" | "dropped", listed: string, keptAs?: string): Promise<void> {
+    if (!held.queue.includes(head)) return;
+    held.queue = held.queue.filter((q) => q !== head);
+    const named = certificateNames(head.certificate);
+    let again = false;
+    if (kind === "done") {
+      const at = this.deps.now();
+      held.lastAt = at;
+      if (head.withdraw) {
+        held.certificates.delete(listed);
+        if (named) this.confirmed.delete(this.confirmedKey(network, named, named.messaging));
+      } else {
+        if (named) this.confirmed.add(this.confirmedKey(network, named, named.messaging));
+        if (keptAs === undefined || keptAs === listed) held.certificates.set(listed, head.certificate);
+        else if (!held.certificates.has(keptAs)) {
+          // The bytes the relay holds, from the list's start: the copy kept, nothing of it dropped.
+          delete held.cursor;
+          again = true;
+        }
+      }
+      // Each still waiting goes a random wait after the one before it, the first after this one.
+      let last = at;
+      for (const next of held.queue) {
+        if (next.parked !== undefined) continue;
+        next.after = Math.max(next.after, last + this.spacing());
+        last = next.after;
+      }
+    }
+    held.dirty = true;
+    await this.writeList(network, held, false);
+    if (again) await this.askList(network);
+    if (!held.queue.some((q) => q.withdraw)) {
+      await this.unmarkIfDone(network, held);
+      // The last withdrawal gone: the alarm, which ran on for it, stops where nothing else needs it.
+      if (head.withdraw) await this.alarmAsNeeded();
+    }
+    this.notify(network);
+  }
+
+  /**
+   * Starts the alarm where a switch is on or a withdrawal of the wallet's own waits on any network Messages is open on,
+   * and stops it otherwise (protocol.md §21.7: one waiting with Messages off goes at a run of the alarm's).
+   */
+  private async alarmAsNeeded(): Promise<void> {
+    const switches = (await this.deps.preferences.get()).messaging;
+    const open = this.networks().filter((n) => this.deps.preferences.messagingOpen(n));
+    const needed = Object.values(switches).some(Boolean) || (await this.withdrawalsWaiting(open)).length > 0;
+    await (needed ? this.deps.alarm?.start() : this.deps.alarm?.stop());
+  }
+
+  /**
+   * Whether the Seedelf a certificate names takes first messages now, by the inbox this service holds in this unlock
+   * (`shown`): memory alone, so a lane may look. False where none is held: the step that turned it on again dropped its
+   * withdrawals beside the choice (`answerAt`).
+   */
+  private async takesAgain(network: NetworkName, certificate: string): Promise<boolean> {
+    const named = certificateNames(certificate);
+    const shown = this.shown.get(network);
+    if (!named || !shown || shown.at !== (await this.unlockStamp())) return false;
+    return (shown.inbox.handles[named.name] ?? []).some((r) => sameRegister(r, named.register));
+  }
+
+  /** Whether the keys there now are `pin`'s phrase's: a withdrawal's look before it goes, whatever the switch. */
+  private async pinned(pin: PhrasePin): Promise<boolean> {
+    return this.laneKeys((keys) => pin(keys)).then(
+      () => true,
+      () => false,
+    );
+  }
+
+  /**
+   * Writes a fresh withdrawals' mark for `network` (`messagingWithdraw.<network>`, not sealed): an intent to withdraw
+   * that no pass has looked at yet (`reconciled`), written before what it's for is (the switch, the choice), so a lock
+   * or a worker stop never loses it (M2; §21.7: one asked while locked waits for the next unlock). A run finds it with
+   * no key and no record read. It carries what it can with nothing sealed (the review's finding 2): `off`, the
+   * network's switch turned off, which only the switch turned on undoes; a Seedelf's turn-off is kept sealed, in the
+   * list record's `intents`. A random `id` for each write, and nothing else.
+   */
+  private async markWithdrawals(network: NetworkName, off?: boolean): Promise<void> {
+    const before = await this.markOf(network);
+    const draw = new Uint8Array(8);
+    crypto.getRandomValues(draw);
+    const id = Array.from(draw, (b) => b.toString(16).padStart(2, "0")).join("");
+    const keepOff = off ?? before?.off === true;
+    await this.deps.local.set(withdrawKey(network), keepOff ? { id, off: true } : { id });
+  }
+
+  /** `network`'s withdrawals' mark as it is now: undefined for none, or one that can't be read. */
+  private async markOf(network: NetworkName): Promise<Mark | undefined> {
+    const raw = await this.deps.local.get<unknown>(withdrawKey(network)).catch(() => undefined);
+    if (raw === undefined || raw === null) return undefined;
+    if (typeof raw === "object" && typeof (raw as Mark).id === "string") return { id: (raw as Mark).id, ...((raw as Mark).off === true ? { off: true } : {}) };
+    // One of another shape: something may wait, its intent unknown.
+    return { id: String(JSON.stringify(raw)) };
+  }
+
+  /** The marks of `networks` that have one, by network. */
+  private async marksOf(networks: readonly NetworkName[]): Promise<Map<NetworkName, Mark>> {
+    const out = new Map<NetworkName, Mark>();
+    for (const n of networks) {
+      const mark = await this.markOf(n);
+      if (mark !== undefined) out.set(n, mark);
+    }
+    return out;
+  }
+
+  /**
+   * Clears `network`'s mark where `held` has no withdrawal waiting and no Seedelf's turn-off waiting for its choice
+   * (`intents`), and the mark is one a pass has set the queue right for in full (`reconciled`): a mark written after
+   * that pass began is an intent it never looked at, which stays for the next (M2), and one whose switch off hasn't been
+   * written (`off`, the switch still on) stays until the switch is turned on (finding 2).
+   */
+  private async unmarkIfDone(network: NetworkName, held: ListState): Promise<void> {
+    if (held.queue.some((q) => q.withdraw) || held.intents.length) return;
+    const mark = await this.markOf(network);
+    if (mark === undefined) return;
+    const done = this.reconciled.get(network);
+    if (!done?.full || done.id !== mark.id) return;
+    if (mark.off && (await this.isOn(network))) return;
+    await this.deps.local.remove(withdrawKey(network));
+  }
+
+  /**
+   * Sets `network`'s withdrawals right from the switch and the choices as they stand now (§21.7; chunk 55's call 9; the
+   * review of 55e, M2): with the switch off, every certificate of the wallet's own the copy holds for its Seedelfs is
+   * withdrawn; with it on, those of the Seedelfs turned off, and a withdrawal still waiting for one that takes first
+   * messages again goes, its certificate staying listed. Each into the queue a random wait after the one before it; one
+   * waiting to be posted for a pair that's withdrawn leaves it. Made at the switch, at a Seedelf's turn-off, and by a
+   * run for a mark no pass of this worker's has looked at (a lock, or a worker stop, caught the intent before it was
+   * queued). A step in the service's queue, with no request: the posts are a lane's. Whether a post is due now.
+   *
+   * What the mark says is cleared only once the stored switch or choices say it too (finding 2): a turn-off the list
+   * record holds (`intents`) whose choice isn't written yet stays, as does the mark's `off` while the switch is still on,
+   * so a pass that runs before the press's write never clears the intent that write is for. Such a pass is looked at
+   * again at the next unlock's run, or the next worker's.
+   */
+  private reconcile(network: NetworkName): Promise<boolean> {
+    return this.serial(async () => {
+      const mark = await this.markOf(network);
+      const pin = phrasePin();
+      const on = await this.isOn(network);
+      const inbox = await this.inbox(network);
+      const { handles, pairs } = await this.handlesNow(network, inbox);
+      const taking = new Set(Object.entries(handles).flatMap(([name, registers]) => registers.map((r) => pairKey(name, r))));
+      // The user's own turn-offs, a Seedelf this browser didn't make among them, which `pairs` no longer names.
+      const turnedOff = (inbox.answerAt ?? []).filter((c) => !c.on).map((c) => ({ name: c.name, register: c.register }));
+      const off: Array<{ name: string; register: RegisterHex }> = [];
+      for (const p of [...pairs, ...turnedOff]) {
+        const key = pairKey(p.name, p.register);
+        if (on && taking.has(key)) continue;
+        if (!off.some((o) => pairKey(o.name, o.register) === key)) off.push(p);
+      }
+      const held = await this.listFor(network, pin, true);
+      const values = await this.ownValues(network, pin, off);
+      const now = this.deps.now();
+      let changed = false;
+      if (on) {
+        // Turned on again before its withdrawal went: the withdrawal goes, its certificate staying listed.
+        const kept = held.queue.filter((q) => {
+          const named = q.withdraw ? certificateNames(q.certificate) : undefined;
+          return !named || !taking.has(pairKey(named.name, named.register));
+        });
+        if (kept.length !== held.queue.length) {
+          held.queue = kept;
+          changed = true;
+        }
+      }
+      if (this.queueWithdrawals(network, held, off, values, now)) changed = true;
+      // A turn-off whose choice the inbox now holds (or the switch off, which takes every one) is in the queue now; one
+      // whose choice isn't written yet stays, for the pass after it.
+      const intents = held.intents.filter((k) => on && taking.has(k));
+      if (intents.length !== held.intents.length) {
+        held.intents = intents;
+        changed = true;
+      }
+      if (changed) {
+        held.dirty = true;
+        await this.writeList(network, held, true);
+      }
+      // In full: the mark's switch off written, and no turn-off waiting for its choice.
+      const full = !(mark?.off && on) && held.intents.length === 0;
+      // This pass looked at the mark there as it began; one it wrote itself, for what it queued, too.
+      if (held.queue.some((q) => q.withdraw) && mark === undefined && (await this.markOf(network)) === undefined) {
+        await this.markWithdrawals(network, false);
+        this.reconciled.set(network, { id: (await this.markOf(network))?.id, opened: this.opened(), full });
+      } else this.reconciled.set(network, { id: mark?.id, opened: this.opened(), full });
+      await this.unmarkIfDone(network, held);
+      return held.queue.some((q) => q.after <= now && q.parked === undefined && (q.withdraw || on));
+    });
+  }
+
+  /**
+   * Each certificate of the wallet's own in `held`'s copy for each of `pairs` (by its m_S, `values`) into the queue as a
+   * withdrawal, a random wait after the one before it; one waiting to be posted for the pair leaves it. What the relay
+   * was said to hold for the pair is forgotten (`confirmed`): turned on again, its certificate is made again. Whether
+   * the queue changed.
+   */
+  private queueWithdrawals(
+    network: NetworkName,
+    held: ListState,
+    pairs: ReadonlyArray<{ name: string; register: RegisterHex }>,
+    values: ReadonlyArray<string | undefined>,
+    now: number,
+  ): boolean {
+    let changed = false;
+    pairs.forEach((pair, i) => {
+      const mine = values[i];
+      if (mine === undefined) return;
+      this.confirmed.delete(this.confirmedKey(network, pair, mine));
+      const named = (c: string) => {
+        const n = certificateNames(c);
+        return !!n && n.name === pair.name && sameRegister(n.register, pair.register);
+      };
+      // Not posted now: it would only be withdrawn.
+      const before = held.queue.length;
+      held.queue = held.queue.filter((q) => q.withdraw || !named(q.certificate));
+      if (held.queue.length !== before) changed = true;
+      for (const [digest, certificate] of held.certificates) {
+        if (!named(certificate) || this.checkedCertificate(network, digest, certificate) !== mine) continue;
+        if (held.queue.some((q) => q.withdraw && q.certificate === certificate)) continue;
+        held.queue.push({ certificate, after: this.nextAfter(held, now), withdraw: true });
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
+  /**
+   * Withdraws the wallet's own certificates for its Seedelf `name` at `register` as its Remove is sent (protocol.md
+   * §21.7; the review of 55e, X-M3): on preprod nothing else takes them off the list before the relay's daily look at
+   * the chain. The mark first, then the withdrawals queued in the service's queue, the rest set right as the switch's
+   * are (`reconcile`), and the first posted; the register is the one the Remove spent, the wallet's own. Nothing on a
+   * network Messages isn't open on. A lock before its withdrawals are queued loses them, the pair being forgotten as
+   * the Remove is sent (minted-by.ts `forgetRegisters`): the relay's own look at the chain takes them down then.
+   */
+  async seedelfRemoved(network: NetworkName, name: string, register: RegisterHex): Promise<void> {
+    if (!this.deps.preferences.messagingOpen(network) || !isRegister(register)) return;
+    await this.markWithdrawals(network);
+    const pair = { name, register: { generator: register.generator, publicValue: register.publicValue } };
+    this.behind(
+      this.serial(async () => {
+        const pin = phrasePin();
+        const held = await this.listFor(network, pin, true);
+        const values = await this.ownValues(network, pin, [pair]);
+        const now = this.deps.now();
+        if (this.queueWithdrawals(network, held, [pair], values, now)) {
+          held.dirty = true;
+          await this.writeList(network, held, true);
+        }
+        // Which Seedelfs take first messages, set right now the Remove is sent (its mark in `mintedAt` first): what a
+        // withdrawal's post looks at in memory (`takesAgain`) never holds the removed one as taking them.
+        const inbox = await this.inbox(network).catch((e: unknown) => {
+          if (e instanceof UnreadableRecordError) return undefined;
+          throw e;
+        });
+        if (inbox) {
+          const { handles, seen, gone } = await this.handlesNow(network, inbox);
+          if (!sameHandles(handles, inbox.handles)) {
+            inbox.handles = handles;
+            inbox.seen = seen;
+            if (gone.length) inbox.gone = gone;
+            else delete inbox.gone;
+            await this.writeInbox(network, inbox, { kind: "bookkeeping" });
+          }
+        }
+      })
+        // Then the queue set right from the switches and the choices as a whole, the mark looked at (`reconcile`).
+        .then(() => this.reconcile(network))
+        .catch(quietly)
+        .then(async (due) => {
+          await this.alarmAsNeeded();
+          if (due) await this.postCertificates(network);
+        }),
+    );
+  }
+
+  /**
+   * The networks of `networks` with withdrawals of the wallet's own that may wait (`markWithdrawals`'s mark), for a run:
+   * an unlock's, or the alarm's while any waits.
+   */
+  private async withdrawalsWaiting(networks: readonly NetworkName[]): Promise<NetworkName[]> {
+    return [...(await this.marksOf(networks)).keys()];
+  }
+
+  /**
+   * Why a press's read of `network`'s list failed (finding 6), as its refusal: the switch off, the wallet locked, the
+   * relay's Messages stopped (its 410), this address's day of reading used up, or no answer.
+   */
+  private async unread(network: NetworkName): Promise<Error> {
+    if (!(await this.isOn(network))) return new Error(t("messages.noneOff"));
+    if ((await this.deps.wallet.state()) !== "unlocked") return new WalletLocked(t("worker.wallet.locked"));
+    if (await this.stopOf(network)) return new MessagingRefused("paused", t("worker.messaging.listPaused"));
+    if ((await this.heldUntil(SESSION_READ_AFTER, network, DAY_READ_MAX_MS)) !== undefined) return new MessagingRefused("day_read", t("worker.messaging.listDayRead"));
+    return new MessagingRefused("offline", t("worker.messaging.listOffline"));
+  }
+
+  /**
+   * The list read to its end for a press (M3): a read after a read while the relay says more follows, LIST_READS_A_PRESS
+   * at most. `more` where it's still not at the end.
+   */
+  private async readToEnd(network: NetworkName): Promise<ListRead> {
+    let read: ListRead = "failed";
+    for (let reads = 0; reads < LIST_READS_A_PRESS; reads++) {
+      read = await this.readList(network);
+      if (read !== "more") break;
+    }
+    return read;
+  }
+
+  /**
+   * The one certificate a first message to the Seedelf `name` at `register` is written on (protocol.md §21.5, §21.8):
+   * from the list's copy, read to its end at the press (`start`), exactly one m_S among the good certificates for that
+   * pair, `register` being the press's own read of the contract. None, or two, is NoCertificate, before any work is
+   * done or anything posted: a Seedelf whose certificates went past the copy's room is none too, the safe way, since
+   * they go by their Seedelf, every one or none (`listToStored`). Gated: the copy is read as no lane runs.
+   */
+  private async certificateTo(network: NetworkName, name: string, register: RegisterHex): Promise<string> {
+    const pin = phrasePin();
+    const held = await this.listFor(network, pin, true);
+    const good = this.goodFor(network, held, name, register);
+    if (good.size !== 1) throw new NoCertificate();
+    return [...good.values()][0]!;
+  }
+
+  /**
+   * The wallet's own certificate for the Seedelf `name` at `register`, for Show my Seedelf (§21.8): only once it's
+   * listed (the review of 55e, L1), so the reader's check finds it: the good one on the list's copy naming its own m_S,
+   * or one the relay said it holds (`confirmed`, whichever bytes). Otherwise it's posted first: the one waiting, or, for
+   * a pair that takes first messages here with none, one made now, at the front of the queue but never sooner after the
+   * wallet's last post than CERTIFICATE_SPACING_MS's least; and where it isn't listed after that, NotListedYet says to
+   * try again shortly. A good one naming another key is OtherKey: the reader's check would find two. Only a pair the
+   * wallet showed (W8), never one named by anything a stranger sent.
+   */
+  private async ownCertificate(network: NetworkName, name: string, register: RegisterHex): Promise<string> {
+    const pair = { name, register };
+    const found = await this.serial(async () => {
+      const pin = phrasePin();
+      const held = await this.listFor(network, pin, true);
+      const [mine] = await this.ownValues(network, pin, [pair]);
+      if (mine === undefined) throw new Error(t("worker.messaging.notYourSeedelf"));
+      const good = this.goodFor(network, held, name, register);
+      if ([...good.keys()].some((m) => m !== mine)) throw new OtherKey();
+      const kept = good.get(mine);
+      if (kept) return { certificate: kept, post: false, mine };
+      // Not listed again at its register until it moves (check 3″).
+      if (held.tooOften.includes(pairKey(name, register))) throw new TooOften();
+      const now = this.deps.now();
+      const queued = this.queuedFor(held, pair, mine);
+      // Listed, its bytes not on the copy yet (F10): the reveal carries a certificate of the same pair and m_S.
+      if (this.confirmed.has(this.confirmedKey(network, pair, mine))) {
+        const certificate = queued?.certificate ?? (await this.withKeys((keys) => {
+          pin(keys);
+          const key = keys.messaging[network];
+          return key ? this.made(keys.seedelf, key, network, pair) : undefined;
+        }));
+        if (certificate === undefined) throw new Error(t("worker.messaging.notYourSeedelf"));
+        return { certificate, post: false, mine };
+      }
+      // Its waits for the chain ran out (H1): not before a later unlock.
+      if (queued?.parked !== undefined) throw new NotListedYet();
+      // Never sooner after the wallet's last post than the least of the spacing.
+      const at = held.lastAt === undefined ? now : Math.max(now, held.lastAt + this.leastSpacing());
+      if (queued) {
+        // Waiting to be posted: first, the others after it.
+        held.queue = [{ ...queued, after: Math.min(queued.after, at) }, ...held.queue.filter((q) => q !== queued)];
+      } else {
+        // Only for a Seedelf that takes first messages: one turned off had its certificate withdrawn, and takes none.
+        const { handles } = await this.handlesNow(network, await this.inbox(network));
+        if (!handles[name]?.some((r) => sameRegister(r, register))) throw new NoCertificate();
+        const certificate = await this.withKeys((keys) => {
+          pin(keys);
+          const key = keys.messaging[network];
+          return key ? this.made(keys.seedelf, key, network, pair) : undefined;
+        });
+        if (certificate === undefined) throw new Error(t("worker.messaging.notYourSeedelf"));
+        held.queue = [{ certificate, after: at }, ...held.queue];
+      }
+      held.dirty = true;
+      await this.writeList(network, held, true);
+      return { certificate: held.queue[0]!.certificate, post: held.queue[0]!.after <= now, mine };
+    });
+    if (!found.post && !this.confirmed.has(this.confirmedKey(network, pair, found.mine))) {
+      // Listed already: carried as it is.
+      const held = this.lists.get(network);
+      if (held && this.goodFor(network, held, name, register).get(found.mine) === found.certificate) return found.certificate;
+      throw new NotListedYet();
+    }
+    // Posted first, so the reader's check can find it; an answer that doesn't come leaves it waiting, for the next lane.
+    if (found.post) await this.postCertificates(network);
+    const held = this.lists.get(network);
+    const listed = held ? this.goodFor(network, held, name, register).get(found.mine) : undefined;
+    if (listed) return listed;
+    if (this.confirmed.has(this.confirmedKey(network, pair, found.mine))) return found.certificate;
+    throw new NotListedYet();
+  }
+
+  /** The least wait between two of the wallet's own posts: CERTIFICATE_SPACING_MS's, or a test's own spacing. */
+  private leastSpacing(): number {
+    return this.deps.certificateSpacing ? this.deps.certificateSpacing() : CERTIFICATE_SPACING_MS.least;
+  }
+
+  /**
+   * The Seedelfs of `pairs` that the wallet has its own good certificate for, on the list's copy, said held by the
+   * relay, or waiting to be posted (§21.8): the ones Show my Seedelf offers, by name. Never one another key holds, or
+   * one the relay won't list again at its register.
+   */
+  private async certified(network: NetworkName, pairs: ReadonlyArray<{ name: string; register: RegisterHex }>): Promise<string[]> {
+    if (!pairs.length) return [];
+    const pin = phrasePin();
+    const held = await this.listFor(network, pin, true);
+    const values = await this.ownValues(network, pin, pairs);
+    const names = new Set<string>();
+    pairs.forEach((pair, i) => {
+      const mine = values[i];
+      if (mine === undefined || held.tooOften.includes(pairKey(pair.name, pair.register))) return;
+      const good = this.goodFor(network, held, pair.name, pair.register);
+      if ([...good.keys()].some((m) => m !== mine)) return;
+      // One waiting to be posted, but never one whose waits for the chain ran out (`parked`): it isn't on its way.
+      const queued = this.queuedFor(held, pair, mine);
+      if (good.has(mine) || this.confirmed.has(this.confirmedKey(network, pair, mine)) || (queued && queued.parked === undefined)) names.add(pair.name);
+    });
+    return [...names];
+  }
+
+  /**
+   * What the overview shows of the list record (L2): its `elsewhere` and `tooOften`, as held in unlock `at`, or as last
+   * read for the overview in it, or read from its stored record with no turn at the gate (O8): the wallet's own record,
+   * whose size the list sets, the same for every wallet. One that won't open shows nothing.
+   */
+  private async listShown(network: NetworkName, at: number): Promise<{ elsewhere: Set<string>; tooOften: Set<string> }> {
+    const held = this.lists.get(network);
+    if (held && held.at === at) return { elsewhere: new Set(held.elsewhere), tooOften: new Set(held.tooOften) };
+    const kept = this.shownList.get(network);
+    if (kept && kept.at === at) return kept;
+    let stored: StoredList | undefined;
+    try {
+      stored = await this.deps.store.get<StoredList>(listRecord(network));
+    } catch (e) {
+      if (e instanceof WalletLocked) throw e;
+    }
+    const strings = (list: unknown) => new Set(Array.isArray(list) ? list.filter((k): k is string => typeof k === "string") : []);
+    const shown = { at, elsewhere: strings(stored?.elsewhere), tooOften: strings(stored?.tooOften) };
+    this.shownList.set(network, shown);
+    return shown;
   }
 
   // -------------------------------------------------------------------------
@@ -4265,7 +6053,7 @@ export class MessagingService {
   private async anotherPhrase(pin: PhrasePin): Promise<boolean> {
     // Of the keys as they are now (`admitted`'s `now`): a lock and an unlock of the same phrase since isn't another's.
     try {
-      await this.admitted((admit) => this.laneKey((_key, keys) => pin(keys), admit), undefined, true);
+      await this.admitted((admit) => this.laneKeys((keys) => pin(keys), admit), undefined, true);
       return false;
     } catch {
       return (await this.admitted((admit) => this.deps.wallet.state(admit), undefined, true)) === "unlocked";
@@ -4429,7 +6217,7 @@ export class MessagingService {
   private noteOwn(network: NetworkName, pin: PhrasePin, epoch: number): Promise<true | undefined> {
     return this.step(async () => {
       if (this.epochOf(network) !== epoch) return undefined;
-      await this.withKey((_key, keys) => pin(keys));
+      await this.withKeys((keys) => pin(keys));
       // A request kept in its record whose list's write was refused: the list set right first.
       if (this.requestsBehind.has(network)) {
         await this.repairRequests(network);
@@ -4443,6 +6231,11 @@ export class MessagingService {
         this.clearNoted(network, noted.cids);
         return true;
       }
+      // A pair that takes first messages now that the last pass of the list didn't set right (a Seedelf made here while
+      // Messages are on, its mint's pair): its certificate is made and posted after the next sync's read of the list
+      // (protocol.md §21.8).
+      const certified = new Set((await this.listFor(network, pin, true)).pairs);
+      const fresh = Object.entries(handles).some(([name, registers]) => registers.some((r) => !certified.has(pairKey(name, r))));
       inbox.handles = handles;
       inbox.seen = seen;
       if (gone.length) inbox.gone = gone;
@@ -4450,6 +6243,7 @@ export class MessagingService {
       // Bookkeeping, never refused for the budget: what's taken after it is, where it doesn't fit.
       await this.writeInbox(network, inbox, { kind: "bookkeeping" });
       this.clearNoted(network, noted.cids);
+      if (fresh) await this.askList(network);
       return true;
     });
   }
@@ -4462,7 +6256,7 @@ export class MessagingService {
     if (!this.inboxBehind.get(network)?.size) return false;
     return this.step(async () => {
       if (this.epochOf(network) !== epoch) return false;
-      await this.withKey((_key, keys) => pin(keys));
+      await this.withKeys((keys) => pin(keys));
       const inbox = await this.inbox(network);
       const noted = await this.setNotedRight(network, inbox);
       if (noted.changed) await this.writeInbox(network, inbox, { kind: "bookkeeping" });
@@ -4535,15 +6329,17 @@ export class MessagingService {
   private async handlesNow(
     network: NetworkName,
     inbox: Inbox,
-  ): Promise<{ handles: Record<string, RegisterHex[]>; shown: string[]; seen: string[]; gone: string[] }> {
+  ): Promise<{ handles: Record<string, RegisterHex[]>; shown: string[]; pairs: Array<{ name: string; register: RegisterHex }>; seen: string[]; gone: string[] }> {
     const [made, view] = await Promise.all([mintedAt(this.gatedStore, network), this.keptView(network)]);
     const seen = new Set(inbox.seen ?? []);
     const gone = new Set(inbox.gone ?? []);
     const holds = (name: string, register: RegisterHex) => view?.some((s) => s.name === name && sameRegister(s.register, register)) ?? false;
     const handles: Record<string, RegisterHex[]> = {};
     const shown = new Set<string>();
+    const pairs: Array<{ name: string; register: RegisterHex }> = [];
     const add = (name: string, register: RegisterHex, takes: boolean) => {
       shown.add(name);
+      if (!pairs.some((p) => p.name === name && sameRegister(p.register, register))) pairs.push({ name, register });
       if (!takes) return;
       const at = (handles[name] ??= []);
       if (!at.some((r) => sameRegister(r, register))) at.push({ generator: register.generator, publicValue: register.publicValue });
@@ -4574,7 +6370,7 @@ export class MessagingService {
       }
       add(choice.name, choice.register, true);
     }
-    return { handles, shown: [...shown], seen: [...seen].sort(), gone: [...gone].sort() };
+    return { handles, shown: [...shown], pairs, seen: [...seen].sort(), gone: [...gone].sort() };
   }
 
   /**
@@ -4592,16 +6388,28 @@ export class MessagingService {
    * Every Seedelf the kept view has under the key, and whether it takes first messages (W8): none without a view. For
    * the overview, which reads these at once: the wallet's own records, the same size whatever any envelope held.
    */
-  private async seedelfsOf(network: NetworkName, inbox: Inbox): Promise<MessagingSeedelf[]> {
+  private async seedelfsOf(network: NetworkName, inbox: Inbox, at: number): Promise<MessagingSeedelf[]> {
     const view = await this.deps.ownSeedelfs(network, false);
     if (!view?.length) return [];
     const made = await mintedAt(this.deps.store, network);
     const gone = new Set(inbox.gone ?? []);
+    // Its good certificate on the list names another key's m_S (protocol.md §21.8): another key takes its messages. Or
+    // the relay won't list it again at its register (check 3″): until it moves.
+    const { elsewhere, tooOften } = await this.listShown(network, at);
     return view.map(({ name, register }) => {
       const mine = made[name]?.some((r) => sameRegister(r, register)) ?? false;
       // Removed here, or dropped by a view (f6): off, whatever was chosen before; its switch turns it on again.
       const off = removedHere(made, name) || gone.has(pairKey(name, register));
-      return { name, register, made: mine, on: !off && (choiceOf(inbox, name, register)?.on ?? mine) };
+      const on = !off && (choiceOf(inbox, name, register)?.on ?? mine);
+      const key = pairKey(name, register);
+      return {
+        name,
+        register,
+        made: mine,
+        on,
+        ...(on && elsewhere.has(key) ? { elsewhere: true as const } : {}),
+        ...(on && tooOften.has(key) ? { tooOften: true as const } : {}),
+      };
     });
   }
 
@@ -4630,7 +6438,7 @@ export class MessagingService {
   private receive(network: NetworkName, envelope: string, pin: PhrasePin, step: Step, epoch: number): Promise<boolean> {
     return this.step(async () => {
       if (this.epochOf(network) !== epoch) return false;
-      const opened = await this.withKey((key, keys) => {
+      const opened = await this.withKey(network, (key, keys) => {
         pin(keys);
         return this.parse<Opened>(this.watch(step, () => this.deps.wasm.messagingOpen(key, envelope)));
       });
@@ -4670,6 +6478,7 @@ export class MessagingService {
       const call = (withRequests: boolean) => {
         const record = withRequests ? requests?.requests : undefined;
         const request = JSON.stringify({
+          network,
           envelope,
           now,
           handles: stranger ? Object.entries(inbox.handles).map(([name, registers]) => ({ name, registers })) : [],
@@ -4678,7 +6487,7 @@ export class MessagingService {
           ...(records && inbox.tombstones ? { tombstones: inbox.tombstones } : {}),
           ...(this.deps.firstContactBits !== undefined ? { firstContactBits: this.deps.firstContactBits } : {}),
         });
-        return this.withKey((key, keys) => {
+        return this.withKey(network, (key, keys) => {
           pin(keys);
           return this.parse<Received>(this.watch(step, () => this.deps.wasm.messagingReceive(key, request)));
         });
@@ -4751,7 +6560,7 @@ export class MessagingService {
           if (entry.kind === KIND_REVEAL) {
             // §19.4's first three checks, now, with no request: a session message, at the side written to, whose proof
             // verifies. The chain's register waits for the user's press (`checkReveals`); commit marks the conversation.
-            entry.reveal = this.checkReveal(opened.kind, result.conversation, result.received.plaintext, step);
+            entry.reveal = this.checkReveal(network, opened.kind, result.conversation, result.received.plaintext, step);
           }
           file.history.push(entry);
           meta.unread++;
@@ -4991,21 +6800,26 @@ export class MessagingService {
    * was written to. Verified, its name and register wait for the user to have the chain checked (`checkReveals`);
    * otherwise it failed, and nothing of its name is kept.
    */
-  private checkReveal(kind: string, conversation: string, plaintext: string, step?: Step): ReceivedReveal {
+  private checkReveal(network: NetworkName, kind: string, conversation: string, plaintext: string, step?: Step): ReceivedReveal {
     if (kind !== "session") return { status: "failed" };
-    const checked = this.parse<{ name: string; register: RegisterHex }>(
-      this.wasmCall(() => this.watch(step, () => this.deps.wasm.messagingCheckReveal(JSON.stringify({ conversation, reveal: plaintext.slice(2) })))),
+    // Under the conversation's own network, as it arrives: under another the proof fails, which would read as a forgery.
+    const checked = this.parse<{ name: string; register: RegisterHex; messaging: string }>(
+      this.wasmCall(() =>
+        this.watch(step, () => this.deps.wasm.messagingCheckReveal(JSON.stringify({ network, conversation, reveal: plaintext.slice(2) }))),
+      ),
     );
     if (isRefused(checked)) return { status: "failed" };
-    return { status: "unchecked", name: checked.name, register: checked.register };
+    return { status: "unchecked", name: checked.name, register: checked.register, messaging: checked.messaging };
   }
 
   /**
    * Has the chain checked for every reveal of conversation `cid` whose proof verified (protocol.md §19.4, step 4):
    * whether the contract gives its Seedelf's name that register now. Only the user asks, from the thread, never a sync
    * (W2): a read right after a reveal came would tell the server whom it was for. One read of the contract for all of
-   * them, whole and fresh (`revealedRegistersFrom`), out of the queue; the outcomes written in it. The same, the other
-   * side holds that Seedelf; otherwise it failed, and it isn't named. Refused while the network's Messages are off or
+   * them, whole and fresh (`revealedRegistersFrom`), out of the queue, and one of the certificate list's new entries
+   * (chunk 55's 55e); the outcomes written in it. Verified where the contract gives the name that register and exactly
+   * one good certificate for it names the reveal's m_S, none another (protocol.md §21.5, §21.9): the other side holds
+   * that Seedelf; otherwise it failed, and it isn't named. Refused while the network's Messages are off or
    * the wallet is locked, and stopped before its request if either comes meanwhile (reveal#6). A read that fails
    * throws, and the reveals wait for another press. Two presses at once are one check.
    */
@@ -5050,19 +6864,33 @@ export class MessagingService {
       await allowed();
       // The press's own chain read: its request, at once.
       const lookup = await this.deps.revealedRegisters(network);
+      // Then the certificate list's new entries (protocol.md §21.9), read whole, to its end (M3): one that can't be read,
+      // or not to its end, leaves them unchecked, for another press.
+      await allowed();
+      const read = await this.readToEnd(network);
+      if (read === "failed") throw new Error(t("messages.warn.offline"));
+      if (read === "more") throw new ListBehind();
       await this.serial(async () => {
         const inbox = await this.inbox(network);
         const meta = inbox.conversations[cid];
         const kept = meta && (await this.readable(network, meta));
         if (!meta || !kept) return;
+        const list = await this.listFor(network, phrasePin(), true);
         let decided = false;
         for (const entry of kept.history) {
           if (!isUnchecked(entry)) continue;
-          const { name, register } = entry.reveal;
+          const { name, register, messaging } = entry.reveal;
           const found = lookup(name);
           const same = found?.generator === register.generator && found.publicValue === register.publicValue;
+          // Verified only where the chain gives the name that register and exactly one good certificate names the
+          // reveal's m_S, none another (§21.5): one from before m_S was carried (a development build's) fails.
+          const good = same && messaging !== undefined ? this.goodFor(network, list, name, register) : undefined;
+          const certified = good?.size === 1 && good.has(messaging!);
+          // None on a copy whose certificates went past its room (L1): they may have been among them, so it stays
+          // unchecked, to try again, never failed on what the copy no longer holds.
+          if (!certified && good?.size === 0 && list.trimmed) continue;
           const at: Entry = entry;
-          at.reveal = same ? { status: "verified", name } : { status: "failed" };
+          at.reveal = certified ? { status: "verified", name } : { status: "failed" };
           decided = true;
         }
         // commit sets `unchecked` and `revealed` from the record (`measure`).
@@ -5365,7 +7193,7 @@ export class MessagingService {
       .catch(() => undefined)
       .then(async () => {
         if (empty && this.marked.get(name) === false) return;
-        if (pin) await queued((admit) => this.laneKey((_key, keys) => pin(keys), admit));
+        if (pin) await queued((admit) => this.laneKeys((keys) => pin(keys), admit));
         await queued((admit) => this.rawPut(network, name, value, "fixed", 0, undefined, false, admit));
         this.marked.set(name, !empty);
       });
@@ -5647,7 +7475,7 @@ export class MessagingService {
     const at = await this.stampNow();
     const held = this.takes.get(network);
     if (held && held.at === at) return held;
-    await this.withKey((_key, keys) => pin(keys));
+    await this.withKeys((keys) => pin(keys));
     let stored: StoredTakes | undefined;
     let there = false;
     try {
@@ -5724,7 +7552,7 @@ export class MessagingService {
   private async mayAsk(network: NetworkName, pin?: PhrasePin): Promise<boolean> {
     if (!(await this.isOn(network))) return false;
     if (!pin) return (await this.deps.wallet.state()) === "unlocked";
-    return this.laneKey((_key, keys) => pin(keys)).then(
+    return this.laneKeys((keys) => pin(keys)).then(
       () => true,
       () => false,
     );
@@ -5960,6 +7788,7 @@ export class MessagingService {
   private async roomsHeld(after?: RoomsAfter): Promise<number> {
     const switches = (await this.deps.preferences.get()).messaging;
     const takeRoom = storedBytes(this.deps.takeRoomBytes ?? TAKE_ROOM_BYTES);
+    const listRoom = storedBytes(this.deps.listRoomBytes ?? LIST_ROOM_BYTES);
     let held = 0;
     for (const n of this.networks()) {
       if (!switches[n]) continue;
@@ -5967,7 +7796,10 @@ export class MessagingService {
       const requests = mine?.requests ?? this.requestsBytes.get(n) ?? (await this.storedSize(requestsRecord(n)));
       const takes = mine?.takes ?? (this.takes.get(n)?.stored ? this.takes.get(n)!.bytes : await this.storedSize(takeRecord(n)));
       const inbox = mine?.inbox ?? (await this.inboxSizes(n));
-      held += Math.max(0, REQUESTS_ROOM_STORED - requests) + Math.max(0, takeRoom - takes) + Math.max(0, inbox.largest - inbox.bytes);
+      // The certificate list's copy (chunk 55's 55e): its room, whatever it holds, by Chrome's own count of its key.
+      const list = await this.storedSize(listRecord(n));
+      held +=
+        Math.max(0, REQUESTS_ROOM_STORED - requests) + Math.max(0, takeRoom - takes) + Math.max(0, inbox.largest - inbox.bytes) + Math.max(0, listRoom - list);
     }
     return held;
   }
@@ -6295,24 +8127,44 @@ export class MessagingService {
   }
 
   /**
-   * `task` with the Seedelf key, in the wallet's queue, admitted (`admitted`, round 5): throws if locked. A read of
-   * storage the wallet makes before the task, of its session, fails as StorageFailed (f2); what the task throws is its
-   * own.
+   * `task` with `network`'s messaging key, in the wallet's queue, admitted (`admitted`, round 5): throws if locked. A
+   * read of storage the wallet makes before the task, of its session, fails as StorageFailed (f2); what the task throws
+   * is its own. Messages' key x_m alone (chunk 55's 55e, protocol.md §21.6): never the Seedelf key, which only a
+   * certificate takes (`certify`), and each network's own, since a call that names no network (the scan, an open, a
+   * request's read or accept, a continuation) can't say which key it was handed.
    */
-  private async withKey<T>(task: (key: Wasm.SeedelfKey, keys: Parameters<PhrasePin>[0]) => T): Promise<T> {
-    return this.admitted((admit) => this.laneKey(task, admit));
+  private async withKey<T>(network: NetworkName, task: (key: Wasm.MessagingKey, keys: Keys) => T): Promise<T> {
+    return this.admitted((admit) => this.laneKey(network, task, admit));
   }
 
   /**
-   * `task` with the Seedelf key, in the wallet's queue at once: a lane's (its phrase pin, its scan). `admit`: a chain's
-   * own call outside a lane (`chained`), turned away as its turn comes while a lane runs or a tick is near.
+   * `task` with `network`'s messaging key, in the wallet's queue at once: a lane's (its scan). `admit`: a chain's own
+   * call outside a lane (`chained`), turned away as its turn comes while a lane runs or a tick is near. A network
+   * Messages isn't open on has no key (wallet.ts `Keys.messaging`): refused as the switch refuses it, nothing run.
    */
-  private async laneKey<T>(task: (key: Wasm.SeedelfKey, keys: Parameters<PhrasePin>[0]) => T, admit?: Admit): Promise<T> {
+  private async laneKey<T>(network: NetworkName, task: (key: Wasm.MessagingKey, keys: Keys) => T, admit?: Admit): Promise<T> {
+    return this.laneKeys((keys) => {
+      const key = keys.messaging[network];
+      if (!key) throw new Error(t("worker.messaging.notOpenHere", { network: NETWORKS[network].label }));
+      return task(key, keys);
+    }, admit);
+  }
+
+  /**
+   * `task` with the wallet's keys, admitted (`admitted`): for what takes no key of Messages' (a phrase pin), and the
+   * certificate, the one task that takes both keys (`certify`, `ownCertificate`).
+   */
+  private async withKeys<T>(task: (keys: Keys) => T): Promise<T> {
+    return this.admitted((admit) => this.laneKeys(task, admit));
+  }
+
+  /** `task` with the wallet's keys, in the wallet's queue at once: a lane's phrase pin, or `admit` a chain's call. */
+  private async laneKeys<T>(task: (keys: Keys) => T, admit?: Admit): Promise<T> {
     let ran = false;
     try {
       return await this.deps.wallet.withKeys((keys) => {
         ran = true;
-        return task(keys.seedelf, keys);
+        return task(keys);
       }, admit);
     } catch (e) {
       throw ran ? e : failedRead(e);
@@ -6441,11 +8293,16 @@ export class MessagingService {
 
   /** Resolves once nothing runs in the background: for tests, and for a run that must finish what it started. */
   async whenIdle(): Promise<void> {
-    while (this.background.size || this.syncs.size || this.posting.size || this.checks.size) {
+    while (this.background.size || this.syncs.size || this.posting.size || this.checks.size || this.listReads.size || this.certificatePosts.size) {
       await Promise.all(
-        [...this.background, ...this.syncs.values(), ...[...this.posting.values()].map((p) => p.running), ...this.checks.values()].map((p) =>
-          p.catch(() => undefined),
-        ),
+        [
+          ...this.background,
+          ...this.syncs.values(),
+          ...[...this.posting.values()].map((p) => p.running),
+          ...this.checks.values(),
+          ...this.listReads.values(),
+          ...this.certificatePosts.values(),
+        ].map((p) => p.catch(() => undefined)),
       );
     }
   }

@@ -98,9 +98,12 @@ describe("a turned-away call makes ready again only once the gate has opened (1.
       // The scenario met: A's unseal was waiting as the tick came, and gave the queue back.
       expect(yields.a).toBeGreaterThan(0);
       expect(yields.b).toBe(0);
-      // The same reads of the area, each a lane's own record or the trap's flag (which needs no key, and is no record).
+      // The same reads of the area, each a lane's own record or a flag that needs no key and is no record: the trap's,
+      // and the one that says withdrawals wait (chunk 55's call 9), which a run reads for a network that's off.
       expect(reads.a).toEqual(reads.b);
-      for (const read of reads.a) expect(LANE_RECORDS.has(read.split(" ")[0]!) || read.startsWith("messagingTrap."), read).toBe(true);
+      for (const read of reads.a) {
+        expect(LANE_RECORDS.has(read.split(" ")[0]!) || read.startsWith("messagingTrap.") || read.startsWith("messagingWithdraw."), read).toBe(true);
+      }
       expect(requestsOf(x.a)).toEqual(requestsOf(x.b));
       // And A's envelope was taken, after the lane.
       expect(x.a.log.some((e) => e.what === "receive")).toBe(true);

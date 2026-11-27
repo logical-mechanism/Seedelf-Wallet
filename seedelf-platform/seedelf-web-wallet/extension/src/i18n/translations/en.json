@@ -3035,7 +3035,7 @@
   "vote.status.retired": "Retired",
   "vote.statusLabel": "Status",
   "vote.warn.callsItself": "This DRep has named itself after one of the wallet's own choices. Your voting power goes to this DRep, not to that choice.",
-  "vote.warn.inactive":"This DRep hasn't voted lately, so its votes don't count. Delegating to it still lets you withdraw rewards.",
+  "vote.warn.inactive": "This DRep hasn't voted lately, so its votes don't count. Delegating to it still lets you withdraw rewards.",
   "vote.warn.sharedName": "{{shared}}. Only the ID tells them apart: compare it with the one the DRep publishes.",
   "vote.whereLabel": "Where your voting power goes",
   "welcome.create": "Create new wallet",
@@ -3400,5 +3400,18 @@
   "worker.messaging.cantRevealYet": "Only the side that wrote first can show a Seedelf, once the other side has replied.",
   "worker.messaging.waitForReply": "Wait for a reply: until one comes, their wallet takes no more messages from you here.",
   "worker.messaging.full": "There is no room for it in Messages: delete a conversation, then send it again.",
-  "worker.messaging.notOpenHere": "Messages can't be turned on for {{network}} yet."
+  "worker.messaging.notOpenHere": "Messages can't be turned on for {{network}} yet.",
+  "worker.messaging.noCertificate": "That Seedelf doesn't take messages.",
+  "worker.messaging.warn.otherKey": "A key not in this wallet takes this Seedelf's messages, so it can't be shown: someone else may hold its key.",
+  "messages.warn.otherKey": "A key not in this wallet takes its messages: someone else may hold this Seedelf's key.",
+  "worker.messaging.listBehind": "Still reading which Seedelfs take messages. Try again shortly.",
+  "worker.messaging.notListedYet": "Your Seedelf is still being listed. Try again in a few minutes.",
+  "worker.messaging.tooOften": "This Seedelf was taken off the list too many times. Once it moves, it can be listed again.",
+  "messages.tooOften": "Taken off the list too many times: once the Seedelf moves, it can be listed again.",
+  "messages.privacy.listsSeedelfs": "Turning Messages on lists your Seedelfs publicly as taking messages.",
+  "messages.privacy.listsSeedelf": "Turning a Seedelf on lists it publicly as taking messages.",
+  "settings.remove.warn.listed": "Your Seedelfs taking messages stay listed after this: turn Messages off first.",
+  "worker.messaging.listOffline": "Can't reach the server to see whether that Seedelf takes messages. Try again shortly.",
+  "worker.messaging.listPaused": "Messages are paused, so a first message can't be written now.",
+  "worker.messaging.listDayRead": "This connection has reached its reading limit for the day. Try again later."
 }

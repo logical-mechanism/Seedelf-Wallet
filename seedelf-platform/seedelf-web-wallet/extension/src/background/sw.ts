@@ -242,7 +242,8 @@ function getContext(): Promise<Worker> {
     };
     const mint = new MintService(spends);
     const transfer = new TransferService(spends);
-    const withdraw = new WithdrawService(spends);
+    // A Remove sent withdraws the Seedelf's certificates from Messages' list (chunk 55, X-M3).
+    const withdraw = new WithdrawService({ ...spends, seedelfRemoved: (n, name, register) => messaging?.seedelfRemoved(n, name, register) ?? Promise.resolve() });
     const send = new SendService(spends);
     const staking = new StakingService({ ...spends, local });
     // Home's watch tells Lovejoin a mix from the public account it saw land: a Bootstrap's then never counts as never

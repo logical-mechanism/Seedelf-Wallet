@@ -200,21 +200,24 @@ async function recordOf(p: Party, cid: string): Promise<ReturnType<typeof conver
 // Each test bounded: one that fails mid-take fails here, never hangs the run.
 describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
   it("reads nothing and posts nothing while a network's switch is off (call 9)", async () => {
-    const relay = fakeRelay(clock);
-    const directory: Directory = new Map();
-    const alice = await party(12, relay, directory, ALICE_SEEDELF);
-    await party(24, relay, directory, BOB_SEEDELF);
+    const { relay, alice, bob } = await pair();
+    const cid = await talking(alice, bob);
+    await alice.messaging.switch("preprod", false);
+    await alice.messaging.whenIdle();
+    relay.calls.length = 0;
     await alice.messaging.syncAll(["preprod", "mainnet"]);
-    // Written while off: kept, stamped, never posted.
-    await alice.messaging.start("preprod", BOB_SEEDELF, "not yet");
+    // Written while off: kept, sealed, never posted. A first message isn't written at all (the review's second round,
+    // finding 6): nothing is read for it, the list included.
+    await alice.messaging.send("preprod", cid, "not yet");
+    await expect(alice.messaging.start("preprod", BOB_SEEDELF, "a first message")).rejects.toThrow(/Turn Messages on/);
     await alice.messaging.whenIdle();
     expect(relay.calls).toEqual([]);
-    expect((await alice.messaging.overview("preprod")).conversations[0]!.outbox).toBe(1);
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === cid)!.outbox).toBe(1);
     // On: the next sync posts what was waiting.
     await alice.messaging.switch("preprod", true);
     await alice.messaging.whenIdle();
     expect(relay.calls.some((c) => c.startsWith("POST /messaging/v1/preprod/"))).toBe(true);
-    expect((await alice.messaging.overview("preprod")).conversations[0]!.outbox).toBe(0);
+    expect((await alice.messaging.overview("preprod")).conversations.find((c) => c.cid === cid)!.outbox).toBe(0);
   });
 
   it("keeps each network apart: preprod's switch never reads mainnet's pool", async () => {
@@ -431,6 +434,8 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     let first: MessagingEntry[] | undefined;
     let other = "";
     alice.onWait = async () => {
+      // The stamp's first slice's: the runner after the press's list read takes turns of the event loop too.
+      if (!other) return;
       alice.onWait = undefined;
       first = (await alice.messaging.thread("preprod", other)).messages;
     };
@@ -686,8 +691,17 @@ describe("Seedelf Messaging in the worker", { timeout: 30_000 }, () => {
     await alice.messaging.whenIdle();
     expect((await alice.preferences.get()).messaging).toEqual({ preprod: true, mainnet: true });
     await alice.messaging.switch("mainnet", false);
+    await alice.messaging.whenIdle();
     expect(alice.alarm.on).toBe(true);
     await alice.messaging.switch("preprod", false);
+    await alice.messaging.whenIdle();
+    // Her certificate's withdrawal waits its random while after her certificate's post (chunk 55's call 9): the alarm
+    // runs on for it, every switch off, and its run posts it; then nothing needs the alarm.
+    expect(alice.alarm.on).toBe(true);
+    await busyFor(10 * 60_000 + 1000, alice);
+    await alice.messaging.syncAll(["preprod", "mainnet"], { alarm: true });
+    await alice.messaging.whenIdle();
+    expect(relay.calls.filter((c) => c === "POST /messaging/v1/preprod/withdrawals")).toHaveLength(1);
     expect(alice.alarm.on).toBe(false);
   });
 

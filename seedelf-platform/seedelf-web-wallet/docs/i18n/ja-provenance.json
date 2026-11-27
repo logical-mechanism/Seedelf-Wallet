@@ -3212,5 +3212,18 @@
   "worker.messaging.full": "machine",
   "messages.warn.openOn": "machine",
   "messages.warn.testWallet": "machine",
-  "worker.messaging.notOpenHere": "machine"
+  "worker.messaging.notOpenHere": "machine",
+  "worker.messaging.noCertificate": "machine",
+  "worker.messaging.warn.otherKey": "machine",
+  "messages.warn.otherKey": "machine",
+  "worker.messaging.listBehind": "machine",
+  "worker.messaging.notListedYet": "machine",
+  "worker.messaging.tooOften": "machine",
+  "messages.tooOften": "machine",
+  "messages.privacy.listsSeedelfs": "machine",
+  "messages.privacy.listsSeedelf": "machine",
+  "settings.remove.warn.listed": "machine",
+  "worker.messaging.listOffline": "machine",
+  "worker.messaging.listPaused": "machine",
+  "worker.messaging.listDayRead": "machine"
 }

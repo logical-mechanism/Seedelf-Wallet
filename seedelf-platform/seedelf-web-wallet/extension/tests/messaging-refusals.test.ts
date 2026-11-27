@@ -24,6 +24,7 @@ import {
   cursorOf,
   type Directory,
   fakeRelay,
+  listed,
   fileOf,
   loadTestWasm,
   pair,
@@ -296,6 +297,8 @@ describe("a first message the wallet can't place (W1)", { timeout: 30_000 }, () 
     bob.kept = [...bob.own];
     bob.own.push({ name: SECOND, register: second });
     directory.set(SECOND, second);
+    // Its certificate on the list, posted by the browser it was minted in (chunk 55's 55e), so Alice can write to it.
+    await listed(relay, bob, SECOND, second);
     await turnOn(alice, bob);
     const before = (await cursorOf(bob));
     const lost = await alice.messaging.start("preprod", SECOND, "to your new Seedelf");
@@ -320,13 +323,15 @@ describe("a first message the wallet can't place (W1)", { timeout: 30_000 }, () 
   });
 
   it("is dropped when its register is one the kept view is too old to have, or no view is kept at all", async () => {
-    const { directory, alice, bob } = await pair();
-    // The chain, and Alice, have the Seedelf's new register; Bob's kept view the one before.
+    const { relay, directory, alice, bob } = await pair();
+    // The chain, and Alice, have the Seedelf's new register; Bob's kept view the one before. Its certificate at the new
+    // one is on the list, posted by another browser of Bob's phrase that turned it on there (chunk 55's 55e).
     const was = bob.own[0]!;
     const fresh = await another(bob);
     bob.kept = [was];
     bob.own.splice(0, 1, { name: BOB_SEEDELF, register: fresh });
     directory.set(BOB_SEEDELF, fresh);
+    await listed(relay, bob, BOB_SEEDELF, fresh);
     await alice.messaging.start("preprod", BOB_SEEDELF, "to your new datum");
     await alice.messaging.whenIdle();
     bob.changed.length = 0;

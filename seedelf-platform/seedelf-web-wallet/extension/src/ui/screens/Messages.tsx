@@ -465,6 +465,13 @@ function ListPane({
             />
           </div>
         )}
+        {/* What turning it on tells everyone (chunk 55, protocol.md §21.7; the owner's call 2): the list of who takes
+            messages is public. Said while it's off, before the press. */}
+        {!closed && (overview || loaded) && !on && (
+          <p className="note" data-testid="messages-lists">
+            {t("messages.privacy.listsSeedelfs")}
+          </p>
+        )}
         {press.waits("switch") && (
           <p className="note messages__waiting" role="status" data-testid="press-waits">
             {t("messages.pressWaiting")}
@@ -775,6 +782,10 @@ function SeedelfSwitches({
           {t("messages.seedelfsNone")}
         </p>
       )}
+      {/* One line at the switches (the owner's call 2): turning one on puts it on the relay's public list. */}
+      <p className="note" data-testid="messages-seedelfs-listed">
+        {t("messages.privacy.listsSeedelf")}
+      </p>
       {seedelfs.some((s) => !s.made) && <p className="note">{t("messages.privacy.answerAtMade")}</p>}
       {seedelfs.map((s, i) => (
         <div className="setting-row" key={keyOf(s)} data-testid="messages-seedelf">
@@ -785,6 +796,19 @@ function SeedelfSwitches({
             <span className="note" id={`${id}-${i}-what`}>
               {t("messages.answerAt")}
             </span>
+            {/* Its good certificate on the relay's list names another key (chunk 55, protocol.md §21.8): nothing was
+                posted for it here, and first messages to it go to that key. */}
+            {s.elsewhere && (
+              <span className="note" data-testid="messages-seedelf-elsewhere">
+                {t("messages.warn.otherKey")}
+              </span>
+            )}
+            {/* The relay won't list it again at its register (§21.7's check 3″): moving it lists it afresh. */}
+            {s.tooOften && (
+              <span className="note" data-testid="messages-seedelf-too-often">
+                {t("messages.tooOften")}
+              </span>
+            )}
             {/* Its switch pressed and waiting (O8): said under it, the switch's own label unchanged. */}
             {press.waits(keyOf(s)) && (
               <span className="note messages__waiting" role="status" data-testid="press-waits">

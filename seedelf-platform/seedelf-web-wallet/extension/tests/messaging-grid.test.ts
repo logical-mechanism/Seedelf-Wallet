@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { MESSAGING_SYNC_EVERY_MS } from "../src/shared/rpc";
 import { pollOnGrid } from "../src/ui/messaging";
 import { TAKE_MARGIN_MS } from "../src/background/messaging";
-import { another, clock, loadTestWasm, type Party, turns } from "./messaging-harness";
+import { another, certificateOf, clock, loadTestWasm, type Party, turns } from "./messaging-harness";
 import { expectLanesClean, lanesOf, requestsOf, type World, world } from "./messaging-lanes-kit";
 
 const EVERY = MESSAGING_SYNC_EVERY_MS;
@@ -132,10 +132,12 @@ async function firstsToTake(x: World, n: number): Promise<void> {
   const wasm = loadTestWasm();
   const register = await another(x.a);
   const name = "5eed0e1f00" + Buffer.from("alice2").toString("hex");
+  // A's certificate for that pair, made with both its keys (chunk 55's 55e): what W writes to, by A's messaging key.
+  const certificate = await certificateOf(x.a, name, register);
   const t = Math.floor(clock.now / 1000 / 600) * 600;
   await x.w.wallet.withKeys((keys) => {
     for (let i = 0; i < n; i++) {
-      const started = JSON.parse(String(wasm.messagingStart(keys.seedelf, JSON.stringify({ handle: register, to: name, now: t })))) as { conversation: string };
+      const started = JSON.parse(String(wasm.messagingStart(keys.messaging.preprod!, JSON.stringify({ network: "preprod", name: name, register, certificate, now: t })))) as { conversation: string };
       const stamped = JSON.parse(String(wasm.messagingSetStamp(JSON.stringify({ conversation: started.conversation, nonce: 0 })))) as { conversation: string };
       const sent = JSON.parse(String(wasm.messagingSend(JSON.stringify({ conversation: stamped.conversation, plaintext: "01" + i.toString(16).padStart(6, "0") })))) as {
         envelope: string;

@@ -28,6 +28,7 @@ import {
   type Directory,
   fakeRelay,
   type FakeRelay,
+  listed,
   loadTestWasm,
   party,
   type Party,
@@ -365,6 +366,8 @@ describe("C2's reach: a Seedelf under the key that takes no first messages (W8) 
     const register = await another(y.a);
     y.a.own.push({ name: ALICE2, register });
     y.directory.set(ALICE2, register);
+    // Its certificate on the list, as another browser of A's phrase posted it (chunk 55's 55e): W can write to it.
+    await listed(y.relay, y.a, ALICE2, register);
     // Its name is a byte longer than ALICE's, and F with it: the longest text is probed again.
     let longest = 0;
     try {

@@ -76,7 +76,10 @@ async function expectNoConversationInSession(p: Party): Promise<void> {
   for (const name of names) expect(text).not.toContain(name);
   // Only these keys of Messages', each a fixed shape: numbers by network, and digests where it says.
   const keys = [...p.session.data.keys()].filter((k) => k.startsWith("seedelf.messaging."));
-  for (const key of keys) expect(["seedelf.messaging.paused", "seedelf.messaging.readAfter", "seedelf.messaging.expiredAt", SESSION_POSTS]).toContain(key);
+  // And the certificate list's mark that it was read in this unlock (chunk 55's 55e): a number by network.
+  for (const key of keys) {
+    expect(["seedelf.messaging.paused", "seedelf.messaging.readAfter", "seedelf.messaging.expiredAt", "seedelf.messaging.listed", SESSION_POSTS]).toContain(key);
+  }
   const posts = p.session.data.get(SESSION_POSTS);
   if (posts !== undefined) {
     for (const runs of Object.values(JSON.parse(posts as string) as Record<string, Record<string, unknown>>)) {

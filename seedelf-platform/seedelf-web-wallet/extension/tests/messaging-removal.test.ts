@@ -25,17 +25,21 @@ vi.mock("../src/background/script-spend", async (importOriginal) => {
 
 import { CONTRACT_V1 } from "../src/background/balances";
 import { MintService, SESSION_MINT, type MintDeps } from "../src/background/mint";
-import { mintedAt, mintedBy, mintedRegister, rememberMint } from "../src/background/minted-by";
+import type { RegisterHex } from "../src/background/chain";
+import { mintedAt, mintedBy, mintedRegister, rememberMint, rememberRegister } from "../src/background/minted-by";
 import { send, type ScriptSpendDeps } from "../src/background/script-spend";
-import { SESSION_REMOVE, WithdrawService } from "../src/background/withdraw";
+import { SESSION_REMOVE, WithdrawService, type WithdrawDeps } from "../src/background/withdraw";
+import type { NetworkName } from "../src/networks";
 import { accountMintPreprod, testBalances } from "./fakes";
 import {
   ALICE_SEEDELF,
   another,
   BOB_SEEDELF,
+  checkedRelay,
   clock,
   type Directory,
   fakeRelay,
+  listed,
   loadTestWasm,
   party,
   type Party,
@@ -239,6 +243,8 @@ describe("finding 6: adoption takes only what predates 1.10.0 (W12)", { timeout:
     bob.own.push({ name: BOB_SEEDELF, register });
     directory.set(BOB_SEEDELF, register);
     await rememberMint(bob.store, "preprod", BOB_SEEDELF, "account", 0);
+    // Its certificate on the list, from before its removal (chunk 55's 55e): a writer can still write to it.
+    await listed(relay, bob, BOB_SEEDELF, register);
     await turnOn(alice);
     // Bob, Messages still off (as every wallet starts 1.10.0), removes it.
     await removeSent(bob, BOB_SEEDELF);
@@ -264,6 +270,8 @@ describe("finding 6: adoption takes only what predates 1.10.0 (W12)", { timeout:
     bob.own.push({ name: BOB_SEEDELF, register });
     directory.set(BOB_SEEDELF, register);
     await rememberMint(bob.store, "preprod", BOB_SEEDELF, "account", 0);
+    // Its certificate on the list, from before its removal (chunk 55's 55e): a writer can still write to it.
+    await listed(relay, bob, BOB_SEEDELF, register);
     await turnOn(alice);
     await removeSent(bob, BOB_SEEDELF);
     await alice.messaging.start("preprod", BOB_SEEDELF, "while the view was stale");
@@ -327,6 +335,8 @@ describe("finding 6: adoption takes only what predates 1.10.0 (W12)", { timeout:
     // It lands: the kept view has it at the register the mint put it under. A first message comes to it.
     reader.own.push({ name: summary.tokenName, register });
     directory.set(summary.tokenName, register);
+    // Its certificate on the list, as another browser of the phrase posted it (chunk 55's 55e): the writer can write.
+    await listed(relay, reader, summary.tokenName, register);
     const first = await writer.messaging.start("preprod", summary.tokenName, "to your new Seedelf");
     await writer.messaging.whenIdle();
     // Messages turned on, its first sync with that view.
@@ -337,5 +347,38 @@ describe("finding 6: adoption takes only what predates 1.10.0 (W12)", { timeout:
     ]);
     expect.soft((await mintedAt(reader.store, "preprod"))[summary.tokenName] ?? [], "its pair written by adoption").toEqual([]);
     expect.soft((await requestsOf(reader)).includes(first), "a first message taken at a Seedelf whose switch should be off").toBe(false);
+  });
+});
+
+describe("a Remove sent withdraws its Seedelf's certificates (chunk 55, the review of 55e's X-M3; protocol.md §21.7)", { timeout: 60_000 }, () => {
+  it("queues each of its own on the list as the Remove is sent, the others staying listed, with no other request", async () => {
+    const relay = checkedRelay();
+    const directory: Directory = new Map();
+    const bob = await party(24, relay, directory, BOB_SEEDELF);
+    const SECOND = BOB_SEEDELF + "02";
+    const second = await another(bob);
+    bob.own.push({ name: SECOND, register: second });
+    directory.set(SECOND, second);
+    await rememberRegister(bob.store, "preprod", SECOND, second);
+    await turnOn(bob);
+    await synced(bob);
+    expect(relay.certificatesIn("preprod")).toHaveLength(2);
+    const register = bob.own[0]!.register;
+    const txHash = "cd".repeat(32);
+    await bob.session.set(SESSION_REMOVE, { network: "preprod", txHash, name: BOB_SEEDELF, register, txCbor: "00", seed: "00", builtAt: clock.now });
+    const withdraw = new WithdrawService({
+      wasm: loadTestWasm(),
+      wallet: bob.wallet,
+      session: bob.session,
+      store: bob.store,
+      seedelfRemoved: (n: NetworkName, name: string, r: RegisterHex) => bob.messaging.seedelfRemoved(n, name, r),
+    } as unknown as WithdrawDeps);
+    bob.trace.length = 0;
+    await withdraw.submitRemove("preprod", txHash);
+    await bob.messaging.whenIdle();
+    expect(bob.trace.filter((s) => /^(GET|POST) /.test(s))).toEqual(["POST /messaging/v1/preprod/withdrawals"]);
+    const left = relay.certificatesIn("preprod").map((c) => JSON.parse(loadTestWasm().messagingCheckCertificate(JSON.stringify({ network: "preprod", certificate: c }))).name);
+    expect(left).toEqual([SECOND]);
+    expect(bob.local.data.has("seedelf.private.messagingWithdraw.preprod")).toBe(false);
   });
 });

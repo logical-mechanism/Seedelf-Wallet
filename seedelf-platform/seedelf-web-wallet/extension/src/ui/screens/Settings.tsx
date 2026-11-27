@@ -1672,7 +1672,7 @@ export function RemoveWallet({
       }
     >
       <p className="note" data-testid="remove-wallet-note">
-        {joinSentences([t("settings.remove.note"), t("settings.remove.warn.conversations")])}
+        {joinSentences([t("settings.remove.note"), t("settings.remove.warn.conversations"), t("settings.remove.warn.listed")])}
       </p>
       {held && (
         <Callout tone="warn" testId="remove-at-stake">

@@ -102,6 +102,8 @@ describe("Messages' switches (W6)", { timeout: 30_000 }, () => {
     expect(overview.on).toBe(false);
     expect(overview.alsoOn).toBeUndefined();
     expect((await alice.preferences.get()).messaging).toEqual({ preprod: false, mainnet: false });
+    // The alarm stops once the switch's withdrawal of Alice's certificate has gone (chunk 55's call 9).
+    await alice.messaging.whenIdle();
     expect(alice.alarm.on).toBe(false);
     // Only a network the build has.
     await expect(handle({ type: "messaging-switch", on: true, network: "nowhere" as never }, ctx)).rejects.toThrow(/isn't a network/);

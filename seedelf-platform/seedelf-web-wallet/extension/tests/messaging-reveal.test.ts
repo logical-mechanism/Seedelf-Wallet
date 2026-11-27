@@ -13,7 +13,7 @@ import { type Inbox, revealedRegistersFrom } from "../src/background/messaging";
 import { rememberRegister } from "../src/background/minted-by";
 import { outpoint } from "../src/background/spent";
 import { koiosPreprod, testBalances, transferPreprod, vectors } from "./fakes";
-import { ALICE_SEEDELF, another, BOB_SEEDELF, fileOf, loadTestWasm, pair, type Party, PASSWORD, synced, talking, texts, turns } from "./messaging-harness";
+import { ALICE_SEEDELF, another, BOB_SEEDELF, certificateOf, fileOf, loadTestWasm, pair, type Party, PASSWORD, synced, talking, texts, turns } from "./messaging-harness";
 
 const last = async (p: Party, cid: string) => (await p.messaging.thread("preprod", cid)).messages.at(-1)!;
 const record = (p: Party, cid: string) => fileOf(p, cid);
@@ -284,10 +284,15 @@ describe("the verified reveal in the worker (protocol.md §19)", { timeout: 30_0
     const wasm = loadTestWasm();
     const cid = await talking(alice, bob);
     const state = (await record(alice, cid))!.state;
+    const certificate = await certificateOf(alice, ALICE_SEEDELF, alice.own[0]!.register);
     const made = await alice.wallet.withKeys(
       (keys) =>
-        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: state, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
-          .reveal as string,
+        JSON.parse(
+          wasm.messagingReveal(
+            keys.messaging.preprod!,
+            JSON.stringify({ network: "preprod", conversation: state, name: ALICE_SEEDELF, register: alice.own[0]!.register, certificate }),
+          ),
+        ).reveal as string,
     );
     // z₂'s last bit flipped: still a scalar below q, a proof that no longer verifies, in an honest session message.
     const flipped = Number.parseInt(made.slice(-2), 16) ^ 1;
@@ -322,10 +327,15 @@ describe("the verified reveal in the worker (protocol.md §19)", { timeout: 30_0
 
     // A valid reveal, sealed with Alice's record from before the reply: a first-contact message, F and all.
     const after = (await record(alice, cid))!.state;
+    const certificate = await certificateOf(alice, ALICE_SEEDELF, alice.own[0]!.register);
     const made = await alice.wallet.withKeys(
       (keys) =>
-        JSON.parse(wasm.messagingReveal(keys.seedelf, JSON.stringify({ conversation: after, name: ALICE_SEEDELF, register: alice.own[0]!.register })))
-          .reveal as string,
+        JSON.parse(
+          wasm.messagingReveal(
+            keys.messaging.preprod!,
+            JSON.stringify({ network: "preprod", conversation: after, name: ALICE_SEEDELF, register: alice.own[0]!.register, certificate }),
+          ),
+        ).reveal as string,
     );
     const skipped = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: odd.conversation, plaintext: "02" + made })));
     relay.put("preprod", skipped.envelope);

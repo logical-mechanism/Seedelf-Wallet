@@ -6,7 +6,8 @@
 // builds something can copy bytes an earlier call left on the stack into the heap, in a value it never wrote in full,
 // and those outlast both. 1.10.0's review found them after a lock: 16 bytes of the stake key's signing scalar after
 // `stakePublicKey` then `messagingRequestsInfo`, 16 of payment key 0/0 after `paymentKeyHash` then the same, and
-// bytes of the Seedelf key itself after two `messagingReadRequest`s. The first tests here are that finding, with no
+// bytes of the Seedelf key itself after two `messagingReadRequest`s, which since chunk 55 read with Messages' own key
+// and leave bytes of that one instead. The first tests here are that finding, with no
 // renew wired: the control. The next are the same runs with it, and four more: after the lock every byte of the old
 // memory is zero, and the new instance's memory is a fresh instance's, byte for byte, with no run of 4 bytes of any of
 // the wallet's keys, of the keys they derive, or of what they came from.
@@ -111,6 +112,8 @@ const STAKE = "the stake key 2/0";
 const PAYMENT = "payment key 0/0";
 const X_BE = "the Seedelf key big-endian";
 const X_HELD = "the Seedelf key as the module holds it";
+const XM_BE = "the messaging key big-endian";
+const XM_HELD = "the messaging key as the module holds it";
 
 function secretsOf(phrase: string): Secret[] {
   const entropy = Buffer.from(wasm.phraseToEntropy(phrase));
@@ -118,6 +121,11 @@ function secretsOf(phrase: string): Secret[] {
   const info = Buffer.concat([Buffer.from("seedelf-key"), Buffer.alloc(4)]);
   const okm = Buffer.from(hkdfSync("sha256", seed, "seedelf-wallet-v1", info, 64));
   const x = (BigInt(`0x${okm.toString("hex")}`) % R).toString(16).padStart(64, "0");
+  // Messages' own key on preprod (chunk 55, protocol.md §21.2): the same seed, its own salt, account 0, network byte 0x00,
+  // generation 0x00.
+  const infoM = Buffer.concat([Buffer.from("seedelf-messaging-key"), Buffer.alloc(4), Buffer.from([0x00, 0x00])]);
+  const okmM = Buffer.from(hkdfSync("sha256", seed, "seedelf-messaging-v1", infoM, 64));
+  const xm = (BigInt(`0x${okmM.toString("hex")}`) % R).toString(16).padStart(64, "0");
   const master = pbkdf2Sync("", entropy, 4096, 96, "sha512");
   master[0]! &= 0xf8;
   master[31] = (master[31]! & 0x1f) | 0x40;
@@ -129,6 +137,10 @@ function secretsOf(phrase: string): Secret[] {
     [X_HELD, Buffer.from(((BigInt(`0x${x}`) << 256n) % R).toString(16).padStart(64, "0"), "hex").reverse()],
     [X_BE, Buffer.from(x, "hex")],
     ["the Seedelf key little-endian", Buffer.from(x, "hex").reverse()],
+    [XM_HELD, Buffer.from(((BigInt(`0x${xm}`) << 256n) % R).toString(16).padStart(64, "0"), "hex").reverse()],
+    [XM_BE, Buffer.from(xm, "hex")],
+    ["the messaging key little-endian", Buffer.from(xm, "hex").reverse()],
+    ["the messaging key's HKDF output", okmM],
     ["the entropy", entropy],
     ["the BIP39 seed", seed],
     ["the HKDF output", okm],
@@ -226,19 +238,29 @@ let pristine: Buffer;
 
 beforeAll(() => {
   const seedelf = wasm.SeedelfKey.fromPhrase(holder.phrase, 0);
-  const stranger = wasm.SeedelfKey.random();
+  const messaging = wasm.MessagingKey.fromPhrase(holder.phrase, 0, "preprod");
+  const stranger = wasm.MessagingKey.random("preprod");
   const [base, name] = [seedelf.baseRegister(), "5eed0e1f" + "b0".repeat(28)];
   const register = wasm.rerandomize(base);
   const handle = { generator: register.generator, publicValue: register.publicValue };
   const handles = [{ name, registers: [handle] }];
-  const started = call<{ cid: string; conversation: string }>(wasm.messagingStart, stranger, { handle, to: name, now: T });
+  // The holder's certificate for that Seedelf, as the relay's list gives it to the stranger (chunk 55).
+  const { certificate } = call<{ certificate: string }>(wasm.messagingCertificate, seedelf, messaging, { network: "preprod", name, register: handle });
+  const started = call<{ cid: string; conversation: string }>(wasm.messagingStart, stranger, {
+    network: "preprod",
+    name,
+    register: handle,
+    certificate,
+    now: T,
+  });
   const stamped = call<{ conversation: string }>(wasm.messagingSetStamp, { conversation: started.conversation, nonce: 0 });
   type Sent = { conversation: string; envelope: string };
   const first = call<Sent>(wasm.messagingSend, { conversation: stamped.conversation, plaintext: hex("hello") });
   const second = call<Sent>(wasm.messagingSend, { conversation: first.conversation, plaintext: hex("again") });
-  const arrived = { envelope: first.envelope, now: T + 60, handles, firstContactBits: 0 };
-  const one = call<{ requests: string }>(wasm.messagingReceive, seedelf, arrived);
-  const two = call<{ requests: string }>(wasm.messagingReceive, seedelf, {
+  const arrived = { network: "preprod", envelope: first.envelope, now: T + 60, handles, firstContactBits: 0 };
+  const one = call<{ requests: string }>(wasm.messagingReceive, messaging, arrived);
+  const two = call<{ requests: string }>(wasm.messagingReceive, messaging, {
+    network: "preprod",
     envelope: second.envelope,
     now: T + 61,
     handles,
@@ -246,7 +268,7 @@ beforeAll(() => {
     requests: one.requests,
   });
   Object.assign(request, { requests: two.requests, cid: started.cid });
-  for (const object of [register, base, stranger, seedelf]) object.free();
+  for (const object of [register, base, stranger, messaging, seedelf]) object.free();
   // What that left goes with its instance, and the next one is looked at before anything runs in it.
   renewWasm();
   pristine = copyOf(memory());
@@ -261,7 +283,7 @@ const transfer = () => {
     payments: [{ to: recorded.to, recipient: recorded.recipient, lovelace: recorded.lovelace, tokens: recorded.tokens }],
   });
 };
-const reads = (keys: Keys) => wasm.messagingReadRequest(keys.seedelf, JSON.stringify(request));
+const reads = (keys: Keys) => wasm.messagingReadRequest(keys.messaging.preprod!, JSON.stringify(request));
 
 /**
  * What the wallet's keys do between an unlock and a lock. `left`: the secret the review found bytes of in the heap
@@ -281,13 +303,14 @@ const runs: Use[] = [
     use: (keys) => void [keys.cardano.paymentKeyHash(0, 0), wasm.messagingRequestsInfo(request.requests)],
     left: [PAYMENT, 8],
   },
-  { name: "messagingReadRequest twice", of: holder, use: (keys) => void [reads(keys), reads(keys)], left: [X_BE, 6] },
+  // The key a request is read with is Messages' own since chunk 55: its bytes are what the review's sequence leaves.
+  { name: "messagingReadRequest twice", of: holder, use: (keys) => void [reads(keys), reads(keys)], left: [XM_BE, 6] },
   {
     name: "messagingAccept, then messagingRequestsInfo",
     of: holder,
     use: (keys) =>
-      void [wasm.messagingAccept(keys.seedelf, JSON.stringify(request)), wasm.messagingRequestsInfo(request.requests)],
-    left: [X_BE, 4],
+      void [wasm.messagingAccept(keys.messaging.preprod!, JSON.stringify(request)), wasm.messagingRequestsInfo(request.requests)],
+    left: [XM_BE, 4],
   },
   {
     name: "a private transfer built at once",
@@ -361,7 +384,7 @@ describe("a lock replaces the instance and zeroes the memory that held the keys"
     it(`${run.name}${where}: nothing of the wallet's is in either memory`, async () => {
       const { counts, held, unlocked, after } = await locked(run, { restart });
       // While unlocked the keys were there to be found.
-      expect(unlocked).toEqual(expect.arrayContaining([X_HELD, "the account's key", "the one-time accounts' key"]));
+      expect(unlocked).toEqual(expect.arrayContaining([X_HELD, XM_HELD, "the account's key", "the one-time accounts' key"]));
       expect(counts.renews).toBe(1);
       // The memory that held them: every byte of it zero.
       expect(after).not.toBe(held);

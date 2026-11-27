@@ -2860,7 +2860,7 @@
   "vote.status.retired": "退任",
   "vote.statusLabel": "状態",
   "vote.warn.callsItself": "この DRep は、ウォレット自身の選択肢の名前を名乗っています。投票権はその選択肢ではなく、この DRep に向かいます。",
-  "vote.warn.inactive":"この DRep は最近投票していないため、その票は数えられません。この DRep に委任しても、報酬は引き出せます。",
+  "vote.warn.inactive": "この DRep は最近投票していないため、その票は数えられません。この DRep に委任しても、報酬は引き出せます。",
   "vote.warn.sharedName": "{{shared}}。区別できるのは ID だけです。その DRep が公表している ID と照合してください。",
   "vote.whereLabel": "投票権の委任先",
   "welcome.create": "新しいウォレットを作成",
@@ -3212,5 +3212,18 @@
   "worker.messaging.cantRevealYet": "Seedelf を見せられるのは最初に書いた側だけで、相手が返信した後です。",
   "worker.messaging.waitForReply": "返信を待ってください。返信が来るまで、相手のウォレットはこの会話であなたのメッセージをこれ以上受け取りません。",
   "worker.messaging.full": "メッセージに保存する空きがありません。会話を削除してから、もう一度送信してください。",
-  "worker.messaging.notOpenHere": "{{network}} ではまだメッセージをオンにできません。"
+  "worker.messaging.notOpenHere": "{{network}} ではまだメッセージをオンにできません。",
+  "worker.messaging.noCertificate": "その Seedelf はメッセージを受け取りません。",
+  "worker.messaging.warn.otherKey": "このウォレットにない鍵がこの Seedelf のメッセージを受け取るため、この Seedelf を表示できません。他の誰かがこの Seedelf の鍵を持っているおそれがあります。",
+  "messages.warn.otherKey": "このウォレットにない鍵がこの Seedelf のメッセージを受け取ります。他の誰かがこの Seedelf の鍵を持っているおそれがあります。",
+  "worker.messaging.listBehind": "メッセージを受け取る Seedelf をまだ読み込んでいます。少ししてからもう一度お試しください。",
+  "worker.messaging.notListedYet": "Seedelf を一覧に載せている途中です。数分後にもう一度お試しください。",
+  "worker.messaging.tooOften": "この Seedelf は一覧から外された回数が多すぎます。移動すると、もう一度載せられるようになります。",
+  "messages.tooOften": "一覧から外された回数が多すぎます。Seedelf を移動すると、もう一度載せられるようになります。",
+  "messages.privacy.listsSeedelfs": "メッセージをオンにすると、あなたの Seedelf はメッセージを受け取る Seedelf として公開の一覧に載ります。",
+  "messages.privacy.listsSeedelf": "Seedelf をオンにすると、メッセージを受け取る Seedelf として公開の一覧に載ります。",
+  "settings.remove.warn.listed": "メッセージを受け取っているあなたの Seedelf は、この後も一覧に載ったままです。先にメッセージをオフにしてください。",
+  "worker.messaging.listOffline": "サーバーに接続できないため、その Seedelf がメッセージを受け取るか確認できません。少ししてからもう一度お試しください。",
+  "worker.messaging.listPaused": "メッセージは一時停止中のため、今は最初のメッセージを書けません。",
+  "worker.messaging.listDayRead": "この接続は今日の読み込みの上限に達しました。後でもう一度お試しください。"
 }

@@ -107,16 +107,16 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   await page.getByLabel("Seedelf name").fill(SEEDELF);
   await expect(page.getByText("That's your own Seedelf.")).toBeVisible();
   await expect(page.getByTestId("composer")).toBeVisible();
-  // Written while off: kept, and waiting, never "sent". The worker, asked to read now, asks the relay nothing.
+  // Written while off to a Seedelf whose certificate this wallet has never read (chunk 55): a first message is written
+  // only on the one the relay's list holds, and off, the list isn't read. Refused in words, nothing kept; the worker,
+  // asked to read now, asks the relay nothing.
   await page.getByLabel("Seedelf name").fill(transferPreprod.to);
   await expect(page.getByText("Found:")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("composer-off")).toBeVisible();
   await page.getByTestId("composer").fill("waits for the switch");
   await page.getByTestId("composer").press("Enter");
-  await expect(page.getByTestId("thread").getByTestId("bubble")).toHaveText(/waits for the switch/);
-  await expect(page.getByTestId("bubble-state")).toHaveText(/preparing|waiting for Messages to be on/);
-  // Off, nothing is being sent: the list says it waits, never "Sending…".
-  await expect(page.getByTestId("messages-conversations")).toContainText("Waiting to send");
+  await expect(page.getByTestId("composer-error")).toHaveText("Turn Messages on to write to a Seedelf and read what's written to yours.");
+  await expect(page.getByTestId("thread")).toHaveCount(0);
   await askWorker(page, { type: "messaging-sync" });
   expect(fake.calls).toEqual([]);
 
@@ -126,9 +126,8 @@ test("54f: Messages opens from the top bar and from Home, off by default, and of
   await page.getByTestId("topbar-messages").click();
   await expect(page.getByTestId("messages-switch")).toBeVisible();
 
-  // On: the worker reads the pool at once. Its stamp for the waiting message may still be solving, about 7 s of the
-  // worker's and more on a busy runner, which the read shares the worker with. The press waits its turn in the worker
-  // meanwhile (the switch is busy until it answers), so it gets the stamp's time, not the default 5 s (1.10.0's second
+  // On: the worker reads the pool at once, and the certificate list. The press waits its turn in the worker meanwhile
+  // (the switch is busy until it answers), so it gets a slow runner's time, not the default 5 s (1.10.0's second
   // review: 2 of 4 runs under a 2-CPU load were still waiting at 5 s).
   await page.getByTestId("messages-switch").click();
   await expect(page.getByTestId("messages-switch")).toHaveAttribute("aria-checked", "true", { timeout: 60_000 });

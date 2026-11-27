@@ -25,9 +25,12 @@ import {
   type Wasm,
 } from "./messaging-harness";
 
-/** The records a lane may touch, on either network: the read record, the scan's mark, the user's own outbox. */
+/**
+ * The records a lane may touch, on either network: the read record, the scan's mark, the user's own outbox, and the
+ * certificate list's copy (chunk 55's 55e), whose size the relay's public list sets, the same for every wallet.
+ */
 export const LANE_RECORDS = new Set(
-  ["preprod", "mainnet"].flatMap((n) => [`messagingRead.${n}`, `messagingMark.${n}`, `messagingOutbox.${n}`]),
+  ["preprod", "mainnet"].flatMap((n) => [`messagingRead.${n}`, `messagingMark.${n}`, `messagingOutbox.${n}`, `messagingList.${n}`]),
 );
 
 /** A sealed record's smallest stored size: its 1 KiB pad. */
@@ -65,6 +68,13 @@ export async function world(options: ServiceOptions = {}): Promise<World> {
   const a = await party(12, relay, directory, ALICE_SEEDELF, options);
   const b = await party(24, relay, directory, BOB_SEEDELF, options);
   await turnOn(w, a, b);
+  // What the turn-ons asked differs by who turned on first (chunk 55's 55e): each read the certificate list as far as
+  // it held then, and posted its own. Every copy is at the list's end now, so A's and B's next reads of it ask the
+  // same; their logs start here, where the paired worlds begin.
+  for (const p of [a, b]) {
+    p.log.length = 0;
+    p.area.length = 0;
+  }
   const x: World = { relay, directory, w, a, b, writing: false, answer: () => keptNew(), posted: 0, maxText: 0 };
   const real = relay.fetch;
   relay.fetch = async (url, init) => (init.method === "POST" && !x.writing ? x.answer(++x.posted) : real(url, init));

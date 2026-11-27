@@ -11,7 +11,7 @@
 import { describe, expect, it } from "vitest";
 
 import { TAKE_MARGIN_MS } from "../src/background/messaging";
-import { another, clock, type LogEntry, loadTestWasm, type Party, turns, type Wasm } from "./messaging-harness";
+import { another, certificateOf, clock, type LogEntry, loadTestWasm, type Party, turns, type Wasm } from "./messaging-harness";
 import { expectLanesClean, lanesOf, requestsOf, world, type World } from "./messaging-lanes-kit";
 
 /** A second Seedelf under A's key that this browser didn't mint: off, so a first message to it is refused. */
@@ -21,10 +21,12 @@ const ALICE2 = "5eed0e1f00" + Buffer.from("alice2").toString("hex");
 async function refusedFirsts(x: World, n: number, salt = 0): Promise<void> {
   const wasm = loadTestWasm();
   const register = await another(x.a);
+  // A's certificate for that pair, made with both its keys (chunk 55's 55e): what W writes to, by A's messaging key.
+  const certificate = await certificateOf(x.a, ALICE2, register);
   const t = Math.floor(clock.now / 1000 / 600) * 600;
   await x.w.wallet.withKeys((keys) => {
     for (let i = 0; i < n; i++) {
-      const started = JSON.parse(wasm.messagingStart(keys.seedelf, JSON.stringify({ handle: register, to: ALICE2, now: t }))) as { conversation: string };
+      const started = JSON.parse(wasm.messagingStart(keys.messaging.preprod!, JSON.stringify({ network: "preprod", name: ALICE2, register, certificate, now: t }))) as { conversation: string };
       const stamped = JSON.parse(wasm.messagingSetStamp(JSON.stringify({ conversation: started.conversation, nonce: 0 }))) as { conversation: string };
       const plaintext = "01" + (salt * 100_000 + i).toString(16).padStart(8, "0");
       const sent = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: stamped.conversation, plaintext }))) as { envelope: string };

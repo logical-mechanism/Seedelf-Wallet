@@ -48,7 +48,7 @@ import { TransferService } from "../src/background/transfer";
 import { WithdrawService } from "../src/background/withdraw";
 import type { Area } from "../src/background/storage";
 import type { SwapAsk } from "../src/shared/rpc";
-import { NETWORKS } from "../src/networks";
+import { NETWORKS, type NetworkName } from "../src/networks";
 import { bech32, bech32Bytes } from "./fixtures/bech32";
 import { txIdOf } from "./fixtures/cbor";
 import { asAsked } from "./fixtures/minswap-echo";
@@ -93,7 +93,13 @@ export function loadTestWasm(): typeof wasm {
 }
 
 /** A wallet over fake storage and a controllable clock. */
-export function testWallet(shared?: { local: MemoryArea; session: MemoryArea; clock: { now: number } }) {
+export function testWallet(shared?: {
+  local: MemoryArea;
+  session: MemoryArea;
+  clock: { now: number };
+  /** The networks whose messaging key the wallet derives at unlock (wallet.ts `messagingNetworks`): Messages' own otherwise. */
+  messagingNetworks?: readonly NetworkName[];
+}) {
   const local = shared?.local ?? memoryArea();
   const session = shared?.session ?? memoryArea();
   const clock = shared?.clock ?? { now: 1_800_000_000_000 };
@@ -111,6 +117,7 @@ export function testWallet(shared?: { local: MemoryArea; session: MemoryArea; cl
     // As the worker wires it (sw.ts): the account to derive is read at every
     // key use, so a test that switches sees the next one re-derive.
     activeAccount: () => activeAccount(local),
+    ...(shared?.messagingNetworks ? { messagingNetworks: shared.messagingNetworks } : {}),
   };
   return { wallet: new Wallet(deps), local, session, clock, events };
 }

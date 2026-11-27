@@ -53,7 +53,8 @@ function claiming(claims: (envelope: string) => boolean): Wasm {
 }
 
 const PER_READ = PAGES_A_SYNC * 8;
-const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET "));
+/** The pool's pages asked: an unlock's read of the certificate list beside them (chunk 55's 55e) is no page of it. */
+const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET /messaging/v1/preprod/envelopes"));
 
 /** Bob's pool: "one", then 127 junk (B0), "two" and 127 junk (B1), then four reads of 128 junk (B2 to B5). */
 async function scenario() {

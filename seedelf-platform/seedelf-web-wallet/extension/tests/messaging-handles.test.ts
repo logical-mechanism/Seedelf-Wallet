@@ -7,6 +7,7 @@
 // wallet's. No chain read for any of it.
 import { describe, expect, it } from "vitest";
 
+import { NoCertificate } from "../src/background/messaging";
 import { SESSION_MINT } from "../src/background/mint";
 import { mintedAt, rememberMint, rememberRegister } from "../src/background/minted-by";
 import { PRIVATE_PREFIX } from "../src/background/private-store";
@@ -23,6 +24,7 @@ import {
   type Directory,
   fakeRelay,
   type FakeRelay,
+  listed,
   loadTestWasm,
   pair,
   party,
@@ -46,13 +48,16 @@ const requestsOf = async (p: Awaited<ReturnType<typeof pair>>["bob"]) =>
 // Each test bounded: one that fails mid-take fails here, never hangs the run.
 describe("which Seedelfs take first messages (W8)", { timeout: 30_000 }, () => {
   it("takes no first message at a Seedelf under the key that this browser didn't make, and lists it, off (reveal#1, first-contact#3, assumptions-vs-code#3, spec-cryptanalysis#6)", async () => {
-    const { directory, alice, bob } = await pair();
+    const { relay, directory, alice, bob } = await pair();
     // A Seedelf someone else minted under a register of Bob's key: to his wallet, a sum of two of its registers looks
     // like any other.
     const planted = await another(bob);
     bob.own.push({ name: PLANTED, register: planted });
     directory.set(PLANTED, planted);
     await synced(bob);
+    // Its certificate on the list, which no wallet of Bob's posts (it takes none, chunk 55's 55e), so a writer can write
+    // to it at all: the take's refusal is what's held here.
+    await listed(relay, bob, PLANTED, planted);
     const cid = await alice.messaging.start("preprod", PLANTED, "who holds this one?");
     await alice.messaging.whenIdle();
     bob.changed.length = 0;
@@ -86,7 +91,9 @@ describe("which Seedelfs take first messages (W8)", { timeout: 30_000 }, () => {
     await alice.messaging.whenIdle();
     await synced(bob);
     await bob.messaging.answerAt("preprod", BOB_SEEDELF, bob.own[0]!.register, false);
-    await alice.messaging.start("preprod", BOB_SEEDELF, "after it's off");
+    await bob.messaging.whenIdle();
+    // Its certificate withdrawn at the turn-off (chunk 55's call 9): a writer's next read of the list finds none.
+    await expect(alice.messaging.start("preprod", BOB_SEEDELF, "after it's off")).rejects.toThrow(NoCertificate);
     await alice.messaging.whenIdle();
     await synced(bob);
     expect(await requestsOf(bob)).toEqual([toPlanted, before].sort());
@@ -108,6 +115,8 @@ describe("which Seedelfs take first messages (W8)", { timeout: 30_000 }, () => {
     const register = await another(bob);
     bob.own.push({ name: BOB_SEEDELF, register });
     directory.set(BOB_SEEDELF, register);
+    // Its certificate on the list, posted by the browser it was minted in.
+    await listed(relay, bob, BOB_SEEDELF, register);
     await turnOn(alice, bob);
     const first = await alice.messaging.start("preprod", BOB_SEEDELF, "anyone there?");
     await alice.messaging.whenIdle();
@@ -157,10 +166,18 @@ describe("which Seedelfs take first messages (W8)", { timeout: 30_000 }, () => {
     expect(await texts(alice, cid)).toEqual(["out:hello Bob", "in:hi Alice"]);
   });
 
-  it("still shows a Seedelf this browser made whose first messages the user turned off: the switch is for requests", async () => {
+  it("shows a Seedelf only while it has a certificate: one whose first messages the user turned off had it withdrawn (chunk 55's call 9)", async () => {
     const { alice, bob } = await pair();
     const cid = await talking(alice, bob);
+    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toEqual([ALICE_SEEDELF]);
+    // Turned off: its certificate withdrawn from the list, so a reveal of it could never verify (protocol.md §21.8).
     await alice.messaging.answerAt("preprod", ALICE_SEEDELF, alice.own[0]!.register, false);
+    await alice.messaging.whenIdle();
+    expect((await alice.messaging.thread("preprod", cid)).seedelfs).toBeUndefined();
+    await expect(alice.messaging.reveal("preprod", cid, ALICE_SEEDELF)).rejects.toThrow(NoCertificate);
+    // On again: a certificate made and posted, and it's shown, and verifies at the reader's press.
+    await alice.messaging.answerAt("preprod", ALICE_SEEDELF, alice.own[0]!.register, true);
+    await alice.messaging.whenIdle();
     expect((await alice.messaging.thread("preprod", cid)).seedelfs).toEqual([ALICE_SEEDELF]);
     await alice.messaging.reveal("preprod", cid, ALICE_SEEDELF);
     await alice.messaging.whenIdle();
@@ -212,6 +229,10 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
     await rememberRegister(bob.store, "preprod", SECOND, second);
     bob.own.push({ name: SECOND, register: second });
     directory.set(SECOND, second);
+    // A Seedelf made here while Messages are on gets its certificate at its mint's pair (chunk 55's 55e): the take's look
+    // at the Seedelfs finds the pair new, and the next sync reads the list and posts it.
+    await synced(bob);
+    await synced(bob);
     const cid = await alice.messaging.start("preprod", SECOND, "to your new Seedelf");
     await alice.messaging.whenIdle();
     await synced(bob);
@@ -252,6 +273,8 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
     const register = await another(bob);
     bob.own.push({ name: BOB_SEEDELF, register });
     directory.set(BOB_SEEDELF, register);
+    // Its certificate on the list, posted by the browser it was minted in.
+    await listed(relay, bob, BOB_SEEDELF, register);
     await turnOn(alice, bob);
     const waiting = await alice.messaging.start("preprod", BOB_SEEDELF, "from before the restore");
     await alice.messaging.whenIdle();
@@ -261,8 +284,9 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
     await bob.messaging.answerAt("preprod", BOB_SEEDELF, register, true);
     await bob.messaging.whenIdle();
     await synced(bob);
-    // A fresh read, from the pool's start: what came while it was off is taken, once.
-    expect(relay.calls.find((c) => c.startsWith("GET "))).toBe("GET /messaging/v1/preprod/envelopes");
+    // A fresh read, from the pool's start: what came while it was off is taken, once. The turn-on's read of the
+    // certificate list (chunk 55's 55e) aside.
+    expect(relay.calls.find((c) => c.startsWith("GET ") && c.includes("/envelopes"))).toBe("GET /messaging/v1/preprod/envelopes");
     expect(await requestsOf(bob)).toEqual([waiting]);
     expect((await bob.messaging.overview("preprod")).requests[0]!.messages).toBe(1);
   });
@@ -317,8 +341,9 @@ describe("which Seedelfs take first messages, over time (W12)", { timeout: 30_00
 
   it("B, nothing delayed: the press lands while the take's look at the Seedelfs is in the queue, for a read that found none of the key's envelopes (f1)", async () => {
     const { relay, directory, alice, bob, register } = await restored();
-    // Carol, only so the pool holds an envelope that isn't Bob's.
-    await party(15, relay, directory, CAROL_SEEDELF);
+    // Carol, only so the pool holds an envelope that isn't Bob's: her certificate on the list, so Alice can write to her.
+    const carol = await party(15, relay, directory, CAROL_SEEDELF);
+    await listed(relay, carol, CAROL_SEEDELF, carol.own[0]!.register);
     const waiting = await waitingAt(alice, bob);
     // A first message to Carol: Bob's next read moves his cursor and keeps none of his envelopes. Its take looks at which
     // Seedelfs take first messages all the same (noteOwn), as after any read that moved the cursor.
@@ -454,7 +479,8 @@ const INBOX = "messaging.preprod";
 const READ = "messagingRead.preprod";
 const MINTED_AT_KEY = PRIVATE_PREFIX + "mintedAt.preprod";
 const POOL_START = "GET /messaging/v1/preprod/envelopes";
-const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET "));
+/** The pool's pages asked: a turn-on's read of the certificate list beside them (chunk 55's 55e) is no page of it. */
+const gets = (relay: FakeRelay) => relay.calls.filter((c) => c.startsWith("GET /messaging/v1/preprod/envelopes"));
 
 /** `promise`, or a failure naming `what` after `ms`: a hold that's never reached fails, never hangs. */
 async function within<T>(promise: Promise<T>, what: string, ms = 10_000): Promise<T> {
@@ -523,6 +549,8 @@ async function restored(extra?: (bob: Party, directory: Directory) => Promise<vo
   const register = await another(bob);
   bob.own.push({ name: BOB_SEEDELF, register });
   directory.set(BOB_SEEDELF, register);
+  // Its certificate on the list, posted by the browser it was minted in (chunk 55's 55e): a writer can write to it.
+  await listed(relay, bob, BOB_SEEDELF, register);
   await extra?.(bob, directory);
   await turnOn(alice, bob);
   return { relay, directory, alice, bob, register };

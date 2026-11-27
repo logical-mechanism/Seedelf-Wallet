@@ -271,6 +271,8 @@
   "messages.privacy.continues",
   "messages.privacy.continuesEarlier",
   "messages.privacy.delete",
+  "messages.privacy.listsSeedelf",
+  "messages.privacy.listsSeedelfs",
   "messages.privacy.notRestored",
   "messages.privacy.rename",
   "messages.privacy.request",
@@ -309,6 +311,7 @@
   "messages.warn.noReply",
   "messages.warn.offline",
   "messages.warn.openOn",
+  "messages.warn.otherKey",
   "messages.warn.ownSeedelf",
   "messages.warn.paused",
   "messages.warn.pausedAskAt",
@@ -455,6 +458,7 @@
   "settings.remove.warn.conversations",
   "settings.remove.warn.havePhrase",
   "settings.remove.warn.leftBehind",
+  "settings.remove.warn.listed",
   "settings.remove.warn.maybeSent",
   "settings.remove.warn.mixMaybeSent",
   "settings.remove.warn.partsWaiting",
@@ -580,6 +584,7 @@
   "withdraw.warn.publicAccount",
   "withdraw.warn.staked",
   "withdraw.warn.stakedNth",
+  "worker.messaging.warn.otherKey",
   "worker.record.warn.unreadable",
   "worker.staking.warn.rewardsOnTheWay"
 ]

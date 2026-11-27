@@ -671,7 +671,10 @@ describe("the read and take records (round 5, fix item 6)", { timeout: 300_000 }
     await x.a.wallet.unlock(PASSWORD);
     const from = x.a.log.length;
     for (let k = 0; k < 2; k++) await synced(x.a);
-    expect(requestsOf(x.a, from).every((r) => r === `GET /messaging/v1/preprod/envelopes?after=${end}`)).toBe(true);
+    // The pool's pages, none asked again; beside them, the unlock's first sync reads the certificate list's new entries
+    // (chunk 55's 55e), which no envelope decides.
+    const pages = requestsOf(x.a, from).filter((r) => !r.startsWith("GET /messaging/v1/preprod/certificates"));
+    expect(pages.every((r) => r === `GET /messaging/v1/preprod/envelopes?after=${end}`)).toBe(true);
     expect((await texts(x.a, cid)).filter((m) => m.startsWith("in:tick "))).toHaveLength(16);
     expect((await takesOf(x.a))!.batches).toEqual([]);
   });

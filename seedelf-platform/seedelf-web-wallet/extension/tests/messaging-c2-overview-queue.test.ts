@@ -74,17 +74,26 @@ const junk = (n: number) => "01" + n.toString(16).padStart(8, "0") + "5a".repeat
 /** A Seedelf under a key no wallet of the test holds: W's first messages to it are well formed and nobody's here. */
 const DAVE_SEEDELF = "5eed0e1f00" + Buffer.from("dave").toString("hex");
 
-/** A register of a fresh key that no party holds. */
-function strangersRegister(): { generator: string; publicValue: string } {
+/**
+ * A register of a fresh key that no party holds, and the certificate for Dave's Seedelf there that its own wallet would
+ * post (chunk 55's 55e): what lets W write to it.
+ */
+function strangersRegister(): { register: { generator: string; publicValue: string }; certificate: string } {
   const wasm = loadTestWasm();
   const key = wasm.SeedelfKey.fromEntropy(crypto.getRandomValues(new Uint8Array(16)), 0);
+  const messaging = wasm.MessagingKey.random("preprod");
   const base = key.baseRegister();
   const r = wasm.rerandomize(base);
   try {
-    return { generator: r.generator, publicValue: r.publicValue };
+    const register = { generator: r.generator, publicValue: r.publicValue };
+    const { certificate } = JSON.parse(wasm.messagingCertificate(key, messaging, JSON.stringify({ network: "preprod", name: DAVE_SEEDELF, register }))) as {
+      certificate: string;
+    };
+    return { register, certificate };
   } finally {
     r.free();
     base.free();
+    messaging.free();
     key.free();
   }
 }
@@ -163,7 +172,9 @@ async function world(): Promise<World> {
     await w.messaging.whenIdle();
   }
   // Nobody's here, well formed: first messages to a Seedelf under a key no party holds.
-  directory.set(DAVE_SEEDELF, strangersRegister());
+  const dave = strangersRegister();
+  directory.set(DAVE_SEEDELF, dave.register);
+  relay.putCertificate("preprod", dave.certificate);
   const held = () => relay.pools.get("preprod")!.held;
   const before = held().length;
   for (let i = 0; i < 32; i++) {

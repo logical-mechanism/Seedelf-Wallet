@@ -13,7 +13,7 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import type * as Wasm from "@seedelf/wasm";
 
-import type { NetworkName } from "../networks";
+import { MESSAGING_NETWORKS, type NetworkName } from "../networks";
 import { passwordProblem } from "../shared/password";
 import type { Account, UnlockResult, WalletState } from "../shared/rpc";
 import { fromBase64, toBase64, type Area } from "./storage";
@@ -223,6 +223,11 @@ export interface WalletDeps {
    * one, which is every wallet from before chunk 18.
    */
   activeAccount?: () => Promise<number>;
+  /**
+   * The networks whose messaging key is derived at unlock (chunk 55's 55e): networks.ts `MESSAGING_NETWORKS`, the ones
+   * Messages is open on, without one. A test's own list, for wallets with Messages open on both networks.
+   */
+  messagingNetworks?: readonly NetworkName[];
 }
 
 export interface Keys {
@@ -239,6 +244,13 @@ export interface Keys {
   account: number;
   /** Private sessions' one-time accounts (account 24301'): never the public account's keys. */
   oneTime: Wasm.OneTimeAccounts;
+  /**
+   * Seedelf Messaging's own key x_m, one a network Messages is open on (chunk 55's 55e; protocol.md §21.2): derived from
+   * the phrase beside the Seedelf key, never from it, at account 0 as it is, and freed at a lock with the rest. A
+   * network Messages isn't open on gets none, so no unused key sits in memory. Messages reads, writes and proves with it
+   * alone; the Seedelf key makes only a Seedelf's certificate (messaging.ts).
+   */
+  messaging: Partial<Record<NetworkName, Wasm.MessagingKey>>;
 }
 
 /**
@@ -742,7 +754,7 @@ export class Wallet {
             this.keys = keys;
             // A switch frees the account it left. Other accounts' keys stay:
             // a connected site still talks to the one it connected to.
-            if (left) freeQuietly(left.seedelf, left.cardano, left.oneTime);
+            if (left) freeQuietly(left.seedelf, left.cardano, left.oneTime, ...Object.values(left.messaging));
           } finally {
             entropy.fill(0);
           }
@@ -782,12 +794,18 @@ export class Wallet {
     const { wasm } = this.deps;
     let seedelf: Wasm.SeedelfKey | undefined;
     let cardano: Wasm.CardanoAccount | undefined;
+    let oneTime: Wasm.OneTimeAccounts | undefined;
+    const messaging: Partial<Record<NetworkName, Wasm.MessagingKey>> = {};
     try {
       seedelf = wasm.SeedelfKey.fromEntropy(entropy, 0);
       cardano = wasm.CardanoAccount.fromEntropy(entropy, account);
-      return { seedelf, cardano, account, oneTime: wasm.OneTimeAccounts.fromEntropy(entropy) };
+      oneTime = wasm.OneTimeAccounts.fromEntropy(entropy);
+      // Messages' key for each network it's open on, account 0 as the Seedelf key's (chunk 55's 55e): from the phrase's
+      // seed under its own salt, so it says nothing of x, and each network's is another (protocol.md §21.2).
+      for (const network of this.deps.messagingNetworks ?? MESSAGING_NETWORKS) messaging[network] = wasm.MessagingKey.fromEntropy(entropy, 0, network);
+      return { seedelf, cardano, account, oneTime, messaging };
     } catch (e) {
-      freeQuietly(seedelf, cardano);
+      freeQuietly(seedelf, cardano, oneTime, ...Object.values(messaging));
       throw e;
     } finally {
       this.scrub();
@@ -854,7 +872,7 @@ export class Wallet {
     this.keys = undefined;
     this.others.clear();
     freeQuietly(...others);
-    if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime);
+    if (keys) freeQuietly(keys.seedelf, keys.cardano, keys.oneTime, ...Object.values(keys.messaging));
     // Only after keys were held: with none there's nothing of theirs to scrub, as at every look at a locked wallet.
     if (keys || others.length) {
       this.scrub();

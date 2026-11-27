@@ -162,8 +162,9 @@ describe("the alarm's run is a lane from before its first await (1.10.0's second
     await p.local.set(`${PRIVATE_PREFIX}messagingTrap.preprod`, "scan");
     await runThenGated("stopped");
     await p.local.remove(`${PRIVATE_PREFIX}messagingTrap.preprod`);
-    // Every switch off.
+    // Every switch off: the wallet's own certificate withdrawn first, the switch's own post (chunk 55's call 9).
     await p.messaging.switch("preprod", false);
+    await p.messaging.whenIdle();
     await runThenGated("off");
     await p.messaging.switch("preprod", true);
     await p.messaging.whenIdle();

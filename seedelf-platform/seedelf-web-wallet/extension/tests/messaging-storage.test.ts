@@ -22,6 +22,7 @@ import {
   type Directory,
   fakeRelay,
   fileOf,
+  listed,
   loadTestWasm,
   pair,
   party,
@@ -114,9 +115,10 @@ describe("what Messages keeps on the device (W7)", { timeout: 30_000 }, () => {
 
   it("holds both networks' records to the one budget: a write on one makes its room from the other where that frees the most", async () => {
     const budget = 96 * 1024;
-    const { alice, bob } = await pair(budget);
+    const { relay, alice, bob } = await pair(budget);
     const cid = await talking(alice, bob);
-    // Alice's long conversation on mainnet, all of it posted.
+    // Alice's long conversation on mainnet, all of it posted: Bob's certificate there on the list (chunk 55's 55e).
+    await listed(relay, bob, BOB_SEEDELF, bob.own[0]!.register, "mainnet");
     await alice.messaging.switch("mainnet", true);
     await alice.messaging.whenIdle();
     const far = await alice.messaging.start("mainnet", BOB_SEEDELF, "on mainnet");

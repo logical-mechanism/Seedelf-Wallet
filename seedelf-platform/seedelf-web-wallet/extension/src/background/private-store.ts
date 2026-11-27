@@ -76,6 +76,14 @@ export const PRIVATE_RECORDS = [
   // written only by the background runner, never between two requests.
   "messagingTake.preprod",
   "messagingTake.mainnet",
+  // The relay's list of certificates as this wallet last read it, behind its cursor, with the wallet's own certificates
+  // waiting to be posted (messaging.ts `ListHeld`, chunk 55's 55e): within a room of its own, apart from Messages' budget.
+  "messagingList.preprod",
+  "messagingList.mainnet",
+  // Not sealed, and no record: a mark that withdrawals of the wallet's own certificates may wait to be posted
+  // (messaging.ts `markWithdrawals`), so a run finds them with Messages off and no key. Listed so Remove wallet deletes it.
+  "messagingWithdraw.preprod",
+  "messagingWithdraw.mainnet",
   // Not sealed, and no record: a mark of which messaging step's WebAssembly trapped ("scan" or "take"), written with no
   // key since the trap has just locked the wallet (messaging.ts `noteTrap`). Listed so Remove wallet deletes it.
   "messagingTrap.preprod",
@@ -182,6 +190,10 @@ const WHAT: Record<(typeof PRIVATE_RECORDS)[number], I18nKey> = {
   "messagingTakeMark.mainnet": "worker.record.messaging",
   "messagingTake.preprod": "worker.record.messaging",
   "messagingTake.mainnet": "worker.record.messaging",
+  "messagingList.preprod": "worker.record.messaging",
+  "messagingList.mainnet": "worker.record.messaging",
+  "messagingWithdraw.preprod": "worker.record.messaging",
+  "messagingWithdraw.mainnet": "worker.record.messaging",
   "messagingTrap.preprod": "worker.record.messaging",
   "messagingTrap.mainnet": "worker.record.messaging",
 };

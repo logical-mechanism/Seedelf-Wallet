@@ -8,8 +8,7 @@ A wallet is one **BIP39 recovery phrase**, and every key the wallet uses comes f
   - Because it is standard, the phrase also restores the Cardano side in Lace, Eternl and other wallets.
   - Those wallets see the Cardano account. They never see Seedelfs.
 - **Seedelf key:** one BLS12-381 scalar `x`, derived from the same phrase by a separate, Seedelf-specific derivation. It owns the private balance: a register `(g, u)` is the wallet's when `u = g^x`, so whoever has `x` can both find every UTxO it owns and spend it.
-  - It's also Seedelf Messaging's key today: it finds and reads what's written to your Seedelfs, and starts and proves your side of each conversation. Whoever reads can spend, and there's no read-only key (the owner's call, 2026-11-22). [joint-security.md](../../seedelf-messaging/docs/joint-security.md) lists every use of it.
-  - **Chunk 55 changes that** (the owner, 2026-11-26; specified, not built): Messages gets a key of its own, from the same phrase, bound to each Seedelf by a certificate the Seedelf key signs. See [Messages' key](#messages-key-chunk-55).
+  - **Seedelf Messaging has a key of its own** (chunk 55, the owner, 2026-11-26): it finds and reads what's written to your Seedelfs, and starts and proves your side of each conversation, with `x_m`, from the same phrase, bound to each Seedelf by a certificate the Seedelf key signs. For Messages, `x` makes that certificate and nothing else. See [Messages' key](#messages-key-chunk-55); [joint-security.md](../../seedelf-messaging/docs/joint-security.md) lists every use of both keys.
   - The two trees are independent: a key from one reveals nothing about the other. Only the phrase gives both.
 
 Any phrase in Seedelf Wallet, made here or restored from another wallet, gives a Seedelf key. CLI wallets instead use a random scalar stored in a file: a separate product, with no import path (see the [README](../README.md#relationship-to-the-cli)).
@@ -54,7 +53,7 @@ if x == 0: derivation error                 probability ≈ 2^-255
 
 ### Messages' key (chunk 55)
 
-**Specified, not built** ([protocol.md](../../seedelf-messaging/docs/protocol.md) §21; the owner, 2026-11-26). Seedelf Messaging gets a key of its own, `x_m`, so a flaw in Messages' cryptography can't spend funds: `x_m` spends nothing. Whoever stole it could still read messages and pose to you as anyone in Messages. It's a sibling of v1, never a change to it: v1 and its vectors stay as they are.
+[protocol.md](../../seedelf-messaging/docs/protocol.md) §21; the owner, 2026-11-26. Seedelf Messaging has a key of its own, `x_m`, so a flaw in Messages' cryptography can't spend funds: `x_m` spends nothing. Whoever stole it could still read messages and pose to you as anyone in Messages. It's a sibling of v1, never a change to it: v1 and its vectors stay as they are.
 
 ```text
 seed  = the BIP39 seed v1 uses
@@ -69,8 +68,9 @@ if x_m == 0: derivation error               generation: 0x00 until a rotation
 
 - **Another salt and info** over the same seed, so `x_m` and `x` are independent: neither says anything about the other.
 - **Per network:** unlike `x`, one phrase has a different `x_m` on preprod and on mainnet, so a flaw found on preprod reads no mainnet message.
-- **Bound to each Seedelf by a certificate:** a proof by `x` and `x_m` together that names the Seedelf's register and its messaging register. The relay holds the certificates, and one is made when Messages is turned on, or reused if one exists.
-- **Frozen when Messages opens on mainnet,** as v1 was when wallets first existed. Its vectors come with the code (chunk 55's 55b).
+- **Bound to each Seedelf by a certificate:** a proof by `x` and `x_m` together that names the Seedelf's register and its messaging register. The relay holds the certificates, and one is made when Messages or a Seedelf is turned on, or reused if one exists; turning either off withdraws it.
+- **One implementation:** `seedelf-crypto`'s `messaging_key_v1`, which the extension uses through WebAssembly (`MessagingKey.fromEntropy`): at each unlock it derives one for each network Messages is open on, at account 0 as `x` is, and frees them at a lock with the other keys ([architecture.md](architecture.md#seedelf-messaging)).
+- **Frozen when Messages opens on mainnet,** as v1 was when wallets first existed. Its vectors are `seedelf-crypto/tests/vectors/seedelf_messaging_key_v1.json`.
 - **CLI wallets have none:** their `x` is a random scalar, with no phrase.
 
 ### One-time spend keys

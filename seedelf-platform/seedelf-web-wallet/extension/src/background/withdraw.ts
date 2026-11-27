@@ -30,7 +30,7 @@ import type {
 import { checkRecipients } from "../shared/recipients";
 import { seedelfName } from "../shared/seedelf-name";
 import { decimalsOf } from "./balances";
-import { seedelfLabel } from "./chain";
+import { registerOf, seedelfLabel, type RegisterHex } from "./chain";
 import { destinationResolver, resolveDestination } from "./destination";
 import { forgetRegisters } from "./minted-by";
 import { reviewParts, sendParts } from "./parts";
@@ -74,8 +74,17 @@ type RemoveResult = Omit<RemoveSummary, "network" | "label" | "to"> & {
   inputs: unknown[];
 };
 
+/** What a Remove tells beside the spend (chunk 55, the review of 55e's X-M3). */
+export interface WithdrawDeps extends ScriptSpendDeps {
+  /**
+   * The Remove of the wallet's Seedelf `name`, at `register`, was sent: Messages withdraws its certificates from the
+   * relay's list (messaging.ts `seedelfRemoved`). It writes its intent and returns; the posts go after.
+   */
+  seedelfRemoved?: (network: NetworkName, name: string, register: RegisterHex) => Promise<void>;
+}
+
 export class WithdrawService {
-  constructor(private readonly deps: ScriptSpendDeps) {}
+  constructor(private readonly deps: WithdrawDeps) {}
 
   /** A destination as typed: a bech32 address, or `$handle`. */
   resolve(network: NetworkName, to: string): Promise<WithdrawDestination> {
@@ -219,19 +228,27 @@ export class WithdrawService {
     // owner's answer 2 to B15).
     const paidFor = (await classesOf(this.deps, network, [utxo]))[`${utxo.tx_hash}#${utxo.tx_index}`];
     const origin = merged([...(paidFor ? [paidFor] : []), leftBy(rest.txHash)]);
-    await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed, origin });
+    // The register it spends, the Seedelf's now: what Messages' certificates for it name, withdrawn as it's sent.
+    const register = registerOf(utxo);
+    await keep(this.deps, SESSION_REMOVE, { ...summary, txCbor, seed, origin, ...(register ? { register } : {}) });
     return summary;
   }
 
   async submitRemove(network: NetworkName, txHash: string): Promise<PendingTx> {
     // Which Seedelf it removes, as its review kept it.
-    const built = await this.deps.wallet.withKeys(() => this.deps.session.get<{ network?: string; txHash?: string; name?: string }>(SESSION_REMOVE));
+    const built = await this.deps.wallet.withKeys(() =>
+      this.deps.session.get<{ network?: string; txHash?: string; name?: string; register?: RegisterHex }>(SESSION_REMOVE),
+    );
     const pending = await send(this.deps, network, txHash, SESSION_REMOVE, "remove", "removal");
     // Sent, or it may have gone: Messages stops taking first messages at the register this browser put it under, now,
     // whatever a kept view still shows (the 1.10.0 gate's W12). Best effort: the removal went whatever this write does,
     // and a view without the Seedelf stops them all the same.
     if (built?.network === network && built.txHash === txHash && built.name) {
       await forgetRegisters(this.deps.store, network, built.name).catch(() => undefined);
+      // Then its certificates on Messages' list withdrawn (X-M3): on preprod nothing else takes them down before the
+      // relay's daily look at the chain. After the mark above, so no pass of Messages' takes the pair for one that still
+      // takes first messages and drops its withdrawal; the pair is named here. Best effort too.
+      if (built.register) await this.deps.seedelfRemoved?.(network, built.name, built.register).catch(() => undefined);
     }
     return pending;
   }

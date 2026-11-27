@@ -8,6 +8,13 @@
 // It answers CORS for any origin, as the API does: the wallet holds no host
 // permission for it. Only the worker may ask it (`byWorker`, as support.ts
 // holds Koios to): a page that does is running the worker's code itself.
+//
+// Its certificate list (chunk 55, §21.7) checks each certificate's points and
+// proof with the WebAssembly's own check, as the relay does with its copy of
+// the crate's, in a Node of its own: Playwright's loader can't load the
+// module's ES code (support.ts `inWasm`).
+import { execFileSync } from "node:child_process";
+
 import type { BrowserContext } from "@playwright/test";
 
 import { fakeRelay as memoryRelay, type FakeRelay } from "../tests/fake-relay";
@@ -30,6 +37,28 @@ export interface RelayFake {
   strays: string[];
 }
 
+/** §21.7's check 7 for `certificate` (hex) in `pool`: whether `messagingCheckCertificate` takes it. */
+function certificateChecks(pool: string, certificate: string): boolean {
+  const pkg = new URL("../../wasm/pkg/", import.meta.url);
+  const script = `
+    import { readFileSync } from "node:fs";
+    const wasm = await import(${JSON.stringify(new URL("seedelf_wasm.js", pkg).href)});
+    wasm.initSync({ module: readFileSync(new URL(${JSON.stringify(new URL("seedelf_wasm_bg.wasm", pkg).href)})) });
+    const answer = JSON.parse(wasm.messagingCheckCertificate(JSON.stringify({ network: process.argv[1], certificate: process.argv[2] })));
+    process.stdout.write("refused" in answer ? "refused" : "good");
+  `;
+  try {
+    return (
+      execFileSync(process.execPath, ["--input-type=module", "-e", script, pool, certificate], {
+        env: { ...process.env, NODE_OPTIONS: "" },
+        encoding: "utf8",
+      }) === "good"
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** One relay, in memory, on the real clock, at the price `bits` asks of a post (the unit tests' 4 bits by default). */
 export function relayFake(bits = 4): RelayFake {
   const relay = memoryRelay({
@@ -38,6 +67,7 @@ export function relayFake(bits = 4): RelayFake {
     },
   });
   relay.price = bits;
+  relay.checkCertificate = certificateChecks;
   return { relay, calls: [], strays: [] };
 }
 

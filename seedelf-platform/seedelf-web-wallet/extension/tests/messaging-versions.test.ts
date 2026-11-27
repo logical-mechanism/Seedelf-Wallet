@@ -105,9 +105,10 @@ describe("a relay stopped on purpose (W15, versions-upgrade#2)", { timeout: 60_0
     relay.calls.length = 0;
     await synced(alice);
     expect((await alice.messaging.overview("preprod")).paused).toBe(true);
-    // Written while paused: kept, never solved for, never posted.
+    // Written while paused: kept, never solved for, never posted. A first message isn't written (the review's second
+    // round, finding 6): its list read is refused, in words that say why.
     await alice.messaging.send("preprod", cid, "while it's stopped");
-    await alice.messaging.start("preprod", BOB_SEEDELF, "a first message too");
+    await expect(alice.messaging.start("preprod", BOB_SEEDELF, "a first message too")).rejects.toThrow("Messages are paused, so a first message can't be written now.");
     await alice.messaging.whenIdle();
     for (let tick = 0; tick < 720; tick++) {
       clock.now += 10_000;

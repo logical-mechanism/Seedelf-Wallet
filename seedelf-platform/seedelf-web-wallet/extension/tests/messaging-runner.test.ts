@@ -17,6 +17,7 @@ import {
   BOB_SEEDELF,
   busyFor,
   CAROL_SEEDELF,
+  certificateOf,
   clock,
   fileOf,
   type LogEntry,
@@ -43,10 +44,12 @@ const ALICE2 = "5eed0e1f00" + Buffer.from("alice2").toString("hex");
 async function refusedFirsts(x: World, n: number): Promise<void> {
   const wasm = loadTestWasm();
   const register = await another(x.a);
+  // A's certificate for that pair, made with both its keys (chunk 55's 55e): what W writes to, by A's messaging key.
+  const certificate = await certificateOf(x.a, ALICE2, register);
   const t = Math.floor(clock.now / 1000 / 600) * 600;
   await x.w.wallet.withKeys((keys) => {
     for (let i = 0; i < n; i++) {
-      const started = JSON.parse(wasm.messagingStart(keys.seedelf, JSON.stringify({ handle: register, to: ALICE2, now: t }))) as { conversation: string };
+      const started = JSON.parse(wasm.messagingStart(keys.messaging.preprod!, JSON.stringify({ network: "preprod", name: ALICE2, register, certificate, now: t }))) as { conversation: string };
       const stamped = JSON.parse(wasm.messagingSetStamp(JSON.stringify({ conversation: started.conversation, nonce: 0 }))) as { conversation: string };
       const sent = JSON.parse(wasm.messagingSend(JSON.stringify({ conversation: stamped.conversation, plaintext: "01" + i.toString(16).padStart(6, "0") }))) as {
         envelope: string;
