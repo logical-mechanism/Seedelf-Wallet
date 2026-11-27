@@ -9,11 +9,17 @@
 //! handle and the protocol's stamp work, and checks F and every header and
 //! inner message on the way. The continuation reads only beside the
 //! conversation it continues, which this reader doesn't have: it's refused.
+//!
+//! The responder's handle is rebuilt as the wallet builds its own: from the
+//! Seedelf the file records (its chain, name and datum register) and the
+//! responder's messaging key, through `Seedelf::handle`, and it must be the
+//! messaging register the file records, on the hashed base h_S.
 
 use serde_json::Value;
 
 use seedelf_messaging::session::{
-    ENVELOPE_SIZES, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle, Inbox, Received, open,
+    Chain, ENVELOPE_SIZES, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle, Inbox, Received,
+    Seedelf, open,
 };
 use seedelf_messaging::{Error, Register, SecretKey};
 
@@ -61,19 +67,44 @@ fn every_first_contact_message_reads_through_the_public_api() {
             first.stamp_digest().to_vec(),
             bytes(&session["stamp"]["digest"])
         );
-        let handles: Vec<Handle> = match &session["handle"] {
-            Value::Null => Vec::new(),
-            handle => vec![
-                Handle::new(
-                    first.to(),
-                    Register::from_bytes(
-                        &point(&handle["generator"]),
-                        &point(&handle["public_value"]),
-                    )
-                    .unwrap(),
+        let handles: Vec<Handle> = match &session["seedelf"] {
+            Value::Null => {
+                assert!(session["handle"].is_null());
+                Vec::new()
+            }
+            recorded_seedelf => {
+                let seedelf = recorded_seedelf;
+                let network = u8::try_from(seedelf["network"].as_u64().unwrap()).unwrap();
+                let chain =
+                    Chain::new(network, bytes(&seedelf["policy"]).try_into().unwrap()).unwrap();
+                let datum = Register::from_bytes(
+                    &point(&seedelf["generator"]),
+                    &point(&seedelf["public_value"]),
                 )
-                .unwrap(),
-            ],
+                .unwrap();
+                assert_eq!(bytes(&seedelf["name"]), first.to());
+                let seedelf_of = Seedelf::new(chain, first.to(), datum).unwrap();
+                let handle = seedelf_of.handle(&responder).unwrap();
+                let recorded = Register::from_bytes(
+                    &point(&session["handle"]["generator"]),
+                    &point(&session["handle"]["public_value"]),
+                )
+                .unwrap();
+                assert_eq!(*handle.register(), recorded);
+                assert_eq!(
+                    handle.register().generator_bytes().to_vec(),
+                    bytes(&seedelf["base"])
+                );
+                assert_eq!(
+                    handle.register().public_value_bytes().to_vec(),
+                    bytes(&seedelf["messaging_value"])
+                );
+                // On h_S, never the datum's generator; the initiator's key
+                // takes another register of the same Seedelf.
+                assert_ne!(handle.register().generator_bytes(), datum.generator_bytes());
+                assert_ne!(seedelf_of.handle(&initiator).unwrap(), handle);
+                vec![handle]
+            }
         };
 
         let mut inbox = Inbox::new();

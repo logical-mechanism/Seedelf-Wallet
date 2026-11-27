@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use super::support::{
-    HANDLE_NAME, Seeded, g, handle, handles, key, opened, stamp, start, test_bytes16, test_inbox,
-    test_scalar,
+    HANDLE_NAME, Seeded, certified, g, handle, handles, key, opened, own_handle, stamp, start,
+    test_bytes16, test_inbox, test_scalar,
 };
 use crate::keys::scalar_mod_q;
 use crate::register::{Register, matches_register, rerandomize_with};
@@ -208,7 +208,7 @@ fn on_another_header_key(
 fn e_a_a_and_s_a_on_another_register_are_refused_on_every_path() {
     let (alice, bob) = (key("alice"), key("bob"));
     let one = handle("bob", "one");
-    let mine = handles(&[one]);
+    let mine = handles(&[("bob", "one")]);
     for which in ["E_A", "A", "S_A"] {
         for (label, target) in targets("bob") {
             let path = |p: &str| format!("{which} on {label}, {p}");
@@ -817,7 +817,7 @@ fn the_reader_alone_makes_an_accepted_f_for_any_public_register_of_the_writer() 
         let envelope = readers_own_first_message(&bob, &bobs, p0, a, label);
         let mut inbox = test_inbox();
         let Ok(Received::Request { plaintext, .. }) =
-            inbox.receive(&bob, &handles(&[bobs]), &envelope, T)
+            inbox.receive(&bob, &handles(&[("bob", "h")]), &envelope, T)
         else {
             panic!("{label}: the reader's own first message is taken")
         };
@@ -903,19 +903,25 @@ fn unbound_first_message(mallory: &SecretKey, stale: &Register, target: &Registe
 
 /// The base proof binds p₀ only against a register of the reader's own key,
 /// since its other branch is that register's key: so the reader passes over
-/// a register of another key under one of its handles' names, one a Seedelf
-/// held before it came to this wallet, say. Before, one such register in the
-/// list let its key's holder prove that branch for any p₀, put p₀ on any
-/// register and simulate the keys proof's w₀ on its public value, and the
-/// reader took her first message exactly when that register was its key's
-/// (the 1.10.0 gate's crypto review of the keys). Now both are refused,
-/// silently, with nothing kept, and an honest first message still reads
-/// with that list.
+/// a register of another key under one of its handles' names. A wallet's
+/// own handles are its messaging key's whatever Seedelf they're of
+/// ([`Seedelf::handle`](crate::session::Seedelf::handle)), so only a
+/// handle another key's certificate names, listed by mistake, is one: here
+/// Mallory's, for a Seedelf of hers under the reader's name. Before, one such
+/// register in the list let its key's holder prove that branch for any p₀,
+/// put p₀ on any register and simulate the keys proof's w₀ on its public
+/// value, and the reader took her first message exactly when that register
+/// was its key's (the 1.10.0 gate's crypto review of the keys). Now both are
+/// refused, silently, with nothing kept, and an honest first message still
+/// reads with that list.
 #[test]
 fn a_register_of_another_key_under_the_readers_name_binds_no_base() {
     let (alice, mallory, bob) = (key("alice"), key("mallory"), key("bob"));
-    let (bobs, stale) = (handle("bob", "h"), handle("mallory", "stale"));
-    let listed = handles(&[bobs, stale]);
+    let bobs = handle("bob", "h");
+    let stale_handle = certified("mallory", "stale");
+    let stale = *stale_handle.register();
+    assert!(matches_register(&mallory, &stale));
+    let listed = vec![own_handle("bob", "h"), stale_handle];
     for (label, target, refusal) in [
         (
             "another register of the reader's",
@@ -1669,7 +1675,11 @@ fn honest_first_messages_still_read() {
     let mut inbox = test_inbox();
     for text in [&b"one"[..], b"two", b"three"] {
         let envelope = a.send_with(text, &mut draw).unwrap();
-        assert!(inbox.receive(&bob, &handles(&[bobs]), &envelope, T).is_ok());
+        assert!(
+            inbox
+                .receive(&bob, &handles(&[("bob", "h")]), &envelope, T)
+                .is_ok()
+        );
     }
     assert_eq!(
         inbox.requests().get(a.cid()).unwrap().read(&bob).unwrap(),

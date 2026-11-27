@@ -41,6 +41,9 @@ pub mod relay;
 pub mod session;
 #[cfg(test)]
 mod tests;
+// What the API refuses to compile, as doctests (compile_fail.rs).
+#[cfg(doctest)]
+mod compile_fail;
 
 pub use envelope::{
     ENVELOPE_OVERHEAD, Envelope, HEADER_LEN, MAX_PLAINTEXT_LEN, VERSION, decrypt_message,

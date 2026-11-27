@@ -14,14 +14,14 @@ use zeroize::Zeroizing;
 
 use super::ratchet::pair;
 use super::support::{
-    HANDLE_NAME, Seeded, TEST_BITS, handle, handles, key, opened, own_handles, stamp, start,
-    test_inbox, test_scalar,
+    HANDLE_NAME, Seeded, TEST_BITS, certified, handle, handle_named, handles, key, opened,
+    own_handles, stamp, start, start_to, test_inbox, test_scalar,
 };
 use crate::envelope::{derive_key_and_nonce, encrypt_message};
 use crate::register::{POINT_LEN, Register};
 use crate::relay::stamp_bits;
 use crate::session::conversation::{Conversation, Role};
-use crate::session::first_contact::{FIRST_CONTACT_STAMP_BITS, Handle};
+use crate::session::first_contact::FIRST_CONTACT_STAMP_BITS;
 use crate::session::inbox::{Inbox, Received};
 use crate::session::secret::Secret32;
 use crate::session::wire::{Opened, pad};
@@ -147,7 +147,7 @@ fn probes(reader: &str) -> [(Register, Error); 3] {
 fn an_envelope_whose_c_is_on_another_register_is_refused_on_every_path() {
     let (alice, bob) = (key("alice"), key("bob"));
     let named = handle("bob", "one");
-    let mine = handles(&[named]);
+    let mine = handles(&[("bob", "one")]);
     let mut draw = Seeded::new("c on every path");
     let mut a = start(&alice, &named, T, &mut draw);
     let cid = a.cid();
@@ -270,7 +270,7 @@ fn an_envelope_whose_c_is_on_another_register_is_refused_on_every_path() {
 fn an_envelope_whose_p_is_on_another_register_and_c_is_honest_is_refused() {
     let (alice, bob) = (key("alice"), key("bob"));
     let named = handle("bob", "one");
-    let mine = handles(&[named]);
+    let mine = handles(&[("bob", "one")]);
     let others = |reader: &str| {
         [
             handle(reader, "another register of the reader's"),
@@ -435,7 +435,7 @@ fn weak_nonce(digest: &[u8; 32], bits: u32) -> u64 {
 fn a_first_message_aimed_at_another_handle_is_refused() {
     let (alice, bob) = (key("alice"), key("bob"));
     let (one, two) = (handle("bob", "one"), handle("bob", "two"));
-    let bob_handles = handles(&[one, two]);
+    let bob_handles = handles(&[("bob", "one"), ("bob", "two")]);
     let mut draw = Seeded::new("aimed");
     let mut a = start(&alice, &one, T, &mut draw);
     let honest = a.send_with(b"hi", &mut draw).unwrap();
@@ -502,18 +502,19 @@ fn a_message_without_its_envelope_is_refused() {
 
 /// The base proof at the reader: `to` must name one of the reader's handles
 /// (else [`Error::UnknownHandle`]), and the proof must verify against one of
-/// that name's registers (else [`Error::InvalidBaseProof`]). A name may come
-/// with several registers, every one the wallet knows; any of them will do.
+/// that name's messaging registers (else [`Error::InvalidBaseProof`]). A
+/// name may come with several, one for each register its Seedelf has held,
+/// each on its own hashed base; any of them will do. The writer takes its
+/// handle from the Seedelf's certificate.
 #[test]
 fn the_reader_checks_the_proof_against_its_named_handles() {
     let (alice, bob) = (key("alice"), key("bob"));
-    let (current, earlier) = (handle("bob", "now"), handle("bob", "before"));
-    let mut draw = Seeded::new("named");
-    let mut a = start(&alice, &earlier, T, &mut draw);
-    let envelope = a.send_with(b"hi", &mut draw).unwrap();
+    let earlier = certified("bob", "before");
+    let mut a = start_to(&alice, &earlier, T);
+    let envelope = a.send(b"hi").unwrap();
     let mut inbox = test_inbox();
-    // Not a name Bob has.
-    let other_name = [Handle::new(b"another name", earlier).unwrap()];
+    // Not a name Bob has: the same Seedelf's register under another name.
+    let other_name = [handle_named("bob", "before", b"another name")];
     assert_eq!(
         inbox.receive(&bob, &other_name, &envelope, T),
         Err(Error::UnknownHandle)
@@ -524,13 +525,18 @@ fn the_reader_checks_the_proof_against_its_named_handles() {
     );
     // His name, but only another register under it.
     assert_eq!(
-        inbox.receive(&bob, &handles(&[current]), &envelope, T),
+        inbox.receive(&bob, &handles(&[("bob", "now")]), &envelope, T),
         Err(Error::InvalidBaseProof)
     );
     assert!(inbox.requests().is_empty());
     // The register written to, among others under the name.
     assert!(matches!(
-        inbox.receive(&bob, &handles(&[current, earlier]), &envelope, T),
+        inbox.receive(
+            &bob,
+            &handles(&[("bob", "now"), ("bob", "before")]),
+            &envelope,
+            T
+        ),
         Ok(Received::Request { new: true, .. })
     ));
 }
@@ -549,7 +555,12 @@ fn a_base_on_the_sum_of_two_handles_is_refused() {
     let envelope = a.send_with(b"are you both?", &mut draw).unwrap();
     let mut inbox = test_inbox();
     assert_eq!(
-        inbox.receive(&bob, &handles(&[one, two]), &envelope, T),
+        inbox.receive(
+            &bob,
+            &handles(&[("bob", "one"), ("bob", "two")]),
+            &envelope,
+            T
+        ),
         Err(Error::InvalidBaseProof)
     );
     assert!(inbox.requests().is_empty());

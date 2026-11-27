@@ -1,6 +1,12 @@
-//! The verified reveal (docs/protocol.md §19): who may make and take one, its
-//! bytes, every way a reveal fails, the reader's own forgery that keeps it
-//! deniable, and the vectors (tests/vectors/messaging_reveal_v1.json).
+//! The verified reveal (docs/protocol.md §19, as §21.9 makes it): who may
+//! make and take one, its bytes, every way a reveal fails, the reader's own
+//! forgery that keeps it deniable, and the vectors
+//! (tests/vectors/messaging_reveal_v1.json).
+//!
+//! A reveal shows a Seedelf (its chain, name and datum register (g_S, u_S),
+//! the Seedelf key x's) and proves its messaging register M_S = (h_S, m_S),
+//! the messaging key x_m's, on the base h_S the reader computes from the
+//! Seedelf under its own chain. x makes no part of it.
 
 use std::path::PathBuf;
 
@@ -9,16 +15,19 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, Stuck, handle, identity, key, off_curve, opened, outside_g1, start};
+use super::support::{
+    Seeded, Stuck, datum_register, handle, identity, key, off_curve, opened, outside_g1, spend_key,
+    start, test_chain, test_policy,
+};
 use crate::keys::scalar_mod_q;
-use crate::register::Register;
+use crate::register::{Register, matches_register};
 use crate::session::conversation::Conversation;
 use crate::session::draw::{Draw, hedge_okm};
-use crate::session::first_contact::Handle;
 use crate::session::reveal::{
     BRANCH_READER, BRANCH_SEEDELF, Commitments, REVEAL_LABEL, REVEAL_MAX_LEN, REVEAL_MIN_LEN,
     REVEAL_NONCE_LABEL, Reveal, RevealProof, Statement,
 };
+use crate::session::seedelf::{Chain, HANDLE_BASE_DST, Handle, NETWORK_MAINNET, Seedelf};
 use crate::{Error, SecretKey};
 
 const VECTORS: &str = "tests/vectors/messaging_reveal_v1.json";
@@ -73,14 +82,42 @@ fn seedelf_name(tag: &str) -> Vec<u8> {
     name
 }
 
-fn seedelf(name: &[u8], register: Register) -> Handle {
-    Handle::new(name, register).unwrap()
+/// A Seedelf under the tests' chain.
+fn seedelf(name: &[u8], register: Register) -> Seedelf {
+    Seedelf::new(test_chain(), name, register).unwrap()
 }
 
-/// The register a Seedelf of `key_label`'s holds, under its own generator.
+/// The datum register a Seedelf of `key_label`'s holds, under its own
+/// generator: its Seedelf key's, never its messaging key's.
 fn seedelf_register(key_label: &str) -> Register {
-    handle(key_label, &format!("{key_label}'s seedelf"))
+    datum_register(key_label, &format!("{key_label}'s seedelf"))
 }
+
+/// `key_label`'s Seedelf under its full name, and its handle, M_S with
+/// `key_label`'s messaging key: what that wallet reveals.
+fn seedelf_handle(key_label: &str) -> Handle {
+    seedelf(&seedelf_name(key_label), seedelf_register(key_label))
+        .handle(&key(key_label))
+        .unwrap()
+}
+
+/// A reveal from its bytes, read under the tests' chain.
+fn read(bytes: &[u8]) -> Result<Reveal, Error> {
+    Reveal::from_bytes(&test_chain(), bytes)
+}
+
+/// `bytes` with `value` written at `at`.
+fn with_bytes(bytes: &[u8], at: usize, value: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    out[at..at + value.len()].copy_from_slice(value);
+    out
+}
+
+/// Where a reveal of a 32-byte name holds g_S, u_S, m_S and the proof.
+const G_AT: usize = 1 + 32;
+const U_AT: usize = G_AT + 48;
+const M_AT: usize = U_AT + 48;
+const PROOF_AT: usize = M_AT + 48;
 
 /// The reader's own reveal of any Seedelf: branch 2 proved with its key `y`,
 /// branch 1 simulated. Draws `c₁`, then `z₁`, then `aux`, and derives `k₂`
@@ -150,7 +187,7 @@ fn parties(label: &str) -> Parties {
 }
 
 fn alices_seedelf() -> Handle {
-    seedelf(&seedelf_name("alice"), seedelf_register("alice"))
+    seedelf_handle("alice")
 }
 
 #[test]
@@ -159,24 +196,35 @@ fn the_initiator_reveals_once_answered_and_the_reader_checks_it() {
     let shown = alices_seedelf();
     let reveal = p.a.reveal(&p.alice, &shown).unwrap();
     assert_eq!(reveal.name(), shown.name());
-    assert_eq!(reveal.register(), shown.register());
+    assert_eq!(reveal.handle(), &shown);
+    assert_eq!(reveal.register(), shown.seedelf().register());
+    assert_eq!(reveal.messaging_register(), shown.register());
+    // Two keys: the Seedelf's register is the Seedelf key's, the messaging
+    // register the messaging key's, and neither is the other's.
+    assert!(matches_register(&spend_key("alice"), reveal.register()));
+    assert!(matches_register(&p.alice, reveal.messaging_register()));
+    assert!(!matches_register(&p.alice, reveal.register()));
+    assert!(!matches_register(
+        &spend_key("alice"),
+        reveal.messaging_register()
+    ));
     let bytes = reveal.to_bytes();
     assert_eq!(bytes.len(), REVEAL_MAX_LEN);
-    let read = Reveal::from_bytes(&bytes).unwrap();
-    assert_eq!(read, reveal);
-    assert_eq!(p.b.verify_reveal(&read), Ok(()));
+    let read_back = read(&bytes).unwrap();
+    assert_eq!(read_back, reveal);
+    assert_eq!(p.b.verify_reveal(&read_back), Ok(()));
     // A fresh proof each time, each verifying.
     let again = p.a.reveal(&p.alice, &shown).unwrap();
     assert_ne!(again.to_bytes(), bytes);
     assert_eq!(p.b.verify_reveal(&again), Ok(()));
-    // Any register of the key: the root one under a 1-byte name, the shortest.
-    let root = seedelf(b"a", p.alice.register());
+    // Any Seedelf of the wallet's: one at the Seedelf key's root register
+    // under a 1-byte name, the shortest.
+    let root = seedelf(b"a", spend_key("alice").register())
+        .handle(&p.alice)
+        .unwrap();
     let short = p.a.reveal(&p.alice, &root).unwrap().to_bytes();
     assert_eq!(short.len(), REVEAL_MIN_LEN);
-    assert_eq!(
-        p.b.verify_reveal(&Reveal::from_bytes(&short).unwrap()),
-        Ok(())
-    );
+    assert_eq!(p.b.verify_reveal(&read(&short).unwrap()), Ok(()));
 }
 
 #[test]
@@ -190,7 +238,7 @@ fn only_the_initiator_reveals_and_only_once_a_reply_has_decrypted() {
         Some(Error::RevealNotAllowed)
     );
     let p = parties("reveal by the responder");
-    let bobs = seedelf(&seedelf_name("bob"), seedelf_register("bob"));
+    let bobs = seedelf_handle("bob");
     assert_eq!(
         p.b.reveal(&p.bob, &bobs).err(),
         Some(Error::RevealNotAllowed)
@@ -201,16 +249,35 @@ fn only_the_initiator_reveals_and_only_once_a_reply_has_decrypted() {
 fn a_reveal_names_a_seedelf_of_the_key_and_the_key_is_the_conversations() {
     let p = parties("reveal of another's");
     // Bob's Seedelf, which Alice's key doesn't hold.
-    let bobs = seedelf(&seedelf_name("bob"), seedelf_register("bob"));
+    let bobs = seedelf_handle("bob");
     assert_eq!(
         p.a.reveal(&p.alice, &bobs).err(),
         Some(Error::NotForThisKey)
     );
     // Carol's key, which isn't this conversation's, with Carol's own Seedelf.
     let carol = key("carol");
-    let carols = seedelf(&seedelf_name("carol"), seedelf_register("carol"));
+    let carols = seedelf_handle("carol");
     assert_eq!(
         p.a.reveal(&carol, &carols).err(),
+        Some(Error::NotForThisKey)
+    );
+    // Alice's own Seedelf, with a messaging register that isn't her
+    // messaging key's: taken with her Seedelf key, the wrong one of her two.
+    let alice_spend = spend_key("alice");
+    let on_the_seedelf_key = seedelf(&seedelf_name("alice"), seedelf_register("alice"))
+        .handle(&alice_spend)
+        .unwrap();
+    assert_eq!(
+        p.a.reveal(&p.alice, &on_the_seedelf_key).err(),
+        Some(Error::NotForThisKey)
+    );
+    // And the Seedelf key in the messaging key's place: A isn't its.
+    assert_eq!(
+        p.a.reveal(&alice_spend, &on_the_seedelf_key).err(),
+        Some(Error::NotForThisKey)
+    );
+    assert_eq!(
+        p.a.reveal(&alice_spend, &alices_seedelf()).err(),
         Some(Error::NotForThisKey)
     );
 }
@@ -223,7 +290,7 @@ fn the_initiator_takes_no_reveal() {
     // Bob could make one for any Seedelf with his own key: at Alice's side, it
     // would verify, and prove nothing.
     let mut draw = Seeded::new("forged at the initiator");
-    let bobs = seedelf(&seedelf_name("bob"), seedelf_register("bob"));
+    let bobs = seedelf_handle("bob");
     let (forged, _) = forge(&p.b, &p.bob.scalar(), &bobs, &mut draw);
     assert_eq!(p.b.verify_reveal(&forged), Ok(()));
     assert_eq!(p.a.verify_reveal(&forged), Err(Error::RevealNotAllowed));
@@ -234,10 +301,10 @@ fn the_reader_can_make_one_itself_so_it_convinces_no_one_else() {
     let p = parties("reveal forged");
     let mut draw = Seeded::new("forged by the reader");
     // Carol's Seedelf, which neither side holds.
-    let carols = seedelf(&seedelf_name("carol"), seedelf_register("carol"));
+    let carols = seedelf_handle("carol");
     let (forged, _) = forge(&p.b, &p.bob.scalar(), &carols, &mut draw);
-    let read = Reveal::from_bytes(&forged.to_bytes()).unwrap();
-    assert_eq!(p.b.verify_reveal(&read), Ok(()));
+    let read_back = read(&forged.to_bytes()).unwrap();
+    assert_eq!(p.b.verify_reveal(&read_back), Ok(()));
     // Without the reader's key, the same simulation doesn't verify.
     let (wrong, _) = forge(&p.b, &key("mallory").scalar(), &carols, &mut draw);
     assert_eq!(p.b.verify_reveal(&wrong), Err(Error::InvalidReveal));
@@ -248,7 +315,7 @@ fn a_proof_with_the_wrong_witness_fails() {
     let p = parties("reveal wrong witness");
     let mut draw = Seeded::new("wrong witness");
     // Alice's key for Bob's Seedelf: branch 1's relation doesn't hold.
-    let bobs = seedelf(&seedelf_name("bob"), seedelf_register("bob"));
+    let bobs = seedelf_handle("bob");
     let (proof, _) = Statement::of(&p.a, &bobs).prove_seedelf(&p.alice.scalar(), &mut draw);
     let reveal = Reveal {
         seedelf: bobs,
@@ -270,23 +337,60 @@ fn a_reveal_is_bound_to_its_conversation_name_and_register() {
         "reveal bound, another",
     );
     assert_eq!(other.verify_reveal(&reveal), Err(Error::InvalidReveal));
-    // Another name with the same register.
-    let mut renamed = reveal.clone();
+    let bytes = reveal.to_bytes();
+    // Another name with the same registers, as the reader reads it: h_S is
+    // the new name's, so m_S is on no base the proof is for.
     let mut name = shown.name().to_vec();
     name[31] ^= 1;
-    renamed.seedelf = seedelf(&name, *shown.register());
-    assert_eq!(p.b.verify_reveal(&renamed), Err(Error::InvalidReveal));
-    // Another register of the same key, under the same name.
-    let mut moved = reveal.clone();
-    let two = Scalar::from(2u64);
-    moved.seedelf = seedelf(
-        shown.name(),
-        Register::from_checked(
-            (shown.register().generator() * two).to_affine(),
-            (shown.register().public_value() * two).to_affine(),
-        ),
+    let renamed = read(&with_bytes(&bytes, 1 + 31, &name[31..])).unwrap();
+    assert_eq!(renamed.name(), &name[..]);
+    assert_eq!(renamed.register(), reveal.register());
+    assert_ne!(
+        renamed.messaging_register().generator_bytes(),
+        reveal.messaging_register().generator_bytes()
     );
+    assert_eq!(p.b.verify_reveal(&renamed), Err(Error::InvalidReveal));
+    // The renamed Seedelf with its own messaging register, the key's: the
+    // proof is another statement's.
+    let renamed_own = Reveal {
+        seedelf: seedelf(&name, *shown.seedelf().register())
+            .handle(&p.alice)
+            .unwrap(),
+        proof: reveal.proof,
+    };
+    assert_eq!(p.b.verify_reveal(&renamed_own), Err(Error::InvalidReveal));
+    // Another register of the same key, under the same name: [2](g_S, u_S),
+    // with m_S kept, and with the moved Seedelf's own.
+    let two = Scalar::from(2u64);
+    let datum = shown.seedelf().register();
+    let moved_register = Register::from_checked(
+        (datum.generator() * two).to_affine(),
+        (datum.public_value() * two).to_affine(),
+    );
+    let moved = read(&with_bytes(&bytes, G_AT, &moved_register.to_bytes())).unwrap();
+    assert_eq!(moved.register(), &moved_register);
     assert_eq!(p.b.verify_reveal(&moved), Err(Error::InvalidReveal));
+    let moved_own = Reveal {
+        seedelf: seedelf(shown.name(), moved_register)
+            .handle(&p.alice)
+            .unwrap(),
+        proof: reveal.proof,
+    };
+    assert_eq!(p.b.verify_reveal(&moved_own), Err(Error::InvalidReveal));
+    // Another m_S on the same h_S: [2]m_S, whose log isn't A's.
+    let doubled = (shown.register().public_value() * two).to_compressed();
+    let other_m = read(&with_bytes(&bytes, M_AT, &doubled)).unwrap();
+    assert_eq!(p.b.verify_reveal(&other_m), Err(Error::InvalidReveal));
+    // Read under another chain: another h_S.
+    let mut policy = test_policy();
+    policy[0] ^= 1;
+    for chain in [
+        Chain::new(NETWORK_MAINNET, test_policy()).unwrap(),
+        Chain::new(test_chain().network(), policy).unwrap(),
+    ] {
+        let elsewhere = Reveal::from_bytes(&chain, &bytes).unwrap();
+        assert_eq!(p.b.verify_reveal(&elsewhere), Err(Error::InvalidReveal));
+    }
     // Each share and response moved.
     let one = Scalar::from(1u64);
     let changes: [fn(&mut RevealProof, Scalar); 6] = [
@@ -305,10 +409,11 @@ fn a_reveal_is_bound_to_its_conversation_name_and_register() {
 }
 
 /// Cross-protocol (docs/joint-security.md, B5). A reveal holds two Schnorr
-/// transcripts under the key x, with one share c₁ and one response z₁:
-/// (T₁, c₁, z₁) on (p₀, A), and (T₁′, c₁, z₁) on the Seedelf's own register
-/// (g_S, u_S), as it stands on chain. Each passes a spending verifier only if
-/// that verifier's own challenge is c₁. What this shows, of three reveals
+/// transcripts under the messaging key x_m, with one share c₁ and one
+/// response z₁: (T₁, c₁, z₁) on (p₀, A), and (T₁′, c₁, z₁) on the Seedelf's
+/// messaging register (h_S, m_S). x makes none (docs/protocol.md §21.9), but
+/// a register of x_m can still be paid by another tool, so each must pass a
+/// spending verifier only if that verifier's own challenge is c₁. What this shows, of three reveals
 /// (the initiator's, made with x, and two the reader makes itself, whose
 /// branch 1 is simulated, of the same Seedelf and of one neither side holds):
 ///
@@ -323,7 +428,7 @@ fn a_reveal_is_bound_to_its_conversation_name_and_register() {
 /// - **The verifiers, run:** seedelf-crypto's, the chain's among them and
 ///   Lovejoin's owner proof, refuse each transcript for its register and for
 ///   two [d] of it with [d]T, under three vkhs, while taking a spending proof
-///   made with x for the same registers.
+///   made with x_m for the same registers.
 ///
 /// What it doesn't show: anything of the reveal's own challenge, its hash,
 /// label or what it covers. With that hash changed this still passes, as it
@@ -339,18 +444,18 @@ fn the_spending_verifiers_refuse_a_reveals_transcripts_and_its_share_is_none_of_
     let p = parties("reveal cross protocol");
     let mut draw = Seeded::new("reveal cross protocol, the reader's own");
     let shown = alices_seedelf();
-    let carols = seedelf(&seedelf_name("carol"), seedelf_register("carol"));
+    let carols = seedelf_handle("carol");
     let hex_point = |point: &G1Projective| hex(point.to_compressed());
     let vkhs = ["00".repeat(28), "11".repeat(28), "5eed".repeat(14)];
 
     // The chain's verifier is asked as a spend asks it: a spending proof
-    // made with x for either register passes.
+    // made with x_m for either register passes.
     let (base, initiator) = (p.a.first.base.into(), p.a.first.initiator.into());
-    let (g_s, u_s) = (
+    let (h_s, m_s) = (
         shown.register().generator(),
         shown.register().public_value(),
     );
-    for (g, u) in [(g_s, u_s), (base, initiator)] {
+    for (g, u) in [(h_s, m_s), (base, initiator)] {
         let register = seedelf_crypto::register::Register::new(hex_point(&g), hex_point(&u));
         let (z, t) = create_proof(register, p.alice.scalar(), vkhs[0].clone()).unwrap();
         assert!(prove(&hex_point(&g), &hex_point(&u), &z, &t, &vkhs[0]).unwrap());
@@ -368,8 +473,8 @@ fn the_spending_verifiers_refuse_a_reveals_transcripts_and_its_share_is_none_of_
     for reveal in reveals {
         assert_eq!(p.b.verify_reveal(&reveal), Ok(()));
         // The commitments as anyone holding the reveal works them out:
-        // T₁ = [z₁]p₀ − [c₁]A and T₁′ = [z₁]g_S − [c₁]u_S.
-        let statement = Statement::of(&p.b, reveal.seedelf());
+        // T₁ = [z₁]p₀ − [c₁]A and T₁′ = [z₁]h_S − [c₁]m_S.
+        let statement = Statement::of(&p.b, reveal.handle());
         let commitments = statement.commitments_of(&reveal.proof);
         let (c1, z1) = (reveal.proof.c1, reveal.proof.z1);
         // The share: part of the reveal's challenge, never all of it, and
@@ -382,7 +487,7 @@ fn the_spending_verifiers_refuse_a_reveals_transcripts_and_its_share_is_none_of_
             c1.to_bytes_be() >= chain_space,
             "a share below 2²²⁴: one reveal in 2³⁰ has one, so draw under another label"
         );
-        let register = reveal.register();
+        let register = reveal.messaging_register();
         let transcripts = [
             (
                 register.generator(),
@@ -437,7 +542,7 @@ fn no_single_bit_changed_reads_as_a_reveal() {
     for i in 0..bytes.len() * 8 {
         let mut changed = bytes.clone();
         changed[i / 8] ^= 1 << (i % 8);
-        let verdict = Reveal::from_bytes(&changed).and_then(|r| p.b.verify_reveal(&r));
+        let verdict = read(&changed).and_then(|r| p.b.verify_reveal(&r));
         assert!(verdict.is_err(), "bit {i} changed still verifies");
     }
 }
@@ -447,22 +552,16 @@ fn reveals_that_dont_parse_are_refused() {
     let p = parties("reveal parse");
     let bytes = p.a.reveal(&p.alice, &alices_seedelf()).unwrap().to_bytes();
     for (case, expected) in malformed(&bytes) {
-        assert_eq!(
-            Reveal::from_bytes(&case.1).err(),
-            Some(expected),
-            "{}",
-            case.0
-        );
+        assert_eq!(read(&case.1).err(), Some(expected), "{}", case.0);
     }
-    assert_eq!(Reveal::from_bytes(&[]).err(), Some(Error::InvalidMessage));
+    assert_eq!(read(&[]).err(), Some(Error::InvalidMessage));
 }
 
 /// A reveal's bytes broken each way parsing refuses, with what it's refused
 /// as. `bytes` names a 32-byte Seedelf.
 fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
     let name_end = 1 + 32;
-    let (g_at, u_at) = (name_end, name_end + 48);
-    let proof_at = u_at + 48;
+    let (g_at, u_at, m_at, proof_at) = (G_AT, U_AT, M_AT, PROOF_AT);
     let q: [u8; 32] = hex::decode(GROUP_ORDER).unwrap().try_into().unwrap();
     let with = |at: usize, value: &[u8]| {
         let mut out = bytes.to_vec();
@@ -494,6 +593,11 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
     };
     let mut u_off_then_longer = with(u_at, &off_curve());
     u_off_then_longer.push(0);
+    let m_off_then_c1 = {
+        let mut out = with(m_at, &off_curve());
+        out[proof_at..proof_at + 32].copy_from_slice(&q);
+        out
+    };
     // g_S as it is, but without the compression flag.
     let mut uncompressed_flag = bytes.to_vec();
     uncompressed_flag[g_at] &= 0x7f;
@@ -519,6 +623,22 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
         ),
         (
             ("g_S off the curve", with(g_at, &off_curve())),
+            Error::InvalidEncoding,
+        ),
+        (
+            ("m_S outside G1", with(m_at, &outside_g1())),
+            Error::NotInSubgroup,
+        ),
+        (
+            ("m_S the identity", with(m_at, &identity())),
+            Error::IdentityPoint,
+        ),
+        (
+            ("m_S off the curve", with(m_at, &off_curve())),
+            Error::InvalidEncoding,
+        ),
+        (
+            ("m_S with x not below p", with(m_at, &x_is_p)),
             Error::InvalidEncoding,
         ),
         (("an empty name", empty_name), Error::InvalidMessage),
@@ -571,6 +691,13 @@ fn malformed(bytes: &[u8]) -> Vec<((&'static str, Vec<u8>), Error)> {
             ),
             Error::InvalidEncoding,
         ),
+        (
+            (
+                "m_S off the curve and c₁ not below q: m_S is read before the proof",
+                m_off_then_c1,
+            ),
+            Error::InvalidEncoding,
+        ),
     ]
 }
 
@@ -602,12 +729,26 @@ fn a_stuck_random_source_still_gives_each_statement_its_own_nonce() {
 
     // Another Seedelf, another register of it, another conversation: each
     // another nonce.
-    let root = seedelf(b"a", p.alice.register());
+    let root = seedelf(b"a", spend_key("alice").register())
+        .handle(&p.alice)
+        .unwrap();
     assert_ne!(k, nonce(&p.a, &root, &x, &mut stuck()), "another Seedelf");
     let mut renamed_name = shown.name().to_vec();
     renamed_name[31] ^= 1;
-    let renamed = seedelf(&renamed_name, *shown.register());
+    let renamed = seedelf(&renamed_name, *shown.seedelf().register())
+        .handle(&p.alice)
+        .unwrap();
     assert_ne!(k, nonce(&p.a, &renamed, &x, &mut stuck()), "another name");
+    // The same Seedelf read under another chain: another h_S and m_S.
+    let mainnet = Seedelf::new(
+        Chain::new(NETWORK_MAINNET, test_policy()).unwrap(),
+        shown.name(),
+        *shown.seedelf().register(),
+    )
+    .unwrap()
+    .handle(&p.alice)
+    .unwrap();
+    assert_ne!(k, nonce(&p.a, &mainnet, &x, &mut stuck()), "another chain");
     let (other, _) = answered(
         &p.alice,
         &p.bob,
@@ -650,9 +791,11 @@ fn a_stuck_random_source_still_gives_each_statement_its_own_nonce() {
     );
 }
 
-/// The nonce is the HMAC's 64 bytes reduced mod q, and the message is
-/// exactly the label, the branch, the statement, c, z and aux: the
-/// commitment the proof publishes is [k₁]p₀ for that k₁.
+/// The nonce is the HMAC's 64 bytes reduced mod q, keyed by the messaging
+/// key, and the message is exactly the label, the branch, the statement
+/// (cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ N ‖ g_S ‖ u_S ‖ h_S ‖ m_S, §21.9), c, z and aux: the
+/// commitments the proof publishes are [k₁]p₀ and [k₁]h_S for that k₁, with
+/// h_S the hash of the Seedelf, never g_S.
 #[test]
 fn the_nonce_is_hmac_sha512_of_the_statement_under_the_key() {
     let p = parties("reveal nonce");
@@ -672,7 +815,9 @@ fn the_nonce_is_hmac_sha512_of_the_statement_under_the_key() {
     }
     expected.push(shown.name().len() as u8);
     expected.extend_from_slice(shown.name());
-    expected.extend_from_slice(&shown.register().to_bytes());
+    expected.extend_from_slice(&shown.seedelf().register().to_bytes());
+    expected.extend_from_slice(&shown.register().generator_bytes());
+    expected.extend_from_slice(&shown.register().public_value_bytes());
     expected.extend_from_slice(&c2.to_bytes_be());
     expected.extend_from_slice(&z2.to_bytes_be());
     expected.extend_from_slice(&aux);
@@ -682,6 +827,19 @@ fn the_nonce_is_hmac_sha512_of_the_statement_under_the_key() {
     assert_eq!(
         commitments.t1,
         (G1Projective::from(p.a.first.base) * k).to_affine()
+    );
+    // h_S from the hash, its message built here from §21.3.
+    let mut base_message = vec![test_chain().network()];
+    base_message.extend_from_slice(&test_policy());
+    base_message.push(shown.name().len() as u8);
+    base_message.extend_from_slice(shown.name());
+    base_message.extend_from_slice(&shown.seedelf().register().to_bytes());
+    let h_s = G1Projective::hash_to_curve(&base_message, HANDLE_BASE_DST, &[]);
+    assert_eq!(shown.register().generator(), h_s);
+    assert_eq!(commitments.t1_seedelf, (h_s * k).to_affine());
+    assert_ne!(
+        commitments.t1_seedelf,
+        (shown.seedelf().register().generator() * k).to_affine()
     );
 }
 
@@ -704,19 +862,84 @@ fn a_reveal_fits_a_session_message() {
     let mut plaintext = vec![KIND_REVEAL];
     plaintext.extend_from_slice(&a.reveal(&p.alice, &alices_seedelf()).unwrap().to_bytes());
     let envelope = a.send(&plaintext).unwrap();
-    // 257 bytes and the kind byte, padded as every message is to its
-    // first-contact form, F and 97 bytes more: 865 inner bytes, a 2 KiB
-    // envelope. Every reveal is: 227 to 258 bytes with F + 97's 379 to 635
-    // is 606 to 893, over 512 bytes' 366 and within 2 KiB's 1,902.
+    // 305 bytes and the kind byte, padded as every message is to its
+    // first-contact form, F and 97 bytes more: 913 inner bytes, a 2 KiB
+    // envelope. Every reveal is: 275 to 306 bytes with F + 97's 379 to 635
+    // is 654 to 941, over 512 bytes' 366 and within 2 KiB's 1,902.
     assert_eq!(a.first_bytes.len(), 510);
     assert_eq!(envelope.len(), 2048);
     let mut b = p.b.clone();
     let read = b.receive(&opened(&p.bob, &envelope), NOW + 120).unwrap();
     assert_eq!(read, plaintext);
-    assert_eq!(
-        b.verify_reveal(&Reveal::from_bytes(&read[1..]).unwrap()),
-        Ok(())
-    );
+    assert_eq!(b.verify_reveal(&self::read(&read[1..]).unwrap()), Ok(()));
+}
+
+/// A reveal is read under the reader's chain, which h_S comes from: one
+/// made for a Seedelf on one chain doesn't verify read under another, by
+/// network or by policy, though its bytes parse.
+#[test]
+fn a_reveal_made_under_one_chain_doesnt_verify_under_another() {
+    let p = parties("reveal chains");
+    let mut policy = test_policy();
+    policy[27] ^= 0x80;
+    let chains = [
+        test_chain(),
+        Chain::new(NETWORK_MAINNET, test_policy()).unwrap(),
+        Chain::new(test_chain().network(), policy).unwrap(),
+    ];
+    for (i, made) in chains.iter().enumerate() {
+        let shown = Seedelf::new(*made, &seedelf_name("alice"), seedelf_register("alice"))
+            .unwrap()
+            .handle(&p.alice)
+            .unwrap();
+        let bytes = p.a.reveal(&p.alice, &shown).unwrap().to_bytes();
+        for (j, reader) in chains.iter().enumerate() {
+            let reveal = Reveal::from_bytes(reader, &bytes).unwrap();
+            assert_eq!(reveal.handle().seedelf().chain(), reader);
+            let verdict = p.b.verify_reveal(&reveal);
+            if i == j {
+                assert_eq!(verdict, Ok(()), "made and read under chain {i}");
+                assert_eq!(reveal.handle(), &shown);
+            } else {
+                assert_eq!(
+                    verdict,
+                    Err(Error::InvalidReveal),
+                    "made under chain {i}, read under {j}"
+                );
+            }
+        }
+    }
+}
+
+/// A reveal is `len ‖ N ‖ g_S ‖ u_S ‖ m_S ‖ c₁ ‖ c₂ ‖ z₁ ‖ z₂`: 273 bytes
+/// and its name's, 274 to 305 (docs/protocol.md §21.9).
+#[test]
+fn a_reveals_bytes_are_its_seedelf_its_messaging_value_and_its_proof() {
+    assert_eq!((REVEAL_MIN_LEN, REVEAL_MAX_LEN), (274, 305));
+    let p = parties("reveal lengths");
+    for len in [1usize, 2, 16, 31, 32] {
+        let name = &seedelf_name("alice")[..len];
+        let shown = seedelf(name, seedelf_register("alice"))
+            .handle(&p.alice)
+            .unwrap();
+        let reveal = p.a.reveal(&p.alice, &shown).unwrap();
+        let bytes = reveal.to_bytes();
+        assert_eq!(bytes.len(), 273 + len);
+        let mut expected = vec![len as u8];
+        expected.extend_from_slice(name);
+        expected.extend_from_slice(&shown.seedelf().register().to_bytes());
+        expected.extend_from_slice(&shown.register().public_value_bytes());
+        for scalar in [
+            reveal.proof.c1,
+            reveal.proof.c2,
+            reveal.proof.z1,
+            reveal.proof.z2,
+        ] {
+            expected.extend_from_slice(&scalar.to_bytes_be());
+        }
+        assert_eq!(bytes, expected);
+        assert_eq!(p.b.verify_reveal(&read(&bytes).unwrap()), Ok(()));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +958,29 @@ pub(crate) fn code(error: Error) -> &'static str {
         Error::IdentityPoint => "identity_point",
         other => panic!("no vector refuses with {other:?}"),
     }
+}
+
+fn chain_json(chain: &Chain) -> Value {
+    json!({ "network": chain.network(), "policy": hex(chain.policy()) })
+}
+
+/// A Seedelf and its messaging register as a reveal names it, with the
+/// messaging key of the wallet whose handle it is: the datum register
+/// (g_S, u_S), h_S as the hash gives it and m_S = [x_m]h_S.
+fn seedelf_json(shown: &Handle, owner: &SecretKey) -> Value {
+    let seedelf = shown.seedelf();
+    assert_eq!(&seedelf.handle(owner).unwrap(), shown);
+    json!({
+        "network": seedelf.chain().network(),
+        "policy": hex(seedelf.chain().policy()),
+        "name": hex(seedelf.name()),
+        "generator": hex(seedelf.register().generator_bytes()),
+        "public_value": hex(seedelf.register().public_value_bytes()),
+        "base_message": hex(seedelf.base_message()),
+        "base": hex(shown.register().generator_bytes()),
+        "messaging_value": hex(shown.register().public_value_bytes()),
+        "messaging_secret_key": hex(owner.scalar().to_bytes_be()),
+    })
 }
 
 fn conversation_json(
@@ -791,6 +1037,7 @@ fn reveal_json(
     name: &str,
     conversation: usize,
     made_by: &str,
+    owner: &SecretKey,
     draws: Value,
     nonce: Value,
     statement: &Statement<'_>,
@@ -810,11 +1057,8 @@ fn reveal_json(
         "name": name,
         "conversation": conversation,
         "made_by": made_by,
-        "seedelf": {
-            "name": hex(reveal.name()),
-            "generator": hex(reveal.register().generator_bytes()),
-            "public_value": hex(reveal.register().public_value_bytes()),
-        },
+        "seedelf": seedelf_json(reveal.handle(), owner),
+        "statement": hex(statement.to_bytes()),
         "draws": draws,
         "nonce": nonce,
         "commitments": {
@@ -840,34 +1084,55 @@ fn draws_json(names: [&str; 3], drawn: Vec<Vec<u8>>) -> Value {
     json!({ names[0]: hex(&drawn[0]), names[1]: hex(&drawn[1]), names[2]: hex(&drawn[2]) })
 }
 
+/// A check: the reveal read under `chain` at `side` of `conversation`.
 fn check(
     name: &str,
     conversation: usize,
     side: &str,
+    chain: &Chain,
     reveal: &[u8],
     sides: &[(&Conversation, &Conversation)],
 ) -> Value {
     let (a, b) = sides[conversation];
     let at = if side == "initiator" { a } else { b };
-    let result = match Reveal::from_bytes(reveal).and_then(|r| at.verify_reveal(&r)) {
+    let result = match Reveal::from_bytes(chain, reveal).and_then(|r| at.verify_reveal(&r)) {
         Ok(()) => "ok",
         Err(error) => code(error),
     };
-    json!({ "name": name, "conversation": conversation, "side": side, "reveal": hex(reveal), "result": result })
+    json!({
+        "name": name,
+        "conversation": conversation,
+        "side": side,
+        "network": chain.network(),
+        "policy": hex(chain.policy()),
+        "reveal": hex(reveal),
+        "result": result,
+    })
 }
 
 fn all_vectors() -> Value {
     let alice = key("seedelf-messaging reveal v1 alice");
     let bob = key("seedelf-messaging reveal v1 bob");
+    let carol = key("seedelf-messaging reveal v1 carol");
+    let chain = test_chain();
     let bob_handle = handle("seedelf-messaging reveal v1 bob", "bob's handle");
     let (a0, b0) = answered(&alice, &bob, &bob_handle, "reveal v1 conversation 0");
     let (a1, b1) = answered(&alice, &bob, &bob_handle, "reveal v1 conversation 1");
     let sides = [(&a0, &b0), (&a1, &b1)];
+    // A Seedelf of `label`'s wallet: its datum register is its Seedelf key's,
+    // and its handle its messaging key's.
+    let shown = |label: &str, name: &[u8], generator: &str, owner: &SecretKey| {
+        seedelf(name, datum_register(label, generator))
+            .handle(owner)
+            .unwrap()
+    };
 
     // 0: Alice's Seedelf, under its full 32-byte name.
-    let alices = seedelf(
+    let alices = shown(
+        "seedelf-messaging reveal v1 alice",
         &seedelf_name("alice"),
-        handle("seedelf-messaging reveal v1 alice", "alice's seedelf"),
+        "alice's seedelf",
+        &alice,
     );
     let mut draw = Seeded::new("reveal v1 reveal 0");
     let statement = Statement::of(&a0, &alices);
@@ -885,6 +1150,7 @@ fn all_vectors() -> Value {
         "Alice's Seedelf under its full 32-byte name",
         0,
         "initiator",
+        &alice,
         draws_json(["c2", "z2", "aux"], drawn.clone()),
         nonce_json(
             &statement,
@@ -898,8 +1164,13 @@ fn all_vectors() -> Value {
         &full,
     );
 
-    // 1: the root register, under a 1-byte name.
-    let root = seedelf(b"a", alice.register());
+    // 1: a Seedelf at the Seedelf key's root register, under a 1-byte name.
+    let root = seedelf(
+        b"a",
+        spend_key("seedelf-messaging reveal v1 alice").register(),
+    )
+    .handle(&alice)
+    .unwrap();
     let mut draw = Seeded::new("reveal v1 reveal 1");
     let statement = Statement::of(&a0, &root);
     let (proof, commitments) = statement.prove_seedelf(&alice.scalar(), &mut draw);
@@ -909,9 +1180,10 @@ fn all_vectors() -> Value {
     };
     let drawn = draw.drain();
     let second = reveal_json(
-        "Alice's root register under a 1-byte name",
+        "a Seedelf of Alice's at her Seedelf key's root register, under a 1-byte name",
         0,
         "initiator",
+        &alice,
         draws_json(["c2", "z2", "aux"], drawn.clone()),
         nonce_json(
             &statement,
@@ -926,9 +1198,11 @@ fn all_vectors() -> Value {
     );
 
     // 2: Carol's Seedelf, made by the reader with its own key.
-    let carols = seedelf(
+    let carols = shown(
+        "seedelf-messaging reveal v1 carol",
         &seedelf_name("carol"),
-        handle("seedelf-messaging reveal v1 carol", "carol's seedelf"),
+        "carol's seedelf",
+        &carol,
     );
     // The first draws whose challenge is at least q, so an implementation
     // that doesn't reduce it gets this one wrong.
@@ -954,6 +1228,7 @@ fn all_vectors() -> Value {
         "Carol's Seedelf, made by the reader with its own key",
         0,
         "responder",
+        &carol,
         draws_json(["c1", "z1", "aux"], drawn.clone()),
         nonce_json(
             &statement,
@@ -968,17 +1243,48 @@ fn all_vectors() -> Value {
     );
 
     let bytes = full.to_bytes();
+    let with = |at: usize, value: &[u8]| with_bytes(&bytes, at, value);
     let changed = |f: &dyn Fn(&mut Reveal)| {
         let mut r = full.clone();
         f(&mut r);
         r.to_bytes()
     };
+    let two = Scalar::from(2u64);
+    let datum = *alices.seedelf().register();
+    let moved_register = Register::from_checked(
+        (datum.generator() * two).to_affine(),
+        (datum.public_value() * two).to_affine(),
+    );
+    let mut renamed = alices.name().to_vec();
+    renamed[31] ^= 1;
+    // The renamed Seedelf's own m_S, which is Alice's messaging key's on
+    // its h_S: a reveal of a Seedelf she could hold, with reveal 0's proof.
+    let renamed_own = seedelf(&renamed, datum).handle(&alice).unwrap();
+    let mut renamed_with_own = with(1, &renamed);
+    renamed_with_own[M_AT..M_AT + 48].copy_from_slice(&renamed_own.register().public_value_bytes());
+    let moved_own = seedelf(alices.name(), moved_register)
+        .handle(&alice)
+        .unwrap();
+    let mut moved_with_own = with(G_AT, &moved_register.to_bytes());
+    moved_with_own[M_AT..M_AT + 48].copy_from_slice(&moved_own.register().public_value_bytes());
+    let mainnet = Chain::new(NETWORK_MAINNET, *chain.policy()).unwrap();
+    let mut policy = *chain.policy();
+    policy[0] ^= 1;
+    let other_policy = Chain::new(chain.network(), policy).unwrap();
     let mut checks = vec![
-        check("reveal 0, at the reader", 0, "responder", &bytes, &sides),
+        check(
+            "reveal 0, at the reader",
+            0,
+            "responder",
+            &chain,
+            &bytes,
+            &sides,
+        ),
         check(
             "reveal 1, at the reader",
             0,
             "responder",
+            &chain,
             &short.to_bytes(),
             &sides,
         ),
@@ -986,6 +1292,7 @@ fn all_vectors() -> Value {
             "reveal 2, made by the reader, at the reader",
             0,
             "responder",
+            &chain,
             &forged.to_bytes(),
             &sides,
         ),
@@ -993,6 +1300,7 @@ fn all_vectors() -> Value {
             "reveal 0, at the side that wrote first",
             0,
             "initiator",
+            &chain,
             &bytes,
             &sides,
         ),
@@ -1000,6 +1308,7 @@ fn all_vectors() -> Value {
             "reveal 2, at the side that wrote first",
             0,
             "initiator",
+            &chain,
             &forged.to_bytes(),
             &sides,
         ),
@@ -1007,41 +1316,74 @@ fn all_vectors() -> Value {
             "reveal 0, in another conversation of the same two keys",
             1,
             "responder",
+            &chain,
             &bytes,
             &sides,
         ),
         check(
-            "reveal 0 under another name",
+            "reveal 0 read under mainnet: h_S is another network's",
             0,
             "responder",
-            &changed(&|r| {
-                let mut name = r.seedelf.name().to_vec();
-                name[31] ^= 1;
-                r.seedelf = seedelf(&name, *r.seedelf.register());
-            }),
+            &mainnet,
+            &bytes,
+            &sides,
+        ),
+        check(
+            "reveal 0 read under another policy: h_S is another policy's",
+            0,
+            "responder",
+            &other_policy,
+            &bytes,
+            &sides,
+        ),
+        check(
+            "reveal 0 under another name: another h_S",
+            0,
+            "responder",
+            &chain,
+            &with(1, &renamed),
+            &sides,
+        ),
+        check(
+            "reveal 0 under another name, with that Seedelf's own m_S",
+            0,
+            "responder",
+            &chain,
+            &renamed_with_own,
             &sides,
         ),
         check(
             "reveal 0 for another register of the same key, [2](g_S, u_S)",
             0,
             "responder",
-            &changed(&|r| {
-                let two = Scalar::from(2u64);
-                let register = *r.seedelf.register();
-                r.seedelf = seedelf(
-                    r.seedelf.name(),
-                    Register::from_checked(
-                        (register.generator() * two).to_affine(),
-                        (register.public_value() * two).to_affine(),
-                    ),
-                );
-            }),
+            &chain,
+            &with(G_AT, &moved_register.to_bytes()),
+            &sides,
+        ),
+        check(
+            "reveal 0 for [2](g_S, u_S), with that Seedelf's own m_S",
+            0,
+            "responder",
+            &chain,
+            &moved_with_own,
+            &sides,
+        ),
+        check(
+            "reveal 0 with another m_S, [2]m_S",
+            0,
+            "responder",
+            &chain,
+            &with(
+                M_AT,
+                &(alices.register().public_value() * two).to_compressed(),
+            ),
             &sides,
         ),
         check(
             "reveal 0 with c₁ + 1",
             0,
             "responder",
+            &chain,
             &changed(&|r| r.proof.c1 += Scalar::from(1u64)),
             &sides,
         ),
@@ -1049,6 +1391,7 @@ fn all_vectors() -> Value {
             "reveal 0 with c₁ and c₂ swapped",
             0,
             "responder",
+            &chain,
             &changed(&|r| std::mem::swap(&mut r.proof.c1, &mut r.proof.c2)),
             &sides,
         ),
@@ -1056,14 +1399,17 @@ fn all_vectors() -> Value {
             "reveal 0 with z₁ and z₂ swapped",
             0,
             "responder",
+            &chain,
             &changed(&|r| std::mem::swap(&mut r.proof.z1, &mut r.proof.z2)),
             &sides,
         ),
     ];
     // Bob's Seedelf, proved with Alice's key: branch 1's relation doesn't hold.
-    let bobs = seedelf(
+    let bobs = shown(
+        "seedelf-messaging reveal v1 bob",
         &seedelf_name("bob"),
-        handle("seedelf-messaging reveal v1 bob", "bob's seedelf"),
+        "bob's seedelf",
+        &bob,
     );
     let (wrong, _) = Statement::of(&a0, &bobs)
         .prove_seedelf(&alice.scalar(), &mut Seeded::new("reveal v1 wrong"));
@@ -1071,9 +1417,30 @@ fn all_vectors() -> Value {
         "Bob's Seedelf, proved with Alice's key",
         0,
         "responder",
+        &chain,
         &Reveal {
             seedelf: bobs,
             proof: wrong,
+        }
+        .to_bytes(),
+        &sides,
+    ));
+    // Alice's Seedelf with the m_S of her Seedelf key, not her messaging key,
+    // proved with the Seedelf key: A isn't that key's.
+    let alice_spend = spend_key("seedelf-messaging reveal v1 alice");
+    let on_the_seedelf_key = alices.seedelf().handle(&alice_spend).unwrap();
+    let (wrong_key, _) = Statement::of(&a0, &on_the_seedelf_key).prove_seedelf(
+        &alice_spend.scalar(),
+        &mut Seeded::new("reveal v1 the Seedelf key"),
+    );
+    checks.push(check(
+        "Alice's Seedelf with the Seedelf key's m_S, proved with that key",
+        0,
+        "responder",
+        &chain,
+        &Reveal {
+            seedelf: on_the_seedelf_key,
+            proof: wrong_key,
         }
         .to_bytes(),
         &sides,
@@ -1087,11 +1454,12 @@ fn all_vectors() -> Value {
         "made by the reader with c₁ = z₁ = 0, so T₁ and T₁′ are O",
         0,
         "responder",
+        &chain,
         &at_identity.to_bytes(),
         &sides,
     ));
     for ((name, case), _) in malformed(&bytes) {
-        checks.push(check(name, 0, "responder", &case, &sides));
+        checks.push(check(name, 0, "responder", &chain, &case, &sides));
     }
     // At the side that wrote first, a reveal that doesn't parse is refused as
     // such: parsing comes before the side.
@@ -1101,6 +1469,7 @@ fn all_vectors() -> Value {
         "an empty name, at the side that wrote first: parsed before the side is checked",
         0,
         "initiator",
+        &chain,
         &empty_name,
         &sides,
     ));
@@ -1110,17 +1479,20 @@ fn all_vectors() -> Value {
         "reveal 0 with c₁ + 1, at the side that wrote first: the side before the proof",
         0,
         "initiator",
+        &chain,
         &changed(&|r| r.proof.c1 += Scalar::from(1u64)),
         &sides,
     ));
 
     json!({
         "version": 1,
-        "description": "Seedelf Messaging's verified reveal (docs/protocol.md §19): an OR-proof that the Seedelf's register and the initiator's identity share a key, or that the prover knows the responder's. The conversations' states are this crate's own (§16.5), for its public-API test; another implementation needn't read them.",
+        "description": "Seedelf Messaging's verified reveal (docs/protocol.md §19, as §21.9 makes it): an OR-proof that the Seedelf's messaging register (h_S, m_S) and the initiator's identity A share a key, the messaging key x_m, or that the prover knows the responder's. Every secret key here is a messaging key; a Seedelf's datum register (g_S, u_S) is its Seedelf key's, which makes no part of a reveal. h_S is RFC 9380's hash to G1 of base_message (network ‖ policy ‖ len(N) ‖ N ‖ g_S ‖ u_S) under handle_base_dst (§21.3): a reader computes it from the reveal's Seedelf under its own chain, the check's network and policy. The statement is cid ‖ p₀ ‖ A ‖ w₀ ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ h_S ‖ m_S, so its challenge binds the reader's chain through h_S, and the challenge is SHA-256 of the label, the statement, T₁, T₁′ and T₂. A reveal's bytes carry no h_S: the reader computes it. The conversations' states are this crate's own (§16.5), for its public-API test; another implementation needn't read them.",
         "label": String::from_utf8(REVEAL_LABEL.to_vec()).unwrap(),
         "nonce_label": String::from_utf8(REVEAL_NONCE_LABEL.to_vec()).unwrap(),
+        "handle_base_dst": String::from_utf8(HANDLE_BASE_DST.to_vec()).unwrap(),
         "kind": KIND_REVEAL,
         "group_order": GROUP_ORDER,
+        "chain": chain_json(&chain),
         "conversations": [
             conversation_json("Alice wrote first to Bob's handle, and has his reply", &alice, &bob, &a0, &b0),
             conversation_json("another conversation of the same two keys", &alice, &bob, &a1, &b1),

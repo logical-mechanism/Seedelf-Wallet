@@ -6,14 +6,15 @@ use std::collections::BTreeMap;
 use blstrs::G1Projective;
 use group::Curve;
 
-use crate::register::{Register, matches_register};
+use crate::register::matches_register;
 use crate::relay::stamp_bits;
 use crate::session::conversation::{Conversation, Texts};
 use crate::session::draw::{Draw, OsDraw};
 use crate::session::first_contact::{
-    CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_STAMP_BITS, FirstContact, Handle,
-    Reader, within_window,
+    CID_LEN, ConversationId, FIRST_CONTACT_MAX_AGE, FIRST_CONTACT_STAMP_BITS, FirstContact, Reader,
+    within_window,
 };
+use crate::session::seedelf::Handle;
 use crate::session::wire::{MAX_ENVELOPE_LEN, Opened, Outer, open};
 use crate::{Error, SecretKey};
 
@@ -543,11 +544,23 @@ impl Inbox {
     pub fn start(
         &mut self,
         key: &SecretKey,
-        handle: &Register,
+        handle: &Handle,
+        now: u64,
+    ) -> Result<ConversationId, Error> {
+        self.insert(Conversation::start(key, handle, now)?)
+    }
+
+    /// [`Inbox::start`] on a bare register and name, for the tests that
+    /// drive the session layer below the handle.
+    #[cfg(test)]
+    pub(crate) fn start_on(
+        &mut self,
+        key: &SecretKey,
+        handle: &crate::register::Register,
         to: &[u8],
         now: u64,
     ) -> Result<ConversationId, Error> {
-        self.insert(Conversation::start(key, handle, to, now)?)
+        self.insert(Conversation::start_on(key, handle, to, now)?)
     }
 
     /// Starts a conversation continuing `old`, with its identities (§6).
@@ -687,8 +700,9 @@ impl Inbox {
             }
             // The base proof's other branch is the handle's key, so it binds
             // p₀ only for a register of the reader's: a register of another
-            // key under the name (one the Seedelf held before it came here)
-            // would let that key's holder prove any p₀.
+            // key under the name (another wallet's certificate handle,
+            // passed here by mistake) would let that key's holder prove any
+            // p₀.
             if !named.any(|handle| {
                 first.proves_base(handle.register()) && matches_register(key, handle.register())
             }) {

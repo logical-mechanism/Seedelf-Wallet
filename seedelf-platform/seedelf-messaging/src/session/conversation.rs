@@ -22,6 +22,7 @@ use crate::session::ratchet::{
     envelope_ephemeral_scalar, outer_scalar, read_skipped, skipped_len, write_skipped,
 };
 use crate::session::secret::Secret32;
+use crate::session::seedelf::Handle;
 use crate::session::wire::{
     FIRST_CONTACT_TYPE, MAX_ENVELOPE_LEN, Opened, Outer, SESSION_OVERHEAD, SESSION_TYPE,
     envelope_size, inner_capacity, pad,
@@ -82,15 +83,30 @@ pub struct Conversation {
 }
 
 impl Conversation {
-    /// Starts a conversation with the owner of `handle`, a Seedelf's register
-    /// (docs/protocol.md §3): makes both identities, F with its proof that
-    /// the base re-randomizes `handle`, SK and the sending chain. `to` is the
-    /// handle's asset name, 1 to 32 bytes; `now` becomes `t`.
+    /// Starts a conversation with the owner of `handle` (docs/protocol.md §3,
+    /// §21.8): makes both identities, F with its proof that the base
+    /// re-randomizes the handle's messaging register M_S, SK and the sending
+    /// chain. `key` is the writer's messaging key x_m, never its Seedelf key.
+    /// The handle comes from a checked certificate, good for its Seedelf
+    /// (§21.5), so its base is the Seedelf's hash, which the crate computed;
+    /// `to` is its asset name; `now` becomes `t`.
     ///
     /// Nothing can be sent until the first-contact stamp is set
     /// ([`Conversation::stamp_digest`], [`Conversation::set_stamp`]).
     /// Refuses a handle of `key`'s own: both identities would be one.
-    pub fn start(key: &SecretKey, handle: &Register, to: &[u8], now: u64) -> Result<Self, Error> {
+    pub fn start(key: &SecretKey, handle: &Handle, now: u64) -> Result<Self, Error> {
+        Self::start_with(key, handle.register(), handle.name(), now, &mut OsDraw)
+    }
+
+    /// [`Conversation::start`] on a bare register and name, for the tests
+    /// that drive the session layer below the handle.
+    #[cfg(test)]
+    pub(crate) fn start_on(
+        key: &SecretKey,
+        handle: &Register,
+        to: &[u8],
+        now: u64,
+    ) -> Result<Self, Error> {
         Self::start_with(key, handle, to, now, &mut OsDraw)
     }
 

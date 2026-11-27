@@ -15,6 +15,28 @@
 //!
 //! The web wallet uses this; the CLI keeps its random, file-stored scalar.
 //!
+//! Messages' key, v1: recovery phrase → Seedelf Messaging's own secret
+//! scalar x_m (chunk 55; `seedelf-messaging/docs/protocol.md` §21.2).
+//!
+//! A sibling of v1, never a change to it: v1's steps, outputs and vectors
+//! stay as they are. It takes v1's seed under its own salt and info, so
+//! neither key says anything about the other, and it's per network. It's
+//! frozen in its turn when Messages opens on mainnet. The vectors in
+//! `tests/vectors/seedelf_messaging_key_v1.json` pin every intermediate value.
+//!
+//! ```text
+//! seed  = BIP39 seed of the phrase     the same seed v1 takes
+//! okm_m = HKDF-SHA-256(ikm  = seed,
+//!                      salt = "seedelf-messaging-v1",
+//!                      info = "seedelf-messaging-key" || u32_be(account)
+//!                             || network || generation,
+//!                      L    = 64)
+//! x_m   = int_be(okm_m) mod r          rejected if zero
+//! ```
+//!
+//! `network` is one byte, 0x00 for preprod and 0x01 for mainnet, and any
+//! other is refused. `generation` is one byte, 0x00 until a rotation.
+//!
 //! Every copy of the phrase, the entropy and the key material made here is
 //! in a buffer that's wiped when it's dropped (`zeroize`). Copies inside the
 //! libraries and on the stack can outlive a call, so this is best effort.
@@ -42,6 +64,22 @@ pub const NEW_PHRASE_WORDS: usize = 24;
 /// wallet policy checked before the derivation, which itself works for any
 /// valid mnemonic; allowing another length would not change existing keys.
 pub const RESTORE_PHRASE_WORDS: [usize; 3] = [12, 15, 24];
+
+/// HKDF salt for Messages' key, v1.
+pub const MESSAGING_SALT_V1: &[u8] = b"seedelf-messaging-v1";
+
+/// HKDF info prefix for Messages' key, v1; the account index follows as a
+/// big-endian u32, then the network byte, then the generation byte.
+pub const MESSAGING_INFO_PREFIX_V1: &[u8] = b"seedelf-messaging-key";
+
+/// Messages' key's network byte for preprod.
+pub const MESSAGING_PREPROD: u8 = 0x00;
+
+/// Messages' key's network byte for mainnet.
+pub const MESSAGING_MAINNET: u8 = 0x01;
+
+/// Messages' key's generation byte in v1; a rotation takes the next byte.
+pub const MESSAGING_GENERATION_V1: u8 = 0x00;
 
 /// Generates a new 24-word recovery phrase from the OS random source, in a
 /// buffer that's wiped when it's dropped.
@@ -216,4 +254,79 @@ fn key_v1(mnemonic: &Mnemonic, account: u32) -> Result<Scalar> {
     let x = scalar_from_okm(&okm);
     okm.zeroize();
     x
+}
+
+/// Refuses a network byte Messages' key has no network for, so a typo can't
+/// derive a key for a network that doesn't exist.
+fn check_messaging_network(network: u8) -> Result<()> {
+    if network != MESSAGING_PREPROD && network != MESSAGING_MAINNET {
+        bail!(
+            "a messaging key's network byte is 0x00 (preprod) or 0x01 (mainnet), got 0x{network:02x}"
+        );
+    }
+    Ok(())
+}
+
+/// HKDF-SHA-256 output keying material of Messages' key for `account`,
+/// `network` and `generation`, 64 bytes. A network byte other than
+/// [`MESSAGING_PREPROD`] or [`MESSAGING_MAINNET`] is refused.
+pub fn messaging_okm_v1(
+    seed: &[u8; 64],
+    account: u32,
+    network: u8,
+    generation: u8,
+) -> Result<[u8; 64]> {
+    check_messaging_network(network)?;
+    Ok(messaging_okm(seed, account, network, generation))
+}
+
+fn messaging_okm(seed: &[u8; 64], account: u32, network: u8, generation: u8) -> [u8; 64] {
+    let mut info = Vec::with_capacity(MESSAGING_INFO_PREFIX_V1.len() + 6);
+    info.extend_from_slice(MESSAGING_INFO_PREFIX_V1);
+    info.extend_from_slice(&account.to_be_bytes());
+    info.push(network);
+    info.push(generation);
+
+    // Extract's HMAC is keyed by the salt, which isn't secret.
+    let mut prk = Zeroizing::new([0u8; 32]);
+    hkdf_extract(Sha256::new(), MESSAGING_SALT_V1, seed, &mut prk[..]);
+    let mut okm = [0u8; 64];
+    expand_64(&prk, &info, &mut okm);
+    okm
+}
+
+/// Messages' key, v1, for `account`, `network` and `generation` of a
+/// recovery phrase: the web wallet's x_m, never its Seedelf key. A network
+/// byte other than [`MESSAGING_PREPROD`] or [`MESSAGING_MAINNET`] is refused.
+pub fn messaging_key_v1(phrase: &str, account: u32, network: u8, generation: u8) -> Result<Scalar> {
+    check_messaging_network(network)?;
+    messaging_key(&parse_phrase(phrase)?, account, network, generation)
+}
+
+/// Messages' key, v1, for `account`, `network` and `generation` of a
+/// recovery phrase's entropy, as the web wallet's vault stores it: the key
+/// [`messaging_key_v1`] gives for that phrase, without the phrase ever
+/// being written out.
+pub fn messaging_key_v1_from_entropy(
+    entropy: &[u8],
+    account: u32,
+    network: u8,
+    generation: u8,
+) -> Result<Scalar> {
+    check_messaging_network(network)?;
+    messaging_key(
+        &mnemonic_from_entropy(entropy)?,
+        account,
+        network,
+        generation,
+    )
+}
+
+fn messaging_key(mnemonic: &Mnemonic, account: u32, network: u8, generation: u8) -> Result<Scalar> {
+    let mut seed = bip39_seed(mnemonic);
+    let mut okm = messaging_okm(&seed, account, network, generation);
+    seed.zeroize();
+    let x_m = scalar_from_okm(&okm);
+    okm.zeroize();
+    x_m
 }

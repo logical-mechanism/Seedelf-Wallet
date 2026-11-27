@@ -10,8 +10,18 @@
 //! (2026-11-23). The same 749,621 then went through the three verifiers here,
 //! and the two agreed on every one, on the refusal and on its kind: 711,666
 //! fail the proof's equation, and 37,955 don't parse or hold a point that
-//! doesn't decode (2026-11-24). This test makes the set again and holds the
-//! crate to those counts.
+//! doesn't decode (2026-11-24).
+//!
+//! Chunk 55 re-recorded the vectors (docs/protocol.md §21.9): every handle a
+//! Seedelf's messaging register on its hashed base, and a reveal carrying
+//! m_S, read under the reader's chain. The set is still 13 proofs, now with
+//! m_S and the chain among what a reveal is checked against: 780,597
+//! mutants, of which 740,232 fail the equation and 40,365 don't parse,
+//! counted by this crate alone (2026-11-26, once the reveal's statement
+//! carried h_S, so every reveal's chain is swept: the reader's own with
+//! c₁ = z₁ = 0 had verified under any). The independent verifier hasn't
+//! seen these vectors. This test makes the set again and holds the crate to
+//! those counts.
 //!
 //! **The mutations**, of each proof and of everything it's checked against:
 //!
@@ -19,9 +29,14 @@
 //! - the statement: each byte of F's head (and, for a keys proof, of the
 //!   base proof before it), of a reveal's name and its length, and of a
 //!   conversation ID, set to each of its 255 other values; each point (F's
-//!   p₀, A and E_A, the handle's two, w₀, S_A, a reveal's register, a
-//!   conversation's identities) with its first byte set to each of its 255
-//!   other values and each other byte with bit 0, then bit 7, flipped;
+//!   p₀, A and E_A, the handle's two, w₀, S_A, a reveal's register and its
+//!   m_S, a conversation's identities) with its first byte set to each of
+//!   its 255 other values and each other byte with bit 0, then bit 7,
+//!   flipped;
+//! - the chain a reveal is read under, its network byte and the policy's 28
+//!   bytes, each set to each of its 255 other values: h_S is its hash, and
+//!   the statement carries h_S, so every reveal binds its chain, the
+//!   reader's own with c₁ = z₁ = 0 included;
 //! - s + q for each of the proof's scalars;
 //! - c₁ + d with c₂ − d, for d from 1 to 32, where a proof has two shares:
 //!   the same sum, other commitments.
@@ -32,9 +47,10 @@
 //! the only mutant a verifier that reduced that scalar mod q would take, and
 //! one in 64 skipped nearly every one (1.10.0's second review: with
 //! `Reveal::from_bytes` reducing its scalars, the default run passed). So
-//! every one of them runs whatever `MUTANTS_EVERY` is: 12,150 mutants by
-//! default, about 8 s on two threads at the test profile. A gate runs them
-//! all and holds the counts above (8 min 14 s there, 2026-11-24):
+//! every one of them runs whatever `MUTANTS_EVERY` is: 12,518 mutants by
+//! default, about 5 s on two threads at the test profile. A gate runs them
+//! all and holds the counts above (8 min 14 s there for 1.10.0's set,
+//! 2026-11-24; chunk 55's in 5 min 22 s with `--release`, 2026-11-26):
 //!
 //! ```text
 //! MUTANTS_EVERY=1 cargo test -p seedelf-messaging --lib session::tests::mutants \
@@ -52,6 +68,7 @@ use crate::register::{Register, decode_point};
 use crate::session::conversation::{Conversation, Role};
 use crate::session::first_contact::FirstContact;
 use crate::session::reveal::Reveal;
+use crate::session::seedelf::{Chain, POLICY_LEN};
 
 const SESSION_VECTORS: &str = "tests/vectors/messaging_session_v1.json";
 const REVEAL_VECTORS: &str = "tests/vectors/messaging_reveal_v1.json";
@@ -59,11 +76,12 @@ const REVEAL_VECTORS: &str = "tests/vectors/messaging_reveal_v1.json";
 /// q, BLS12-381's scalar field order, big-endian.
 const GROUP_ORDER: &str = "73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001";
 
-/// The mutants of the vectors' 13 proofs, and how they fail: what the
-/// independent verifier and this crate both counted.
-const MUTANTS: usize = 749_621;
-const FAIL_THE_EQUATION: usize = 711_666;
-const DONT_PARSE: usize = 37_955;
+/// The mutants of the vectors' 13 proofs, and how they fail: what this crate
+/// counted of chunk 55's vectors (1.10.0's, which the independent verifier
+/// counted too, were 749,621: 711,666 and 37,955).
+const MUTANTS: usize = 780_597;
+const FAIL_THE_EQUATION: usize = 740_232;
+const DONT_PARSE: usize = 40_365;
 
 /// The threads the mutants are shared between.
 const THREADS: usize = 2;
@@ -74,7 +92,8 @@ enum Case {
     Base,
     /// F, then the reader's w₀ and the first ratchet key S_A.
     Keys,
-    /// The conversation's ID, p₀, A and w₀, then the reveal.
+    /// The conversation's ID, p₀, A and w₀, then the reveal, then the
+    /// reader's chain (its network byte and policy), which h_S comes from.
     Reveal(Box<Conversation>),
 }
 
@@ -135,7 +154,9 @@ fn reveal_proof(reader: &Conversation, fields: &[Vec<u8>]) -> Result<Verdict, Er
     reader.first.base = decode_point(point(&fields[1]))?;
     reader.first.initiator = decode_point(point(&fields[2]))?;
     reader.responder = decode_point(point(&fields[3]))?;
-    let reveal = Reveal::from_bytes(&fields[4])?;
+    let policy: [u8; POLICY_LEN] = fields[5][1..].try_into().expect("a policy's 28 bytes");
+    let chain = Chain::new(fields[5][0], policy)?;
+    let reveal = Reveal::from_bytes(&chain, &fields[4])?;
     match reader.verify_reveal(&reveal) {
         Ok(()) => Ok(Verdict::Verifies),
         Err(Error::InvalidReveal) => Ok(Verdict::Equation),
@@ -206,8 +227,14 @@ impl Proof {
                 }
                 sweep(emit, 4, reveal, 0, 1, true);
                 sweep(emit, 4, reveal, 1, name, true);
-                sweep(emit, 4, reveal, 1 + name, 48, false);
-                sweep(emit, 4, reveal, 1 + name + 48, 48, false);
+                for k in 0..3 {
+                    sweep(emit, 4, reveal, 1 + name + 48 * k, 48, false);
+                }
+                // The chain binds through h_S, which the statement carries
+                // (docs/protocol.md §21.9): a reveal read under another chain
+                // has another h_S, so another challenge, even the reader's own
+                // with c₁ = z₁ = 0, where T₁′ is O whatever h_S is.
+                sweep(emit, 5, &self.fields[5], 0, 1 + POLICY_LEN, true);
                 sweep(emit, 0, &self.fields[0], 0, 16, true);
                 for (field, identity) in self.fields.iter().enumerate().take(4).skip(1) {
                     sweep(emit, field, identity, 0, 48, false);
@@ -344,12 +371,22 @@ fn proofs() -> Vec<Proof> {
         // The reader's side, as its vector stores it.
         let reader = Conversation::from_bytes(&bytes(&held["responder_state"])).unwrap();
         assert_eq!(reader.role, Role::Responder);
+        // The reader's chain: a check's own, or the file's for a reveal.
+        let read_under = if x.get("network").is_some() {
+            x
+        } else {
+            &reveals["chain"]
+        };
+        let network = u8::try_from(read_under["network"].as_u64().unwrap()).unwrap();
+        let mut chain = vec![network];
+        chain.extend_from_slice(&bytes(&read_under["policy"]));
         let fields = vec![
             bytes(&held["cid"]),
             bytes(&held["base"]),
             bytes(&held["initiator_public"]),
             bytes(&held["responder_public"]),
             bytes(&x["reveal"]),
+            chain,
         ];
         (Case::Reveal(Box::new(reader)), fields)
     };

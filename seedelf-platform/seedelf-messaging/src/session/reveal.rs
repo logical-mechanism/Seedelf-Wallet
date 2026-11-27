@@ -4,14 +4,14 @@
 //!
 //! The proof is designated-verifier and bound to the conversation: a
 //! Fiat–Shamir OR-proof (Cramer, Damgård and Schoenmakers) that either the
-//! Seedelf's register and the initiator's identity `A` share a key
-//! (Chaum–Pedersen), or the prover knows the key of the reader's identity
-//! `w₀`. The initiator proves the first. The reader holds the second, so it
+//! Seedelf's messaging register (h_S, m_S) and the initiator's identity `A`
+//! share a key, the messaging key (Chaum–Pedersen), or the prover knows the
+//! key of the reader's identity `w₀` (protocol.md §19, §21.9). The initiator proves the first. The reader holds the second, so it
 //! could have made the proof itself: it convinces the reader and no one else,
 //! and the conversation stays deniable.
 //!
 //! ```text
-//! len (1) | name (1–32) | g_S (48) | u_S (48) | c₁ (32) | c₂ (32) | z₁ (32) | z₂ (32)
+//! len (1) | name (1–32) | g_S (48) | u_S (48) | m_S (48) | c₁ (32) | c₂ (32) | z₁ (32) | z₂ (32)
 //! ```
 
 use blstrs::{G1Affine, G1Projective, Scalar};
@@ -22,18 +22,20 @@ use crate::keys::scalar_mod_q;
 use crate::register::{POINT_LEN, Register, decode_point, matches_register};
 use crate::session::conversation::{Conversation, Role};
 use crate::session::draw::{Draw, OsDraw, hedged_scalar};
-use crate::session::first_contact::{Handle, MAX_TO_LEN, Reader};
+use crate::session::first_contact::{MAX_TO_LEN, Reader};
+use crate::session::seedelf::{Chain, Handle, Seedelf};
 use crate::{Error, SecretKey};
 
 /// The proof's bytes: `c₁ ‖ c₂ ‖ z₁ ‖ z₂`, each a scalar below the group
 /// order, big-endian.
 pub const REVEAL_PROOF_LEN: usize = 4 * 32;
 
-/// A reveal's smallest size: a 1-byte name. 226 bytes.
-pub const REVEAL_MIN_LEN: usize = 1 + 1 + 2 * POINT_LEN + REVEAL_PROOF_LEN;
+/// A reveal's smallest size: a 1-byte name. 274 bytes: the name, the
+/// Seedelf's register (g_S, u_S), its messaging value m_S and the proof.
+pub const REVEAL_MIN_LEN: usize = 1 + 1 + 3 * POINT_LEN + REVEAL_PROOF_LEN;
 
-/// A reveal's largest size: a Seedelf's full 32-byte name. 257 bytes.
-pub const REVEAL_MAX_LEN: usize = 1 + MAX_TO_LEN + 2 * POINT_LEN + REVEAL_PROOF_LEN;
+/// A reveal's largest size: a Seedelf's full 32-byte name. 305 bytes.
+pub const REVEAL_MAX_LEN: usize = 1 + MAX_TO_LEN + 3 * POINT_LEN + REVEAL_PROOF_LEN;
 
 /// SHA-256's label for the proof's challenge.
 pub(crate) const REVEAL_LABEL: &[u8] = b"Seedelf-Messaging|v1|session|reveal";
@@ -64,9 +66,10 @@ pub struct Reveal {
     pub(crate) proof: RevealProof,
 }
 
-/// The OR-proof's challenge shares and responses. Branch 1 is the Seedelf's
-/// key (`log_{g_S} u_S = log_{p₀} A`), branch 2 the reader's
-/// (`log_{p₀} w₀`); `c₁ + c₂` is the challenge, mod q.
+/// The OR-proof's challenge shares and responses. Branch 1 is the writer's
+/// messaging key, on the Seedelf's messaging register
+/// (`log_{h_S} m_S = log_{p₀} A`), branch 2 the reader's (`log_{p₀} w₀`);
+/// `c₁ + c₂` is the challenge, mod q.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct RevealProof {
     pub(crate) c1: Scalar,
@@ -81,14 +84,14 @@ pub(crate) struct Statement<'a> {
     pub(crate) cid: &'a [u8; 16],
     /// `p₀`.
     pub(crate) base: G1Affine,
-    /// `A = [x_A]p₀`, the initiator's identity: the prover's.
+    /// `A = [x_m,A]p₀`, the initiator's identity: the prover's.
     pub(crate) initiator: G1Affine,
-    /// `w₀ = [x_B]p₀`, the responder's identity: the reader's.
+    /// `w₀ = [x_m,B]p₀`, the responder's identity: the reader's.
     pub(crate) responder: G1Affine,
     pub(crate) seedelf: &'a Handle,
 }
 
-/// The three commitments: `T₁ = [k₁]p₀` and `T₁′ = [k₁]g_S` for branch 1,
+/// The three commitments: `T₁ = [k₁]p₀` and `T₁′ = [k₁]h_S` for branch 1,
 /// `T₂ = [k₂]p₀` for branch 2, or what the simulated branch's challenge and
 /// response give in their place.
 pub(crate) struct Commitments {
@@ -109,11 +112,15 @@ impl Statement<'_> {
         }
     }
 
-    /// The statement's bytes: `cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ name ‖ g_S ‖ u_S`,
-    /// every point compressed. What the challenge and the nonce both cover.
+    /// The statement's bytes: `cid ‖ p₀ ‖ A ‖ w₀ ‖ len ‖ name ‖ g_S ‖ u_S ‖
+    /// h_S ‖ m_S`, every point compressed (protocol.md §21.9). What the
+    /// challenge and the nonce both cover. h_S is in it, though the reader
+    /// computes it from the name and (g_S, u_S) under its own chain, so the
+    /// challenge binds the chain too: a reveal, even the reader's own with
+    /// c₁ = z₁ = 0, verifies only under the chain it was made for.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let name = self.seedelf.name();
-        let mut out = Vec::with_capacity(16 + 3 * 48 + 1 + name.len() + 2 * 48);
+        let mut out = Vec::with_capacity(16 + 3 * 48 + 1 + name.len() + 3 * 48);
         out.extend_from_slice(self.cid);
         out.extend_from_slice(&self.base.to_compressed());
         out.extend_from_slice(&self.initiator.to_compressed());
@@ -121,12 +128,14 @@ impl Statement<'_> {
         // A handle's name is 1 to 32 bytes.
         out.push(name.len() as u8);
         out.extend_from_slice(name);
+        out.extend_from_slice(&self.seedelf.seedelf().register().to_bytes());
         out.extend_from_slice(&self.seedelf.register().to_bytes());
         out
     }
 
     /// `SHA-256("Seedelf-Messaging|v1|session|reveal" ‖ cid ‖ p₀ ‖ A ‖ w₀ ‖
-    /// len ‖ name ‖ g_S ‖ u_S ‖ T₁ ‖ T₁′ ‖ T₂)`, every point compressed.
+    /// len ‖ name ‖ g_S ‖ u_S ‖ h_S ‖ m_S ‖ T₁ ‖ T₁′ ‖ T₂)`, every point
+    /// compressed.
     pub(crate) fn challenge(&self, commitments: &Commitments) -> [u8; 32] {
         Sha256::new()
             .chain_update(REVEAL_LABEL)
@@ -192,8 +201,8 @@ impl Statement<'_> {
         }
     }
 
-    /// Branch 1 proved with `x`, the key of `A` and of the Seedelf's
-    /// register, and branch 2 simulated. Draws `c₂`, then `z₂`, then `aux`,
+    /// Branch 1 proved with `x`, the messaging key of `A` and of the
+    /// Seedelf's messaging register, and branch 2 simulated. Draws `c₂`, then `z₂`, then `aux`,
     /// and derives `k₁` from them, `x` and the statement
     /// ([`Self::hedged_nonce`]).
     pub(crate) fn prove_seedelf(
@@ -228,8 +237,18 @@ impl Statement<'_> {
 }
 
 impl Reveal {
-    /// The Seedelf shown: its name and the register the proof is for.
-    pub fn seedelf(&self) -> &Handle {
+    /// The Seedelf shown: its chain, name and datum register. Never a
+    /// [`Handle`]: a reveal's messaging value is only shown to share a key
+    /// with the conversation's other side, never certified, so nothing may
+    /// write to it (protocol.md §21.5). A writer's handle comes from a checked
+    /// certificate alone.
+    pub fn seedelf(&self) -> &Seedelf {
+        self.seedelf.seedelf()
+    }
+
+    /// The Seedelf and its messaging register, for the crate's own tests.
+    #[cfg(test)]
+    pub(crate) fn handle(&self) -> &Handle {
         &self.seedelf
     }
 
@@ -238,30 +257,39 @@ impl Reveal {
         self.seedelf.name()
     }
 
-    /// The register the proof is for: the reader checks it's the one the
-    /// chain gives the name now.
+    /// The Seedelf's datum register (g_S, u_S): the reader checks, at its
+    /// press, that it's the one the chain gives the name now and that a good
+    /// certificate binds [`Reveal::messaging_register`] to it (§21.5, §21.9).
     pub fn register(&self) -> &Register {
+        self.seedelf.seedelf().register()
+    }
+
+    /// The messaging register M_S = (h_S, m_S) the proof is for.
+    pub fn messaging_register(&self) -> &Register {
         self.seedelf.register()
     }
 
-    /// The reveal's bytes: 226 to 257.
+    /// The reveal's bytes: 274 to 305.
     pub fn to_bytes(&self) -> Vec<u8> {
         let name = self.seedelf.name();
         let mut out = Vec::with_capacity(REVEAL_MAX_LEN);
         out.push(name.len() as u8);
         out.extend_from_slice(name);
-        out.extend_from_slice(&self.seedelf.register().to_bytes());
+        out.extend_from_slice(&self.seedelf.seedelf().register().to_bytes());
+        out.extend_from_slice(&self.seedelf.register().public_value_bytes());
         for scalar in [self.proof.c1, self.proof.c2, self.proof.z1, self.proof.z2] {
             out.extend_from_slice(&scalar.to_bytes_be());
         }
         out
     }
 
-    /// A reveal from exactly its bytes. A name of 0 or more than 32 bytes, a
-    /// scalar not below the group order, or a length that isn't exact is
-    /// [`Error::InvalidMessage`]; a point that doesn't decode is its own
-    /// error, as everywhere.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+    /// A reveal from exactly its bytes, read under `chain`, the reader's: a
+    /// name of 0 or more than 32 bytes, a scalar not below the group order,
+    /// or a length that isn't exact is [`Error::InvalidMessage`]; a point
+    /// that doesn't decode is its own error, as everywhere. h_S is computed
+    /// from the name and (g_S, u_S) under `chain`, so a reveal made under
+    /// another chain doesn't verify.
+    pub fn from_bytes(chain: &Chain, bytes: &[u8]) -> Result<Self, Error> {
         let mut reader = Reader::new(bytes);
         let len = usize::from(reader.byte()?);
         if len == 0 || len > MAX_TO_LEN {
@@ -270,6 +298,7 @@ impl Reveal {
         let name = reader.take(len)?;
         let generator = decode_point(&reader.array()?)?;
         let public_value = decode_point(&reader.array()?)?;
+        let value = decode_point(&reader.array()?)?;
         let mut scalar = || -> Result<Scalar, Error> {
             Option::from(Scalar::from_bytes_be(&reader.array()?)).ok_or(Error::InvalidMessage)
         };
@@ -282,8 +311,14 @@ impl Reveal {
         if !reader.is_done() {
             return Err(Error::InvalidMessage);
         }
+        let seedelf = Seedelf::new(
+            *chain,
+            name,
+            Register::from_checked(generator, public_value),
+        )?;
+        let base = seedelf.base()?;
         Ok(Self {
-            seedelf: Handle::new(name, Register::from_checked(generator, public_value))?,
+            seedelf: Handle::from_value(seedelf, base, value),
             proof,
         })
     }
@@ -291,16 +326,19 @@ impl Reveal {
 
 impl Conversation {
     /// Shows the other side which Seedelf this side holds (docs/protocol.md
-    /// §19): a proof, bound to this conversation, that `seedelf`'s register
-    /// and this side's identity share a key, which only the other side can
-    /// check. The wallet sends its bytes as a message of their own kind (§18).
+    /// §19, §21.9): a proof, bound to this conversation, that `seedelf`'s
+    /// messaging register and this side's identity share a key, which only
+    /// the other side can check. The wallet sends its bytes as a message of
+    /// their own kind (§18).
     ///
     /// Only the side that wrote first, and only once a reply has decrypted:
     /// before it, messages are first-contact messages, which a later theft
-    /// of the reader's key reads ([`Error::RevealNotAllowed`]). `seedelf` is
-    /// the Seedelf's name and its datum's register as the chain gives it
-    /// now, and must be `key`'s, as `key` must be this side's
-    /// ([`Error::NotForThisKey`]).
+    /// of the reader's key reads ([`Error::RevealNotAllowed`]). `key` is
+    /// this side's messaging key, and `seedelf` the wallet's own handle for
+    /// one of its Seedelfs, made with it ([`Seedelf::handle`]); its datum's
+    /// register is the one the chain gives the name now and its certificate
+    /// is good, which the caller checks (§21.5). Its messaging register and
+    /// A must both be `key`'s ([`Error::NotForThisKey`]).
     pub fn reveal(&self, key: &SecretKey, seedelf: &Handle) -> Result<Reveal, Error> {
         self.reveal_with(key, seedelf, &mut OsDraw)
     }

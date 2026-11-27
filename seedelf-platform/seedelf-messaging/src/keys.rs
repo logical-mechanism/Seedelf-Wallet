@@ -11,9 +11,11 @@ use crate::register::Register;
 /// A recipient's messaging secret `y`: a nonzero scalar.
 ///
 /// Its register is `(g, [y]g)`. Phase 1 makes it with [`SecretKey::generate`];
-/// [`SecretKey::from_scalar`] takes a Seedelf wallet's own scalar, so a
-/// Seedelf's registers can be recipients too (docs/security.md, "One key for
-/// spending and reading").
+/// [`SecretKey::from_scalar`] takes a wallet's messaging key x_m
+/// (seedelf-crypto's `messaging_key_v1`), never its Seedelf key, so a
+/// Seedelf's messaging registers can be recipients (docs/security.md, "Two
+/// keys: spending and reading"). The one place this crate takes the Seedelf
+/// key is [`Certificate::make`](crate::session::Certificate::make).
 ///
 /// It has no `Clone`, no `PartialEq` and no byte export, its `Debug` prints
 /// nothing of it, and its bytes are wiped when it drops.

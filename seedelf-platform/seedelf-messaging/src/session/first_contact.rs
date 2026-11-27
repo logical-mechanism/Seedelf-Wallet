@@ -125,38 +125,6 @@ impl fmt::Debug for ConversationId {
     }
 }
 
-/// One of the reader's handles: a Seedelf's asset name and a register it
-/// has held, which a first message's `to` and proof are checked against.
-/// A name may come with several registers, every one the wallet knows.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct Handle {
-    name: Vec<u8>,
-    register: Register,
-}
-
-impl Handle {
-    /// A handle from its asset name, 1 to 32 bytes, and its register.
-    pub fn new(name: &[u8], register: Register) -> Result<Self, Error> {
-        if name.is_empty() || name.len() > MAX_TO_LEN {
-            return Err(Error::InvalidMessage);
-        }
-        Ok(Self {
-            name: name.to_vec(),
-            register,
-        })
-    }
-
-    /// The asset name.
-    pub fn name(&self) -> &[u8] {
-        &self.name
-    }
-
-    /// The register.
-    pub fn register(&self) -> &Register {
-        &self.register
-    }
-}
-
 /// The proof that `p₀ = [b]g` for the handle `(g, v)` named in `to`, or
 /// that its maker knows the handle's own key `y` with `v = [y]g`: an
 /// OR-proof with F′ in its challenge (docs/protocol.md §3, §16.2). The
@@ -488,9 +456,11 @@ pub(crate) fn base_scalar_message(handle: &Register, head: &[u8], aux: &[u8; 32]
 /// HMAC-SHA-512 keyed by the writer's key `x` over [`base_scalar_message`],
 /// with 32 drawn bytes of `aux`, reduced mod q ([`hedged_scalar`]).
 ///
-/// It blinds the writer's `A = [x][b]g`: whoever learns `b` gets `[x]g` on a
-/// generator they chose. Keyed by `x`, it stays secret whatever the random
-/// source gives (docs/joint-security.md, rule 1 and rule 2).
+/// It blinds the writer's `A = [x_m][b]h`, `x` here being the writer's
+/// messaging key and `h` the reader's hashed base: whoever learns `b` gets
+/// `[x_m]h`, which a certificate already publishes (docs/joint-security.md,
+/// §7.4). Keyed by the key, it stays secret whatever the random source gives
+/// (rule 2m).
 pub(crate) fn base_scalar(
     x: &Scalar,
     handle: &Register,

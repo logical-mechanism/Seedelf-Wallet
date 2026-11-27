@@ -1,0 +1,237 @@
+{
+  "spec": "seedelf-messaging-key-v1",
+  "frozen": "Not yet: frozen when Seedelf Messaging opens on mainnet (protocol.md §21.2). From then on never edit these values: every web wallet's messages depend on them.",
+  "sibling_of": "seedelf_key_v1.json, never a change to it: the same phrases and the same seed, under another salt and info, so x_m is never v1's x",
+  "derivation": {
+    "seed": "BIP39 seed of the phrase: PBKDF2-HMAC-SHA512, 2048 rounds, salt \"mnemonic\" (empty passphrase), 64 bytes, the seed v1 takes",
+    "okm_m": "HKDF-SHA-256(ikm = seed, salt = \"seedelf-messaging-v1\", info = \"seedelf-messaging-key\" || u32_be(account) || network || generation, L = 64)",
+    "x_m": "int_be(okm_m) mod r (BLS12-381 scalar field order), 32 bytes big-endian; zero is rejected",
+    "public_value": "compressed G1 point G1^x_m"
+  },
+  "network": "one byte: 0 preprod, 1 mainnet; any other is refused",
+  "generation": "one byte: 0 in v1, the next byte at each rotation",
+  "coverage": "every phrase of seedelf_key_v1.json at account 0: both networks at generation 0, and generation 1 on preprod and mainnet in turn; account 1 once, to pin the account's byte order",
+  "cross_checked": "seed, okm_m and x_m against Python hashlib/hmac; public_value against a pure-Python BLS12-381 G1 (py_ecc wasn't installed) that first reproduces every value in seedelf_key_v1.json",
+  "vectors": [
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm_m": "6261501b76ad9dfc802975c1e5aafb45af184f7627cc24a6f03a6aba05e9187e480fcff9d7082144f62ee044de2da56c4a22c434da0cfbe39176550cdd0732ff",
+      "x_m": "05df0f043f77a2dc2ab4c787aaa70d28917069f4e18e7b02ae7ac91e1ce8e597",
+      "public_value": "97baf59e491488cb287f0f8e48a6e81d12dbb4405bfbfbcd768a6ff0d83605244ad879b9e40fea58688283618c7c7376"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm_m": "fd9753ee8be7b75f433d58fa8a43ac321ad75b54959c34e3da8854a85f3af3997e2cdc0675a2c0c171186299f6970d062820b7918c09170808eb3fc1f5f299ac",
+      "x_m": "21f93dea7fd6c27711565a35792cad869b296f782ae83c8c0c3adc197136b8ae",
+      "public_value": "b4c8377bd0fa4d8eb4aff8d63bfdceab4f4deff462b9905a82cb74b25482d4f76466fd859cc618dad9a12821462818cf"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 0,
+      "network": 0,
+      "generation": 1,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm_m": "f7d6789877dedfaacb06ed1804a517822f75e6c3f852b1a045c04fd9f33ccf3dd43d904224311a64e532a776df16e6c1843975b1eb348f85c18d7980c80d50cb",
+      "x_m": "71fb01d8cc9f71077d53bcd37a77ad86e5c91a52ad48f354e1c8cfd50abe99fb",
+      "public_value": "a0e5a803551420a9a887c699f08533bdba8c024541259d064db970e76794e5bbcb90f0513b31bfa75edb1c18f4fb033e"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+      "account": 1,
+      "network": 0,
+      "generation": 0,
+      "seed": "408b285c123836004f4b8842c89324c1f01382450c0d439af345ba7fc49acf705489c6fc77dbd4e3dc1dd8cc6bc9f043db8ada1e243c4a0eafb290d399480840",
+      "okm_m": "0c9ca2179d7201e0874d1d4004f83419c0e92838e6ea94b32754214347d6519f11c4a8d0b8afe04efc7e9fb0212ef42c2b2f582b0810c53e473d08b8577ecc68",
+      "x_m": "54239d327c00a845e7f0d672237172f90ec107b68ae063a6d3bc10fd5444c693",
+      "public_value": "99b3bd14f097fe996902c542f05286867dcda1502e2dd31a1a0f7c78df353e85d9443e44e4f63ee86d3a384917fb5cf2"
+    },
+    {
+      "phrase": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "761914478ebf6fe16185749372e91549361af22b386de46322cf8b1ba7e92e80c4af05196f742be1e63aab603899842ddadf4e7248d8e43870a4b6ff9bf16324",
+      "okm_m": "97cb3f65d45ad05fea83c7eccf01185739b41778a2c13313b98cab7b54ed22c347f6f67eeffdc6ec9ccb9ca48c86bc5b4210fb5f5cd7ba776c7ba91463daec63",
+      "x_m": "2fa4cae0ac8e2db31c07602b3b5e56ccd5c45a3faa4b273e50152227e1b3aad3",
+      "public_value": "9767adb08bb9c2be5b11dbf6c6efb822c8e0f9173266921b937173deb73ec428d0332b6dd79dd1b2a322d9c503cf3494"
+    },
+    {
+      "phrase": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "761914478ebf6fe16185749372e91549361af22b386de46322cf8b1ba7e92e80c4af05196f742be1e63aab603899842ddadf4e7248d8e43870a4b6ff9bf16324",
+      "okm_m": "7d013df58aa35721242a4c64f667e0127dbdaed3607f931e112c5b8b88cc185a149c281d8564c0a394bf994c521ed261cb9a9ef692a33bddd819a04a309c3c3f",
+      "x_m": "14a18dfb7bbb5b7e118976f95d9c227f75cb70ce9a0e191a7afba58e5fa2c27d",
+      "public_value": "8eac13d7112b9bb8dc2082ab00983222885e23508dc5b170ba8aa546dec1c940c898470fea89d894ca0b2fb67290395a"
+    },
+    {
+      "phrase": "legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth useful legal winner thank year wave sausage worth title",
+      "account": 0,
+      "network": 1,
+      "generation": 1,
+      "seed": "761914478ebf6fe16185749372e91549361af22b386de46322cf8b1ba7e92e80c4af05196f742be1e63aab603899842ddadf4e7248d8e43870a4b6ff9bf16324",
+      "okm_m": "dd71ffe9d869389f3e788037be2b559d0d0e28d0bc2ae2ac3a62462c980fd3591fd5b326b31489901f46316a501ebc2ee47c34ac53d5f81712cb3da325195dee",
+      "x_m": "3e206e9ca68b93a3c23d9da9e5376bd67fa9ed38f100780b23c25f5841ceff16",
+      "public_value": "85969ad20ff8f7f2e67c6de95bf9814853d06ce32067a761f6856cfd7eefd24da9ba9eb59b6840897f5e18b6e6994fbf"
+    },
+    {
+      "phrase": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "848bbe19cad445e46f35fd3d1a89463583ac2b60b5eb4cfcf955731775a5d9e17a81a71613fed83f1ae27b408478fdec2bbc75b5161d1937aa7cdf4ad686ef5f",
+      "okm_m": "93aacbb3731a787de2af3a55d373c57007e87716e730c21c01e6772cf1293343f800cba0e02be38754156babd9f6a22ab1a85ffa55af67a2df09c7aa88291747",
+      "x_m": "23c1ab6330a108edc3a992d56b3835182dc73cfc3667d354103049fd32aa2c43",
+      "public_value": "a12322b9e6df72d23f884fd531a2d604d9f3046fb514ef569a32681ddfe6a2422a0267762bda83ec7a26cb9ae976f79e"
+    },
+    {
+      "phrase": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "848bbe19cad445e46f35fd3d1a89463583ac2b60b5eb4cfcf955731775a5d9e17a81a71613fed83f1ae27b408478fdec2bbc75b5161d1937aa7cdf4ad686ef5f",
+      "okm_m": "3c1c44087b519537189bb6352e238932972b4b3024176051f9c21383e5e24a935069ef2d8bc3392e06fa84a664c6d9e9f5ca349ae784f930145859b01eec5b5d",
+      "x_m": "4d042d6f8e0d0dbe741ace4eba57a438c8edb1eb08ff8dfce2b8be9b4936eb7f",
+      "public_value": "aa2b4aca9bc1ba591eccd98233ac6a027348ecf8717504f2aa1bfc6f5e2e9d1f2b45bf6d75e55b88210c89b24d829989"
+    },
+    {
+      "phrase": "letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic avoid letter advice cage absurd amount doctor acoustic bless",
+      "account": 0,
+      "network": 0,
+      "generation": 1,
+      "seed": "848bbe19cad445e46f35fd3d1a89463583ac2b60b5eb4cfcf955731775a5d9e17a81a71613fed83f1ae27b408478fdec2bbc75b5161d1937aa7cdf4ad686ef5f",
+      "okm_m": "bc48a7c69789028a6e03f907ad22647070bb5329a0087adb381caba778c85823f8f567f27adff5fa2eb7409b6a4ae8d959832787ccaea350cf5f7f461b3fe581",
+      "x_m": "3584c3d3146aa906ea1926f31c14217da7e96d59221eb9c0492a4fd6d657b7d9",
+      "public_value": "a734bc0a8863a4d443e338392e4a6e6e0e46281a2a83a87c5bed89b75d68a11638f850a67ade514a8eae4e3916e28a71"
+    },
+    {
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "e28a37058c7f5112ec9e16a3437cf363a2572d70b6ceb3b6965447623d620f14d06bb321a26b33ec15fcd84a3b5ddfd5520e230c924c87aaa0d559749e044fef",
+      "okm_m": "cf9ae2835baea7fa82b94a448c7c73baf27852c9617357beee86a8cde19b8978acc2839995b29c0f3770aec7455b4fe523b42fa6449f11b1d19f3e9097557b5f",
+      "x_m": "145ec57bb297299904611b09361321f66acd2aca7f41fde4b41629cd06a871e7",
+      "public_value": "b5ef50aef6e08e93cb6322034c20876d23ca89c12db7f9e6767f2cc47c76469ef9bea11ed2ba6729b618393f90152c7f"
+    },
+    {
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "e28a37058c7f5112ec9e16a3437cf363a2572d70b6ceb3b6965447623d620f14d06bb321a26b33ec15fcd84a3b5ddfd5520e230c924c87aaa0d559749e044fef",
+      "okm_m": "850fc780e329ce87c48ed6405f88d1be3312d9732cf91b6b921d97677e44d2193153abe730578e3ebdcb867c069bb2aa46f6578bcfc2220e68410b825d5e9c3d",
+      "x_m": "5ee20ee4880b937abbd96ec30e6c9e0ce89c26be1bd59cf9514a7c8dab6fc91a",
+      "public_value": "a39158a4ad67912e6fabe9ea0c3e47a7c8a3996efed3170f8db0674f2ed864296f9217601b4db02a1cbc1b34a9d74e80"
+    },
+    {
+      "phrase": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote",
+      "account": 0,
+      "network": 1,
+      "generation": 1,
+      "seed": "e28a37058c7f5112ec9e16a3437cf363a2572d70b6ceb3b6965447623d620f14d06bb321a26b33ec15fcd84a3b5ddfd5520e230c924c87aaa0d559749e044fef",
+      "okm_m": "830c6b80b3038b8aa96d79ea9f55f95a63f3b210deb73321074ebf3d24a1d027b7f4818e5147ac322e487becc777b2521e365c33395b70b34869128357873cc0",
+      "x_m": "0cc94ffb28cbf1426bb6f820a81b73a6b44f1995eea8c7374e7e9e0019e3bf1d",
+      "public_value": "aaadf24f05c40f3a8b8a85f284d422148f6d0e503b25b56150742c27f18dff5515b39de587ace36f231be94a612443f0"
+    },
+    {
+      "phrase": "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "b873212f885ccffbf4692afcb84bc2e55886de2dfa07d90f5c3c239abc31c0a6ce047e30fd8bf6a281e71389aa82d73df74c7bbfb3b06b4639a5cee775cccd3c",
+      "okm_m": "e6e3695643c56e83e211cc5f3b35c29bfd0732a50d3ebf4f66da5bb6f1eec3cef3110b0622aa3f5d44a0ac490fe0548b5ecc61747543f94a1c67d517270e7d4d",
+      "x_m": "7005a7e59df2d1cd7fd8fbd01c96c13339f0efda7d349017f4e0647d233ec3f4",
+      "public_value": "b25ebe082e739549c134c8eb808ecaca5ca311788510c9fe4544cc3e2e3f3d2cc2c4913afef0665e8cd24876b5de020b"
+    },
+    {
+      "phrase": "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "b873212f885ccffbf4692afcb84bc2e55886de2dfa07d90f5c3c239abc31c0a6ce047e30fd8bf6a281e71389aa82d73df74c7bbfb3b06b4639a5cee775cccd3c",
+      "okm_m": "fbf1fa7066847b6155dee834d2f131564d4ff92a8d1901bdd6223536b343667de5a32ab5ab46c9d7af07716928061cad6d31f43e8fd920e50f872e64f97b53e6",
+      "x_m": "58011338afa72eaf5ee5392d086f7f3aeb1c6bf38452ef60cc0b41fd8f8f8437",
+      "public_value": "b8482b3d936190f9b9b259d942bb0862a8366af2a490f4626ae559e4f240457c933c5f79e16304ebee4902dbb6e99a0b"
+    },
+    {
+      "phrase": "void come effort suffer camp survey warrior heavy shoot primary clutch crush open amazing screen patrol group space point ten exist slush involve unfold",
+      "account": 0,
+      "network": 0,
+      "generation": 1,
+      "seed": "b873212f885ccffbf4692afcb84bc2e55886de2dfa07d90f5c3c239abc31c0a6ce047e30fd8bf6a281e71389aa82d73df74c7bbfb3b06b4639a5cee775cccd3c",
+      "okm_m": "33cdaaf02bacbdd95917b561b41716a81390fe4d625308c17705c18a49076ea047b8d645259ecb6c2f2ecf20d73cbdcc12999d8d610ed7b1696de29ea8ecd76c",
+      "x_m": "43ff11f7a610dde88996ede06f4e3e7e2bd37f14109c0bb5f0054c699f900298",
+      "public_value": "8ac16ba507777c8d6bdf3b25798a9c40b7acab91e6534c893728f2092e1121a8e1c8ceb944453cede1886c9030ad14fa"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "okm_m": "332956b2a731f819f467be9abbaa13364df705b68a9b3f1ab489fe0a845a1899b3190272e5390a3c44cfd1fb6e45f6231cc117d04e8bb665d0b201e6dc172ce8",
+      "x_m": "3e390695309b5046eb7c031a291828bb0bd893f6f8225fb8393205d1b3fd7ac6",
+      "public_value": "8f98fecd157d23e957fe361c4e6680a8e568479afdb844480f5544e66a3bcbaf0516bf7dbe01b5024c2cdffaff7ec9f4"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "okm_m": "c65358358886f2ff121cc656972dd5dd23ba44219460a2c4f054b5f25521ec8c5233bdf83da726acd638ff00d54dee6c8b69b4f638dd67f571fcbef2e4118801",
+      "x_m": "50b6fd0a8d170a7f7ff2d8d530277ccafeaea2256389400fb7a937aa8d8e3c12",
+      "public_value": "a4bae27ac2bce95df3b2264aa2e5e8917f4e5f90203928dd49f1f3eec53290f73e4acad06caadc40bc5b67b0c416a203"
+    },
+    {
+      "phrase": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "account": 0,
+      "network": 1,
+      "generation": 1,
+      "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+      "okm_m": "e3eb918949c076e36f38ee3052a99a60694a260400cc66c93f30623dd27505ededbbac80092271d57b386e530e2ac083a54217606cefb088fa9d6ddaf0df8e27",
+      "x_m": "1e2dfc0bf2623e8d9406ee068dd403a82cd08bb25be417d882c6c63eaaa98e70",
+      "public_value": "ad8872dfbd7bc054bcb8a2d5f22f49223037a9aee5051844c3f10fad6061618483d542b9ce36abc28fb7683cd753d5a7"
+    },
+    {
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math exhibit",
+      "account": 0,
+      "network": 0,
+      "generation": 0,
+      "seed": "85a7ff16b142e4fe20330f991bfd55e44543aace2d3f4be68fbef96bde85db6e7cc839fecd8fa573ad501a4335aca11140f0d37a218e05e2de0a15fe5c69a8a9",
+      "okm_m": "4559edc28f46a10727f38aefe3add847d4264c301f25ede23ad949d402cdb9e20408f621f1dfbd84746154d8024ea362e8f943da4dd0051980a2fac41934fbc7",
+      "x_m": "1f9abc793e6a9c4f999a55fbf05d3ed6d74caa6fddbae4f0bb1d6a290a7479bb",
+      "public_value": "96cdf4a6e3c4bc7203accc1b975e5072e5701d6d6400213c90b241ee07e7b6afcc9fdfe3bd6369a73bf532c6d733c5a1"
+    },
+    {
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math exhibit",
+      "account": 0,
+      "network": 1,
+      "generation": 0,
+      "seed": "85a7ff16b142e4fe20330f991bfd55e44543aace2d3f4be68fbef96bde85db6e7cc839fecd8fa573ad501a4335aca11140f0d37a218e05e2de0a15fe5c69a8a9",
+      "okm_m": "e946672c56e11f44b732245b6d1557e92ef44d2609a364f33e2ea667416813ac7b8bfd8d37c983bc94c6791a3cb1a849602188b81084fec0f3471169b71b2a21",
+      "x_m": "63949e54ea66830c24346457e9cef2e3d8cda0202cc1164582b7fabbc6df7d3d",
+      "public_value": "ab0dd35c4a573b4d4eb47ee0ebe4fcf5e1f382eaeb974eb78512e6341dd91ac664bc84cb7393e171a2897ec0e674b710"
+    },
+    {
+      "phrase": "abandon amount liar amount expire adjust cage candy arch gather drum bullet absurd math exhibit",
+      "account": 0,
+      "network": 0,
+      "generation": 1,
+      "seed": "85a7ff16b142e4fe20330f991bfd55e44543aace2d3f4be68fbef96bde85db6e7cc839fecd8fa573ad501a4335aca11140f0d37a218e05e2de0a15fe5c69a8a9",
+      "okm_m": "22beb244dbd7e660224916112ff71ef18819b0092ef8ceddcbab897ab56a7f0377c07a7307aedae00cf4c546da72becac8f6d2ab1cf6db2ed22c293ccba81bf0",
+      "x_m": "15c04abe25ccb8a9edb1c9335aecc2bb49622b6d95358c513745891ccab99a24",
+      "public_value": "96fcdfa759001cce94da01107a7286814dd4091dcde81fcff94285c37ffce7536407e8ed009ce52047d53629f633b581"
+    }
+  ]
+}

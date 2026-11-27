@@ -107,6 +107,21 @@ pub enum Error {
     RevealNotAllowed,
     /// A reveal whose proof doesn't verify for this conversation.
     InvalidReveal,
+    /// A certificate that doesn't check: its length, version, network,
+    /// generation, policy, name, scalars or proof (docs/protocol.md §21.4).
+    InvalidCertificate,
+    /// A certificate asked for a Seedelf whose register isn't the Seedelf
+    /// key's: its proof would hand out the key times the register's
+    /// generator.
+    NotOwned,
+    /// One key given as both the Seedelf key and the messaging key.
+    SameKey,
+    /// A network byte that isn't preprod's or mainnet's (§21.2).
+    UnknownNetwork,
+    /// A withdrawal that doesn't check: its length, version, network or
+    /// scalars, or, against the certificate it names, its digest or proof
+    /// (docs/protocol.md §21.7).
+    InvalidWithdrawal,
 }
 
 impl fmt::Display for Error {
@@ -169,6 +184,11 @@ impl fmt::Display for Error {
             Error::InvalidReveal => {
                 write!(f, "reveal's proof doesn't verify for this conversation")
             }
+            Error::InvalidCertificate => write!(f, "certificate doesn't check"),
+            Error::NotOwned => write!(f, "the Seedelf's register isn't this key's"),
+            Error::SameKey => write!(f, "one key given for both the Seedelf and Messages"),
+            Error::UnknownNetwork => write!(f, "unknown network byte"),
+            Error::InvalidWithdrawal => write!(f, "withdrawal doesn't check"),
         }
     }
 }

@@ -466,7 +466,7 @@ fn run(seed: u64) {
         Wallet::new(SecretKey::generate()),
     ];
     let mut now = T;
-    let bob_handle = wallets[1].key.register();
+    let bob_handle = common::handle_of(&wallets[1].key);
     let cid = {
         let alice = &mut wallets[0];
         let mut inbox = alice.load();
@@ -627,7 +627,7 @@ fn case_04_killed_between_write_post_and_mark() {
         Wallet::new(SecretKey::generate()),
     );
     let mut inbox = alice.load();
-    let cid = common::start(&mut inbox, &alice.key, &bob.key.register(), T);
+    let cid = common::start(&mut inbox, &alice.key, &common::handle_of(&bob.key), T);
     alice.write(&inbox, None);
 
     // Dies after the write: nothing posted.
@@ -670,7 +670,7 @@ fn case_05_killed_between_the_write_and_the_cursor() {
         Wallet::new(SecretKey::generate()),
     );
     let mut inbox = alice.load();
-    let cid = common::start(&mut inbox, &alice.key, &bob.key.register(), T);
+    let cid = common::start(&mut inbox, &alice.key, &common::handle_of(&bob.key), T);
     alice.write(&inbox, None);
     for text in [&b"one"[..], b"two"] {
         let envelope = alice.compose(cid, text).unwrap();

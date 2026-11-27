@@ -2,7 +2,7 @@
 
 A Seedelf wallet has two secret scalars from one recovery phrase. The Seedelf key x spends every Seedelf and every Lovejoin box the wallet holds. Messages' key x_m reads, writes and proves in Seedelf Messaging. x_m comes from the same BIP39 seed under another HKDF salt and info, one for each account and network (protocol.md §21.2). A certificate binds it to each Seedelf: one proof, under one challenge, of x for the Seedelf's register (g_S, u_S) and of x_m for its messaging register M_S = (h_S, [x_m]h_S), whose base h_S is a hash of the Seedelf (§21.3, §21.4). The handle stays the Seedelf. The owner chose the split on 2026-11-26 (chunk 55), so that a flaw in Messages' cryptography can't spend funds. What it can still give a thief of x_m is messages, and the power to pose to the key's owner as anyone, a "Verified" Seedelf included, which could mislead the owner into a payment (§8).
 
-**Specified, not built.** The code still uses x for both until chunk 55's steps 55b to 55e land ([the plan](../../seedelf-web-wallet/docs/plans/chunk-55-messaging-key.md)). This document argues the design as protocol.md §21 specifies it. Its inventory (§4) names today's code, where every use takes x, and says which key each takes once chunk 55 is built. The one-key version of this document, the argument for the code as it is today, is at commit c096eab9:
+**Built in 55b to 55e** ([the plan](../../seedelf-web-wallet/docs/plans/chunk-55-messaging-key.md)): the crate, the bindings and the worker. This document argues the design protocol.md §21 specifies, as built, and its inventory (§4) names the code. The one-key version of this document, the argument for the code before chunk 55, is at commit c096eab9:
 
     git show c096eab9:seedelf-platform/seedelf-messaging/docs/joint-security.md
 
@@ -10,14 +10,14 @@ This document:
 - §1 says why two keys still need an argument, and §2 how much of NIST's rule against reuse is now kept;
 - §3 sets out the setting, §4 lists every use of each key, crate by crate, and §5 states the rules every use must keep;
 - §6 and §7 give a theorem in three parts and its proof, game by game, in the random-oracle model, and §7.4 says what became of the one-key proof's weakest step;
-- §7.5 says which steps are new, §8 what isn't covered, §9 the gaps found and which key each concerns once chunk 55 is built, and §10 how to keep it true.
+- §7.5 says which steps are new, §8 what isn't covered, §9 the gaps found and which key each concerns now, and §10 how to keep it true and which tests hold it.
 
 **Status.** An argument in the random-oracle model under gap assumptions, in the style of Degabriele, Lehmann, Paterson, Smart and Strefler's Theorem 2, written for an outside cryptographer to check. Nobody outside has checked it.
 - **The one-key version** was reviewed by AI models: a fresh-context review, then its arguments written out by one model and attacked by another, and its §7.3 step proved in the algebraic group model and attacked the same way (2026-11-22 to 2026-11-24, §10). What it found that still applies is folded in.
-- **This version** had chunk 55's step 55a review (2026-11-26): a fresh read of protocol.md §21 (Sonnet), and two attacks on §21 and this document (Fable, Opus). None found a way to x or x_m, or a forgery of a spend or a certificate. Both found §7.4's claim sound, that neither key gives a static-DH answer. Their findings are folded in (§10).
-- **It's AI review, not an audit:** no person has checked any of it, and it stays unaudited. It isn't machine-checked, and it holds the code to nothing until chunk 55 is built and §10's tests exist.
+- **This version** had chunk 55's step 55a review (2026-11-26): a fresh read of protocol.md §21 (Sonnet), and two attacks on §21 and this document (Fable, Opus). None found a way to x or x_m, or a forgery of a spend or a certificate. Both found §7.4's claim sound, that neither key gives a static-DH answer. Their findings are folded in (§10). The withdrawal (use 12) was argued after that review, when the owner put it in 1.10.0 (2026-11-26). It hasn't been attacked yet: the coming combined review covers it.
+- **It's AI review, not an audit:** no person has checked any of it, and it stays unaudited. It isn't machine-checked, and it holds the code only as far as §4's inventory and §10's tests do. §10 says which of the tests it asks for exist, and which are still missing.
 
-**What it gives, once built:**
+**What it gives:**
 - **(B) The funds rest on gap-DLP alone** (§6). Forging a spend reduces to the discrete log of x with a decision oracle asked only "is W = [x]P?". No static-DH answers, no powers of x, no algebraic group model: x meets a stranger's point only in ownership tests and in proofs for its own registers, the certificate's among them. It holds against an attacker that holds x_m, so whatever Messages gives away, x_m itself included, spends no funds.
 - **(C) x_m stays secret on the same terms.** Finding x_m reduces to its discrete log with the same kind of oracle. The one-key proof's weakest step, a static-DH answer for each handle the user writes to first, is gone for x_m too: the base a writer starts on is a hashed point, which a reduction programs (§7.4). It holds against an attacker that holds x.
 - **x_m stolen still costs something:** messages, and the power to pose to its owner as anyone, a "Verified" Seedelf included (key-compromise impersonation, §8). That could mislead a payment, but it forges none.
@@ -31,7 +31,7 @@ Key reuse isn't safe by default. Degabriele, Lehmann, Paterson, Smart and Strefl
 
 Splitting the key still leaves each key with several uses (§4):
 - **x** makes three Schnorr-type proofs, the spend's (use 2), Lovejoin's owner proof (use 3) and the certificate's x half (use 11x), and two key derivations, the web wallet's one-time keys (use 8) and the CLI's Ed25519 key (use 9). Its public side is many registers (g, [x]g) on different bases.
-- **x_m** has a KEM (use 5), a handshake with static Diffie–Hellman (uses 6 and 6′), two Schnorr-type proofs, the keys proof (use 10) and the reveal (use 4), the scan's tests (use 7m), and the certificate's other half (use 11m). Its public side is the messaging registers (h_S, [x_m]h_S) and each conversation's (p₀, A).
+- **x_m** has a KEM (use 5), a handshake with static Diffie–Hellman (uses 6 and 6′), two Schnorr-type proofs, the keys proof (use 10) and the reveal (use 4), the scan's tests (use 7m), the certificate's other half (use 11m), and the withdrawal of its own certificates (use 12). Its public side is the messaging registers (h_S, [x_m]h_S) and each conversation's (p₀, A).
 - **The certificate couples them:** one challenge over both halves, and two nonces, each keyed by its own key. Built wrong, it's where Messages could still reach x.
 
 The argument below extends Theorem 2 to each key's uses and to the certificate between them, and says where that needed something new.
@@ -46,7 +46,7 @@ The one-key design broke this rule on purpose: x proved spending and established
 
 **How much of the departure is left:**
 - **x now keeps the rule.** It's a signature-like key: three proofs of knowledge, ownership tests, and two derivations, hashes of x that are neither of the rule's purposes. It establishes no key. In the code as it is, x still does everything Messages does too.
-- **x_m's half of the certificate is close to NIST's own exception:** a key-establishment key proving possession for its own certificate. It's the back-signature, the proof that whoever named m_S knows its key. It differs in form: it's one half of an AND-proof under x's challenge, not a signature on a request to a CA, and x stands where the CA would.
+- **x_m's half of the certificate is close to NIST's own exception:** a key-establishment key proving possession for its own certificate. It's the back-signature, the proof that whoever named m_S knows its key. It differs in form: it's one half of an AND-proof under x's challenge, not a signature on a request to a CA, and x stands where the CA would. The withdrawal (use 12) is the same kind of proof, of possession of its own certificate's register, to take it down.
 - **x_m still departs, by less.** Beside key establishment (the KEM and the handshake's Diffie–Hellman) it makes two proofs the exception doesn't cover: the keys proof's A branch, which shows a first message's writer holds A's key, and the reveal's branch 1, which shows a Seedelf. So x_m still needs this document's analysis: rules 1m and 2m, and Part C. A failure there costs x_m (below), and spends nothing.
 
 **Why that much stays:**
@@ -73,7 +73,7 @@ The one-key design broke this rule on purpose: x proved spending and established
 - **q − 1 = 2³² · 3 · 11 · 19 · 10177 · 125527 · 859267 · 906349² · 2508409 · 2529403 · 52437899 · 254760293²**, checked by multiplication with each factor a probable prime. It matters for rule 1.
 - **E(F_p) has small subgroups outside G1:** G1's cofactor is h₁ = 3 · 11² · 10177² · 859267² · 52437899² (≈ 2¹²⁶). So a key applied to an unchecked point can leak it modulo these primes (rule 5).
 - **x** is uniform in [1, q − 1]: the web wallet's frozen v1 derivation (seedelf-crypto/src/derivation.rs: HKDF-SHA-256 of the BIP39 seed, salt `seedelf-wallet-v1`, 64 bytes reduced mod q), or the CLI's random scalar in its wallet file.
-- **x_m** (specified, not built) is HKDF-SHA-256 of the same seed, salt `seedelf-messaging-v1`, info `seedelf-messaging-key` ‖ u32_be(account) ‖ network ‖ generation, 64 bytes reduced mod q (protocol.md §21.2). There's one for each account, network and generation, and v1 has generation 0x00 alone. The CLI has none.
+- **x_m** (seedelf-crypto's `messaging_key_v1`, derivation.rs:301) is HKDF-SHA-256 of the same seed, salt `seedelf-messaging-v1`, info `seedelf-messaging-key` ‖ u32_be(account) ‖ network ‖ generation, 64 bytes reduced mod q (protocol.md §21.2). There's one for each account, network and generation, and v1 has generation 0x00 alone. The CLI has none.
 - **The two are independent.** Under different salts, HKDF's outputs over one seed are independent random values. That holds in the random-oracle model, or with HMAC-SHA-256 a pseudorandom function keyed through its message input (the dual-PRF assumption that TLS 1.3's analyses make). It fails only if the attacker evaluates the derivation at the wallet's own seed, which takes its phrase: at least 128 bits for 12 words, 256 for 24. Call that ε_seed, at most about q_H · 2⁻¹²⁸. The one-key argument had the same term, unstated. Every reduction below picks the other key itself.
 - **A register of x** is (g, u) with u = [x]g, both points in G1 and not O. **A register of x_m** is (h, [x_m]h): a Seedelf's M_S, a conversation's R_A = (p₀, A), or, at its reader, R_B = (p₀, w₀).
 - **h_S,** a Seedelf's messaging base, is hash_to_G1(network ‖ policy ‖ len(N) ‖ N ‖ g_S ‖ u_S), policy being the Seedelf policy's 28-byte hash, under the DST `Seedelf-Messaging|v1|handle-base|BLS12381G1_XMD:SHA-256_SSWU_RO_`: RFC 9380's `BLS12381G1_XMD:SHA-256_SSWU_RO_` (protocol.md §21.3). RFC 9380 gives that construction as indifferentiable from a random oracle to G1. So a proof may model it as one, H_base below, and program it, as the proof of BLS signatures does, in single-stage games such as these.
@@ -88,13 +88,15 @@ The one-key design broke this rule on purpose: x proved spending and established
 
 **Random oracles.** Every hash below is modelled as a random oracle, and rule 3 says why they can be treated as independent ones. Blake2b with different output lengths is a different function: the digest length is in its parameter block. H_base is a random oracle to G1, built on SHA-256 queries that rule 3 keeps apart from every other.
 
-**A hash reduced mod q.** The challenges of uses 4, 10 and 11, and the base proof's, are SHA-256's 32 bytes reduced mod q, as use 3's is blake2b-256's. That isn't uniform on [0, q): 2²⁵⁶ = 2q + r with r ≈ 0.21·q, so a value below r has three preimages and the rest two. Every simulator below draws the 32 bytes and reduces them, as the hash does, so no step rests on uniformity. But a guessed challenge is right with probability up to 3/2²⁵⁶, where a uniform one would give 1/q. A nonce, or b, is HMAC-SHA-512's 64 bytes reduced mod q, within 2⁻²⁵⁹ of uniform.
+**A hash reduced mod q.** The challenges of uses 4, 10, 11 and 12, and the base proof's, are SHA-256's 32 bytes reduced mod q, as use 3's is blake2b-256's. That isn't uniform on [0, q): 2²⁵⁶ = 2q + r with r ≈ 0.21·q, so a value below r has three preimages and the rest two. Every simulator below draws the 32 bytes and reduces them, as the hash does, so no step rests on uniformity. But a guessed challenge is right with probability up to 3/2²⁵⁶, where a uniform one would give 1/q. A nonce, or b, is HMAC-SHA-512's 64 bytes reduced mod q, within 2⁻²⁵⁹ of uniform.
 
 | Name | Function | Input starts with | Used by |
 |---|---|---|---|
 | H_spend | blake2b-224 | g (a compressed point) | Use 2's challenge |
 | H_lj | blake2b-256 | `lovejoin/sigmajoin/v1/` ‖ 0x01 | Use 3's challenge |
 | H_cert | SHA-256 | `Seedelf-Messaging\|v1\|certificate` | Use 11's challenge, over both halves |
+| H_wd | SHA-256 | `Seedelf-Messaging\|v1\|withdrawal` | Use 12's challenge |
+| The list's stamps | SHA-256 | `Seedelf-Messaging\|v1\|listing-stamp\|`, `Seedelf-Messaging\|v1\|unlisting-stamp\|` | A certificate's post and a withdrawal's post (protocol.md §21.7; no key's use) |
 | H_rev | SHA-256 | `Seedelf-Messaging\|v1\|session\|reveal` | Use 4's challenge |
 | H_keys | SHA-256 | `Seedelf-Messaging\|v1\|session\|keys\|handle`, or `…\|session\|keys\|continuation` | Use 10's challenge (the continuation form uses no key) |
 | H_tag | SHA-256 | `Seedelf-Messaging\|v1\|envelope\|tag` | The scan's tag (use 7m): over w when sealing, over [x_m]p when the wallet scans |
@@ -104,6 +106,7 @@ The one-key design broke this rule on purpose: x proved spending and established
 | N_spend | HMAC-SHA-512, keyed by x | `seedelf/schnorr/nonce/v1` | Use 2's nonce |
 | N_cert_x | HMAC-SHA-512, keyed by x | `Seedelf-Messaging\|v1\|certificate-nonce\|x` | Use 11x's nonce, k_x |
 | N_cert_m | HMAC-SHA-512, keyed by x_m | `Seedelf-Messaging\|v1\|certificate-nonce\|m` | Use 11m's nonce, k_m |
+| N_wd | HMAC-SHA-512, keyed by x_m | `Seedelf-Messaging\|v1\|withdrawal-nonce` | Use 12's nonce |
 | N_rev | HMAC-SHA-512, keyed by x_m | `Seedelf-Messaging\|v1\|session\|reveal-nonce` | Use 4's nonce |
 | N_b | HMAC-SHA-512, keyed by x_m | `Seedelf-Messaging\|v1\|session\|base-scalar` | Use 6's b, the writer's blinding |
 | N_k | HMAC-SHA-512, keyed by b | `Seedelf-Messaging\|v1\|session\|base-nonce` | The base proof's nonce (no key's use) |
@@ -113,71 +116,87 @@ The one-key design broke this rule on purpose: x proved spending and established
 | H_ot | HKDF-SHA-256, salt `seedelf-one-time-key-v1`, ikm x | | Use 8 |
 | H_ed | SHA-512 of x's 32 bytes, inside Ed25519 | | Use 9 (CLI) |
 
-Until 55b is built, the code keys N_rev, N_b and N_keys by x, and has no H_cert, N_cert_x, N_cert_m, H_base or H_xm.
+Before 55b the code keyed N_rev, N_b and N_keys by x, and had no H_cert, N_cert_x, N_cert_m, H_base, H_xm, H_wd or N_wd.
 
 ## 4. The inventory: every use of each key
 
-Found by reading every crate, the CLI, the WebAssembly bindings and the extension's worker (2026-11-22), brought up to date for the 1.10.0 gate review's protocol change (2026-11-23), and split between the two keys for chunk 55 (2026-11-26). §10 says how to repeat the sweep. "Where" is today's code, at commit c096eab9, where every use takes x; each table says which key its uses take once chunk 55 is built. The uses keep their one-key numbers. 1m, 7x and 7m are the splits, and 11x and 11m the certificate's halves.
+Found by reading every crate, the CLI, the WebAssembly bindings and the extension's worker (2026-11-22), brought up to date for the 1.10.0 gate review's protocol change (2026-11-23), split between the two keys for chunk 55, and checked against the code 55b to 55e built (2026-11-26). §10 says how to repeat the sweep. Line numbers are at this document's commit. The uses keep their one-key numbers: 1m, 7x and 7m are the splits, 11x and 11m the certificate's halves, and 12 the withdrawal. Paths are seedelf-platform's, seedelf-messaging's src/ for session/, the wasm crate's src/ for wasm/src, and the extension's src/background/ for the worker's files.
 
 ### 4.1 x's uses
-
-These take x today and once chunk 55 is built.
 
 | # | Use | What x computes | What leaves the wallet | Where |
 |---|---|---|---|---|
 | 1 | Registers | (g, [x]g) on a base the wallet re-randomized with a fresh d, from its root (G, [x]G) | The register, on chain | seedelf-crypto/src/register.rs:58 (`create`), :117 (`rerandomize`) |
-| 2 | The spending proof (Schnorr, checked on chain, frozen as variant 1) | T = [r]g; c = blake2b-224(g ‖ T ‖ u ‖ vkh) over the raw bytes; z = r + c·x. r = HMAC-SHA-512(x, `seedelf/schnorr/nonce/v1` ‖ g ‖ u ‖ vkh ‖ 32 random bytes) mod q | (T, z) in the redeemer | seedelf-crypto/src/schnorr.rs:114 (`create_proof`), :72 (the nonce), :172; validator seedelf-contracts lib/schnorr.ak at 5b82530 |
+| 2 | The spending proof (Schnorr, checked on chain, frozen as variant 1) | T = [r]g; c = blake2b-224(g ‖ T ‖ u ‖ vkh) over the raw bytes; z = r + c·x. r = HMAC-SHA-512(x, `seedelf/schnorr/nonce/v1` ‖ g ‖ u ‖ vkh ‖ 32 random bytes) mod q | (T, z) in the redeemer | seedelf-crypto/src/schnorr.rs:114 (`create_proof`), :72 (the nonce, `proof_nonce_with`), :172; validator seedelf-contracts lib/schnorr.ak at 5b82530 |
 | 3 | Lovejoin's owner proof (Schnorr, to withdraw a box) | t = [r]a; c = blake2b-256(`lovejoin/sigmajoin/v1/` ‖ 0x01 ‖ a ‖ b ‖ t ‖ ctx) mod q; z = r + c·x. r from RFC 6979 over x and SHA-256(tag ‖ a ‖ b ‖ ctx), deterministic | (t, z) in the redeemer | seedelf-crypto/src/lovejoin.rs:199 (`prove_schnorr`), :130 (the nonce) |
-| 7x | Ownership tests, for funds | Is [x]g = u? For what the wallet spends, shows and refuses, and which Seedelfs it holds, so which it may turn on for Messages | Nothing directly: what the wallet spends, shows, refuses or turns on | seedelf-crypto/src/register.rs:185 (`is_owned`, which compares points with blst's masked equality); seedelf-core/src/lovejoin/mod.rs:498; seedelf-core/src/utxos.rs:68, :163, :601; the worker's contract scans and balances (`isOwned`) |
-| 8 | One-time signing keys (web wallet) | HKDF-SHA-256(salt `seedelf-one-time-key-v1`, ikm = x, info = a fresh 32-byte seed): an Ed25519 key whose hash is the proof's vkh | Its public key and signatures, in the transaction | seedelf-web-wallet/wasm/src/lib.rs:2077 (`one_time_key`) |
-| 9 | The CLI's external address key (CLI only) | Ed25519's key pair of x's 32 bytes as a seed; its public key, as 32 bytes, is in turn the seed of the address's Ed25519 key | That second key's public key and signatures | seedelf-crypto/src/convert.rs:23; seedelf-cli/src/commands/external/sweep.rs:29, :65, external/balance.rs |
-| 11x | The certificate's x half (§4.3) | T_x = [k_x]g_S and z_x = k_x + c·x, for a Seedelf of the wallet's own, with k_x keyed by x | c and z_x, in the certificate on the relay's public list | Not built (§4.3) |
+| 7x | Ownership tests, for funds | Is [x]g = u? For what the wallet spends, shows and refuses, and which Seedelfs it holds, so which it may turn on for Messages and certify | Nothing directly: what the wallet spends, shows, refuses or turns on | seedelf-crypto/src/register.rs:185 (`is_owned`, which compares points with blst's masked equality); seedelf-core/src/lovejoin/mod.rs:498; seedelf-core/src/utxos.rs:68, :163, :601; the worker's `keys.seedelf.isOwned` (tx-view.ts:329, balances.ts:552, dapp.ts:2409) |
+| 8 | One-time signing keys (web wallet) | HKDF-SHA-256(salt `seedelf-one-time-key-v1`, ikm = x, info = a fresh 32-byte seed): an Ed25519 key whose hash is the proof's vkh | Its public key and signatures, in the transaction | wasm/src/lib.rs:2077 (`one_time_key`) |
+| 9 | The CLI's external address key (CLI only) | Ed25519's key pair of x's 32 bytes as a seed; its public key, as 32 bytes, is in turn the seed of the address's Ed25519 key | That second key's public key and signatures | seedelf-crypto/src/convert.rs:23; seedelf-cli/src/commands/external/sweep.rs:29, :65, external/balance.rs:26 |
+| 11x | The certificate's x half (§4.3) | T_x = [k_x]g_S and z_x = k_x + c·x, for a Seedelf of the wallet's own, with k_x keyed by x | c and z_x, in the certificate on the relay's public list | session/certificate.rs:135 (`Certificate::make`), :166 (k_x), :172 (T_x), :178 (z_x) |
 
 ### 4.2 x_m's uses
 
-These take x today, and x_m once chunk 55 is built. Where a use's text names h_S, m_S or §21.9's statement, today's code has g_S, the handle's v_S or u_S, and §19.2's statement.
+x_m has taken these since 55b. Before it, x did (the one-key version, c096eab9).
 
-| # | Use | What x_m computes | What leaves the wallet | Where (today, with x) |
+| # | Use | What x_m computes | What leaves the wallet | Where |
 |---|---|---|---|---|
-| 1m | Messaging registers | M_S = (h_S, [x_m]h_S) for each Seedelf the wallet turns on (protocol.md §21.3), and each conversation's R_A = (p₀, [x_m]p₀) (use 6) | m_S in the certificate; A in F | M_S: not built. R_A: use 6's |
-| 4 | The verified reveal (CDS OR-proof, protocol.md §19.2, as §21.9 changes it) | z₁ = k₁ + c₁·x_m, for branch 1, log_{h_S} m_S = log_{p₀} A. c₁ + c₂ = SHA-256(label ‖ statement ‖ T₁ ‖ T₁′ ‖ T₂) mod q, the statement being cid ‖ p₀ ‖ A ‖ w₀ ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ m_S, with T₁ = [k₁]p₀ and T₁′ = [k₁]h_S. k₁ = HMAC-SHA-512(x_m, nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux) mod q | The reveal, inside the ratchet, to the other side: len ‖ N ‖ g_S ‖ u_S ‖ m_S ‖ c₁ ‖ c₂ ‖ z₁ ‖ z₂, 274 to 305 bytes. It carries m_S, so the reader checks the proof before any read of the chain or the list, then applies §21.5's conflict rule at the press | seedelf-messaging/src/session/reveal.rs:199 (`prove_seedelf`), :170 (the nonce, through session/draw.rs:86, `hedged_scalar`), :304 (`Conversation::reveal`) |
-| 5 | Reading (ECIES decapsulation) | [x_m]c for the envelope's c, then HKDF. A session reader then checks c = [r]p, with r = HKDF(salt, mk, `…\|ratchet\|envelope-ephemeral`) mod q (protocol.md §16.2) | Nothing directly: whether it opened shows in behaviour | seedelf-messaging/src/envelope.rs:140 (`decrypt_message`, the multiplication at :145); the check is session/conversation.rs:495 (`check_envelope`) |
-| 6 | The handshake's Diffie–Hellman (protocol.md §3, §16.2) | As reader: w₀ = [x_m]p₀ on a base the base proof (against the reader's M_S) or a held conversation binds; then, once the keys proof verifies (it needs no key beyond w₀), [x_m]E_A, [x_m]A, and in the first ratchet step [x_m]S_A, S_A being the header key every message of the request shares. As writer: b = HMAC-SHA-512(x_m, `…\|session\|base-scalar` ‖ h_S ‖ m_S ‖ F's head ‖ 32 random bytes) mod q, then A = [x_m]p₀ on p₀ = [b]h_S, the reader's messaging register re-randomized by b; and [x_m]w₀ | A, in F; b never leaves, and the base proof shows it, or the reader's key, under a nonce keyed by b. Every DH value goes only into HKDF. A and w₀ go into every message's associated data, which the other side can solve for from the AES-GCM tags (rule 1m) | session/conversation.rs:159 (b, through session/first_contact.rs:494, `base_scalar`), :182 (A), :202 ([x]w₀), :280 (the reader's w₀), :284–286 (its [x]E_A and [x]A, after the keys proof at :281), :289 (x as RatchetInitBob's key); session/ratchet.rs:598 (the first step's [x]S_A) |
-| 6′ | Continuations (protocol.md §6) | The new F's A = [x_m]p₀ on the old conversation's base | A, in F: the writer's old public value | session/conversation.rs:121 (`continue_with`, its multiplication at :131), session/inbox.rs:780 (`judge`, its multiplication at :787) |
-| 7m | Ownership tests, in Messages | The scan: is SHA-256(`…\|envelope\|tag` ‖ [x_m]p) the envelope's tag, compared in constant time. And is a register x_m's: one's own handle refused, a continuation's own side, a register under a first message's `to` counting for its base proof only if it's the reader's, and the reveal's guard | Nothing directly: what the wallet scans, refuses or answers | seedelf-messaging/src/register.rs:107 (`matches_register`), envelope.rs:158 (`matches_envelope`, the scan), :76 (`Envelope::is_for`), :206 (`tag_matches`); session/reveal.rs:318–319; session/conversation.rs:107 (own handle refused), :131 (a continuation's own side); session/inbox.rs:693 (`receive_opened`) |
-| 10 | The keys proof in F (protocol.md §3, §16.2), from a handle only: E_A's and S_A's keys, AND A's key OR the reader's w₀'s (Cramer–Damgård–Schoenmakers) | z₁ = k₁ + c₁·x_m on p₀ = [b]h_S, for A = [x_m]p₀, which the prover computes itself. c₁ + c₂ = SHA-256(`…\|keys\|handle` ‖ M ‖ T_e ‖ T_s ‖ T₁ ‖ T₂) mod q, where M = p₀ ‖ A ‖ w₀ ‖ E_A ‖ S_A ‖ F″, T₁ = [k₁]p₀, and T₂ = [z₂]p₀ − [c₂]w₀ from the drawn c₂, z₂. k₁ = HMAC-SHA-512(x_m, `…\|keys-nonce\|a` ‖ M ‖ T_e ‖ T_s ‖ c₂ ‖ z₂ ‖ aux) mod q | c₁, c₂, z₁, z₂, with z_e and z_s, in F: to the reader and whoever holds its key | session/first_contact.rs:765 (`KeysStatement::prove_handle`, its nonces through session/draw.rs:118, `hedged_or_draws`), from `Conversation::begin` (session/conversation.rs:147, the call at :193–194) for `Origin::Handle` only |
-| 11m | The certificate's x_m half (§4.3) | T_m = [k_m]h_S and z_m = k_m + c·x_m, with k_m keyed by x_m | m_S, c and z_m, in the certificate | Not built (§4.3) |
+| 1m | Messaging registers | M_S = (h_S, [x_m]h_S) for each Seedelf the wallet turns on (protocol.md §21.3), and each conversation's R_A = (p₀, [x_m]p₀) (use 6) | m_S in the certificate, and to the worker's JavaScript through `messagingValue`; A in F | session/seedelf.rs:135 (`Seedelf::base`: h_S by blstrs's `hash_to_curve` at :136, under `HANDLE_BASE_DST`, :36), :147 (`Seedelf::handle`, [x_m]h_S at :149); the bindings' `messagingValue` (wasm/src/lib.rs:8457; messaging.rs `value`, :939), which gives m_S for any (network, name, register) it's asked, with no check of ownership or certificate, and which the worker asks only for its own W8 and W12 pairs (messaging.ts:4018). R_A: use 6's |
+| 4 | The verified reveal (CDS OR-proof, protocol.md §19.2) | z₁ = k₁ + c₁·x_m, for branch 1, log_{h_S} m_S = log_{p₀} A. c₁ + c₂ = SHA-256(label ‖ statement ‖ T₁ ‖ T₁′ ‖ T₂) mod q, the statement being cid ‖ p₀ ‖ A ‖ w₀ ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ h_S ‖ m_S, with T₁ = [k₁]p₀ and T₁′ = [k₁]h_S. k₁ = HMAC-SHA-512(x_m, nonce label ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux) mod q | The reveal, inside the ratchet, to the other side: len ‖ N ‖ g_S ‖ u_S ‖ m_S ‖ c₁ ‖ c₂ ‖ z₁ ‖ z₂, 274 to 305 bytes. It carries m_S, so the reader checks the proof before any read of the chain or the list, then applies §21.5's conflict rule at the press | session/reveal.rs:208 (`prove_seedelf`, z₁ at :225), :179 (the nonce, `hedged_nonce`, through session/draw.rs:86, `hedged_scalar`), :346 (`reveal_with`, its guard on A and m_S at :356–357); the certificate's check is the bindings' (wasm/src/messaging.rs:796–806) |
+| 5 | Reading (ECIES decapsulation) | [x_m]c for the envelope's c, then HKDF. A session reader then checks c = [r]p, with r = HKDF(salt, mk, `…\|ratchet\|envelope-ephemeral`) mod q (protocol.md §16.2) | Nothing directly: whether it opened shows in behaviour | envelope.rs:140 (`decrypt_message`, the multiplication at :145), reached from session/wire.rs:204 (`open`); the check is session/conversation.rs:511 (`check_envelope`) |
+| 6 | The handshake's Diffie–Hellman (protocol.md §3, §16.2) | As reader: w₀ = [x_m]p₀ on a base the base proof (against the reader's M_S) or a held conversation binds; then, once the keys proof verifies (it needs no key beyond w₀), [x_m]E_A, [x_m]A, and in the first ratchet step [x_m]S_A, S_A being the header key every message of the request shares. As writer: b = HMAC-SHA-512(x_m, `…\|session\|base-scalar` ‖ h_S ‖ m_S ‖ F's head ‖ 32 random bytes) mod q, then A = [x_m]p₀ on p₀ = [b]h_S, the reader's messaging register re-randomized by b; and [x_m]w₀ | A, in F; b never leaves, and the base proof shows it, or the reader's key, under a nonce keyed by b. Every DH value goes only into HKDF. A and w₀ go into every message's associated data, which the other side can solve for from the AES-GCM tags (rule 1m) | session/conversation.rs:175 (b, through session/first_contact.rs:462, `base_scalar`), :198 (A), :218 ([x_m]w₀), :296 (the reader's w₀), :300–302 (its [x_m]E_A and [x_m]A, after the keys proof at :297), :304–306 (x_m as RatchetInitBob's key); session/ratchet.rs:598 (the first step's [x_m]S_A) |
+| 6′ | Continuations (protocol.md §6) | The new F's A = [x_m]p₀ on the old conversation's base | A, in F: the writer's old public value | session/conversation.rs:137 (`continue_with`, its multiplication at :147), session/inbox.rs:794 (`judge`, its multiplication at :801) |
+| 7m | Ownership tests, in Messages | The scan: is SHA-256(`…\|envelope\|tag` ‖ [x_m]p) the envelope's tag, compared in constant time. And is a register x_m's: one's own handle refused, a continuation's own side, a register under a first message's `to` counting for its base proof only if it's the reader's, and the reveal's guard | Nothing directly: what the wallet scans, refuses or answers | register.rs:107 (`matches_register`), envelope.rs:158 (`matches_envelope`, the scan), :76 (`Envelope::is_for`), :206 (`tag_matches`); session/reveal.rs:356–357; session/conversation.rs:123 (own handle refused), :147 (a continuation's own side); session/inbox.rs:652 (`receive_opened`, its check at :706–707) |
+| 10 | The keys proof in F (protocol.md §3, §16.2), from a handle only: E_A's and S_A's keys, AND A's key OR the reader's w₀'s (Cramer–Damgård–Schoenmakers) | z₁ = k₁ + c₁·x_m on p₀ = [b]h_S, for A = [x_m]p₀, which the prover computes itself. c₁ + c₂ = SHA-256(`…\|keys\|handle` ‖ M ‖ T_e ‖ T_s ‖ T₁ ‖ T₂) mod q, where M = p₀ ‖ A ‖ w₀ ‖ E_A ‖ S_A ‖ F″, T₁ = [k₁]p₀, and T₂ = [z₂]p₀ − [c₂]w₀ from the drawn c₂, z₂. k₁ = HMAC-SHA-512(x_m, `…\|keys-nonce\|a` ‖ M ‖ T_e ‖ T_s ‖ c₂ ‖ z₂ ‖ aux) mod q | c₁, c₂, z₁, z₂, with z_e and z_s, in F: to the reader and whoever holds its key | session/first_contact.rs:733 (`KeysStatement::prove_handle`, z₁ at :805, its nonces through session/draw.rs:118, `hedged_or_draws`, k₁ at :827; its check of A at :774), from `Conversation::begin` (session/conversation.rs:163, the call at :209–210) for `Origin::Handle` only |
+| 11m | The certificate's x_m half (§4.3) | T_m = [k_m]h_S and z_m = k_m + c·x_m, with k_m keyed by x_m | m_S, c and z_m, in the certificate | session/certificate.rs:161 (k_m), :165 (T_m), :179 (z_m) |
+| 12 | The withdrawal (protocol.md §21.7): a Schnorr proof of x_m on the withdrawn certificate's own messaging register (h_S, m_S), which takes that certificate off the list | statement = version ‖ network ‖ digest, the digest being the certificate's listing digest. k = HMAC-SHA-512(x_m, `…\|withdrawal-nonce` ‖ statement ‖ h_S ‖ m_S ‖ aux) mod q, T = [k]h_S, c = SHA-256(`…\|withdrawal` ‖ statement ‖ h_S ‖ m_S ‖ T) mod q, z = k + c·x_m. Made only for a certificate that checks and whose m_S is [x_m]h_S | The statement, c and z, 98 bytes, to the relay and to anyone who reads its answers. The list then holds a removal for the digest | session/certificate.rs:387 (`Withdrawal::make`, its refusal at :397–399), :404–407 (k), :414 (z); wasm/src/lib.rs:8468 (`messagingWithdrawal`); the worker's post, messaging.ts:4199 (`postCertificateNow`, the call at :4229), to relay.ts:698 (`postWithdrawal`) |
 
 ### 4.3 Use 11, the certificate
 
-Specified in protocol.md §21.4, not built. For a Seedelf N of the wallet's own, with register (g_S, u_S) and M_S = (h_S, m_S):
-- **statement** = version ‖ network ‖ generation ‖ policy ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ m_S, 177 to 208 bytes, policy being the Seedelf policy's 28-byte hash;
+Built in 55b (protocol.md §21.4). For a Seedelf N of the wallet's own, with register (g_S, u_S) and M_S = (h_S, m_S):
+- **statement** = version ‖ network ‖ generation ‖ policy ‖ len(N) ‖ N ‖ g_S ‖ u_S ‖ m_S, 177 to 208 bytes, policy being the Seedelf policy's 28-byte hash (session/certificate.rs:77);
 - **k_m** = HMAC-SHA-512(x_m, `Seedelf-Messaging|v1|certificate-nonce|m` ‖ statement ‖ aux) mod q, T_m = [k_m]h_S;
 - **k_x** = HMAC-SHA-512(x, `Seedelf-Messaging|v1|certificate-nonce|x` ‖ statement ‖ T_m ‖ aux) mod q, T_x = [k_x]g_S;
-- **c** = SHA-256(`Seedelf-Messaging|v1|certificate` ‖ statement ‖ T_x ‖ T_m) mod q;
-- **z_x** = k_x + c·x (use 11x) and **z_m** = k_m + c·x_m (use 11m), with one aux of 32 drawn bytes for both, drawn again for a zero nonce.
+- **c** = SHA-256(`Seedelf-Messaging|v1|certificate` ‖ statement ‖ T_x ‖ T_m) mod q (:94);
+- **z_x** = k_x + c·x (use 11x) and **z_m** = k_m + c·x_m (use 11m), with one aux of 32 drawn bytes for both, drawn again for a zero nonce (`hedged_aux_draws`, :160).
 
-**What leaves:** statement ‖ c ‖ z_x ‖ z_m, 273 to 304 bytes, on the relay's public list (§21.7). **When:** only after g_S and u_S are checked canonical, in G1 and not O, then u_S = [x]g_S and m_S = [x_m]h_S. **One maker** (§21.4, "One maker, one derivation"): both nonce derivations and H_cert's input are fixed by the version byte, and a certificate is made in one call that takes no commitment from outside. It's the only function that takes both keys, and it refuses when [x_m]G = [x]G (rule 8). **Where, once built:** 55b puts it in seedelf-messaging, 55d gives the WebAssembly one export that makes one, the only Messages call that takes x, and 55e calls it at the switch (§21.8). Checking one takes no key.
+**What leaves:** statement ‖ c ‖ z_x ‖ z_m, 273 to 304 bytes, on the relay's public list (§21.7).
+
+**When, as built** (`Certificate::make`, :135):
+- it refuses when [x]G = [x_m]G (`SameKey`, :149–151, rule 8), then unless u_S = [x]g_S (`NotOwned`, :152–154);
+- it computes m_S itself, [x_m]h_S (`Seedelf::handle`, :155), so m_S is never another key's;
+- it takes (g_S, u_S) only as a decoded `Register`, which `decode_point` has checked canonical, in G1 and not O (register.rs:113), so x meets no unchecked point (rule 5).
+
+**One maker** (§21.4, "One maker, one derivation"): both nonce derivations and H_cert's input are fixed by the version byte, and a certificate is made in one call that takes no commitment from outside. It's the only function that takes both keys.
+
+**Where:**
+- the checker, `Certificate::from_bytes` (:212, the proof at :195), and `listing_digest` (:376), with relay.rs's `listing_digest` (:79) and `unlisting_digest` (:96);
+- the bindings' `messagingCertificate` (wasm/src/lib.rs:8443), the only export that takes x, beside the `MessagingKey`, and `messagingCheckCertificate` (:8477), which takes no key;
+- the worker's `made` (messaging.ts:4108, the call at :4111).
 
 **Who calls them:**
-- **Use 2** (the only caller of z = r + c·x on chain): seedelf-core's `ScriptSpend::proven` (build.rs:1854); the wasm's `prove_with` (lib.rs:2595) for merge, mint, launch, transfer, withdraw and remove; wasm/src/lovejoin.rs:2980 (a session's return); seedelf-core/src/lovejoin/box_value.rs:316 (a measurement with a made-up key); the CLI's `spend::prove_and_submit` (commands/spend.rs:43); and the JS export `SeedelfKey.createProof` (wasm lib.rs:7002), which nothing in the extension calls.
-- **Use 3:** seedelf-core/src/lovejoin/mod.rs:1680, after every box is checked as owned (:1504); the wasm's withdraws through `our_box` (wasm/src/lovejoin.rs:2724).
-- **Use 7x:** the worker's contract scans and balances, through `isOwned`. Some tests run on registers a stranger chose: a site's transaction in the signing view (extension tx-view.ts:329, dapp.ts:2409) and a payee's register (wasm lib.rs:3342). Each is a DDH bit (rule 4).
-- **Use 8:** every Seedelf spend's signer: wasm lib.rs:1380, :2658, :2973, :3374, :3891, :3910, :3930, :5804, :5962, wasm lovejoin.rs:2962. `signScriptSpend` (lib.rs:5947) signs only what the worker built (extension script-spend.ts:430, lovejoin.ts:8179). A dApp can't reach it, and no CIP-30 path makes a Seedelf proof (wasm/src/cip30.rs never calls one).
-- **Uses 4 to 7m and 10, today:** they reach the key through `SecretKey::from_scalar` (wasm/src/messaging.rs:281) in every `messaging*` export, which the worker hands x (`keys.seedelf`, through `laneKey` in background/messaging.ts). Once 55d is built, every `messaging*` export takes x_m, derived at unlock beside x, and none takes x but the one that makes a certificate.
-- **Use 4:** the wasm's `messagingReveal`; the worker's "Show my Seedelf", which once built is offered only for a Seedelf with a good certificate (§21.8).
-- **Use 10:** the wasm's `messagingStart` (the worker's start and Start again), through `Conversation::start`. `start_continuing` makes the continuation form, which proves e_A and s_A and uses no key.
-- **Use 11:** not built. The worker at the switch, and when a Seedelf is turned on, or made in this browser while Messages is on (§21.8).
+- **Use 2** (the only caller of z = r + c·x on chain): seedelf-core's `ScriptSpend::proven` (build.rs:1854); the wasm's `prove_with` (lib.rs:2595) for merge, mint, launch, transfer, withdraw and remove; wasm/src/lovejoin.rs:3016, inside `withdraw_private_in` (:2986, a session's return); seedelf-core/src/lovejoin/box_value.rs:316 (a measurement with a made-up key); the CLI's `spend::prove_and_submit` (commands/spend.rs:43); and the JS export `SeedelfKey.createProof` (wasm lib.rs:7046–7047), which nothing in the extension calls.
+- **Use 3:** seedelf-core/src/lovejoin/mod.rs:1680, after every box is checked as owned (:1504); the wasm's withdraws through `our_box` (wasm/src/lovejoin.rs:2755, called at :2792, :2883 and :2995).
+- **Use 7x:** the worker's contract scans and balances, through `keys.seedelf.isOwned` (tx-view.ts:329, balances.ts:552, dapp.ts:2409). Some tests run on registers a stranger chose: a site's transaction in the signing view (tx-view.ts:329, dapp.ts:2409) and a payee's register (wasm lib.rs:3342). Each is a DDH bit (rule 4).
+- **Use 8:** every Seedelf spend's signer: wasm lib.rs:1380, :2658, :2973, :3374, :3891, :3910, :3930, :5804, :5962, wasm lovejoin.rs:2998. `signScriptSpend` (lib.rs:5947, its export at :8134) signs only what the worker built (script-spend.ts:430, lovejoin.ts:8179). A dApp can't reach it, and no CIP-30 path makes a Seedelf proof (wasm/src/cip30.rs never calls one).
+- **Uses 4 to 7m, 10, 11m and 12** reach x_m through the bindings' `secret_key` (wasm/src/messaging.rs:313), which makes the crate's `SecretKey::from_scalar` (keys.rs:40) from the `MessagingKey` each export is handed.
+  - `MessagingKey` (wasm lib.rs:7067) holds its network (:7069) and has no funds method: no `isOwned`, `createProof`, `baseRegister` or one-time key, which are `SeedelfKey`'s.
+  - Every `messaging*` export that takes a key takes this one and no other, but `messagingCertificate`, which takes the `SeedelfKey` too. Each export whose request names a network checks it against the key's.
+  - The worker hands them `keys.messaging[network]` (wallet.ts:253, derived at :805), through `withKey` and `laneKey` (messaging.ts:7422, :7431). `keys.seedelf` appears in messaging.ts only at :4083 and :4502, for certificates.
+- **Use 4:** `messagingReveal` (wasm lib.rs:8422; messaging.rs `reveal`, :786); the worker's "Show my Seedelf", offered only for a Seedelf with a good certificate (`ownCertificate`, messaging.ts:4479).
+- **Use 10:** `messagingStart` (wasm lib.rs:8337; messaging.rs `start`, :622), through `Conversation::start` (session/conversation.rs:97). `start_continuing` (:133) makes the continuation form, which proves e_A and s_A and uses no key.
+- **Use 11:** the worker's `certify` (messaging.ts:4039), through `certifyNow` (:4161): at a Seedelf's turn-on (:2609), after each sync's read of the list (:2799), and to make one of its own again that the list no longer holds (:4319). And `ownCertificate` (:4479), for Show my Seedelf.
+- **Use 12:** `withdrawAll` (messaging.ts:4389), at a network's switch off (:1853) and a Seedelf's turn-off (:2612), and when the wallet removes a Seedelf of its own. The intent is recorded at once, so a lock never loses it: one a lock catches waits for the next unlock. `postCertificateNow` posts each, apart. Remove wallet makes none, and its warning says so (protocol.md §21.7).
 
-**What isn't a use of x,** once chunk 55 is built (checked, so a reviewer needn't look):
-- **Messages' cryptography:** uses 4 to 6′, 7m and 10 are x_m's. In today's code they're x's.
-- **x_m's derivation:** from the BIP39 seed under its own salt and info, a sibling of v1, not from x (§21.2).
-- **Lovejoin's mix proofs** (`prove_sigma_or`) use each mix's fresh witnesses (seedelf-core/src/lovejoin/mod.rs:1035), never x.
+**What isn't a use of x** (checked, so a reviewer needn't look):
+- **Messages' cryptography:** uses 4 to 6′, 7m, 10 and 12 are x_m's. Before 55b they were x's.
+- **x_m's derivation:** seedelf-crypto/src/derivation.rs:301 (`messaging_key_v1`), from the BIP39 seed under its own salt and info, a sibling of v1, not from x (§21.2).
+- **Lovejoin's mix proofs** (`prove_sigma_or`, called at seedelf-core/src/lovejoin/mod.rs:1060) use each mix's fresh witnesses (:1035), never x.
 - **The base proof in F** (protocol.md §16.2) is designated-verifier: it shows the writer knows b with p₀ = [b]h_S, or knows the reader's key with m_S = [x_m]h_S. The writer proves b's branch and simulates the other, with a nonce keyed by b (N_k); the reader checks it from public values alone. b is derived from x_m (use 6) and blinds the writer's A: rule 1m's A bullet, rule 2m, and §9.
 - **The keys proof's E_A and S_A branches,** and its continuation form, use e_A and s_A (N_e, N_s).
+- **A withdrawal** (use 12) is x_m's alone: x never makes one (rule 8).
 - **The CLI's one-time keys** are random (commands/spend.rs:26). convert.rs:9–11's comment, that use 9's key is the one-time key a proof binds to, is out of date.
 - **The Cardano account** (CIP-1852) is a sibling derivation from the same phrase, not from x.
-- **`baseRegister`** in the worker: (G, [x]G) as the account's identifier and, hashed, as a local record's owner (extension wallet.ts:558, contract-scan.ts:245). It's a register (use 1), never written to chain as it is.
+- **`baseRegister`** in the worker: (G, [x]G) as the account's identifier and, hashed, as a local record's owner (wallet.ts:587, contract-scan.ts:245; wasm lib.rs:7029–7034). It's a register (use 1), never written to chain as it is.
 - **No G2 point** carries either key, and nothing pairs with one (rule 6).
 - **Storage and export** (the vault keeps the phrase's entropy, from which both keys come, the CLI its encrypted file, and the CLI's `util expose-key` prints x on request) are outside this argument.
 
@@ -188,7 +207,7 @@ Specified in protocol.md §21.4, not built. For a Seedelf N of the wallet's own,
 
 ## 5. The rules
 
-The theorem's hypotheses. Rules 1, 2 and 7 are x's, rules 1m and 2m are x_m's, rules 3 to 6 cover both keys, and rule 8 keeps them apart. Each is a condition on the code, and §10 says which tests hold it. For x_m and the certificate, those are tests chunk 55 must add.
+The theorem's hypotheses. Rules 1, 2 and 7 are x's, rules 1m and 2m are x_m's, rules 3 to 6 cover both keys, and rule 8 keeps them apart. Each is a condition on the code, and §10 says which tests hold it. For x_m, the certificate and the withdrawal, §10 marks each as existing or missing.
 
 ### 5.1 x
 
@@ -207,10 +226,10 @@ x meets a point a stranger chose only in ownership tests, and in proofs for regi
 - **Uses 2, 3 and 11x, the proofs,** only for a true statement. For a register (g, u) with u ≠ [x]g, the challenge is computable from public values, so z = r + c·x gives [x]g = ([z]g − T)/c. So:
   - use 2's `create_proof` refuses a register x doesn't own (schnorr.rs:128; every caller already checked, but at about 12 call sites);
   - use 3's `prove_schnorr` computes u itself, and every withdraw checks each box is owned first (lovejoin/mod.rs:1504);
-  - use 11x refuses unless g_S and u_S are canonical, in G1 and not O, then unless u_S = [x]g_S (protocol.md §21.4, step 1).
+  - use 11x refuses unless u_S = [x]g_S (protocol.md §21.4, step 1; `NotOwned`, session/certificate.rs:152–154), and takes (g_S, u_S) only as a decoded `Register`, checked canonical, in G1 and not O.
 - **A stranger's generator is fine there.** A payer re-randomized every register the wallet is paid at, and a Seedelf someone else minted under the key may have a g_S built from the wallet's public registers. A Schnorr proof on (g, u), both public, gives no [x]P that isn't public, and anyone could simulate it.
 - **Use 1:** registers on bases the wallet itself randomized.
-- **Nothing else,** once chunk 55 is built: x meets no envelope's, F's or ratchet header's point (rule 8). So x gives no static-DH answer at all, and the table is the reason for the rule, not a bound on what's given.
+- **Nothing else:** x meets no envelope's, F's or ratchet header's point (rule 8). So x gives no static-DH answer at all, and the table is the reason for the rule, not a bound on what's given.
 
 #### Rule 2: no nonce rests on the random source alone
 
@@ -242,7 +261,7 @@ Rule 1's table applies to x_m as to x. A hashed point is no one's choice. Where 
 - **Uses 5 and 6, the DH values** ([x_m]c, [x_m]E_A, [x_m]A, [x_m]S_A, [x_m]w₀): only into HKDF. Each point is bound before the wallet acts on what follows:
   - E_A, S_A, and from a handle A, by the keys proof (use 10's check), S_A being the header key every message of a request shares;
   - A in a continuation, by equality with a held value;
-  - p₀, by the base proof against the reader's own M_S, or a held base. The base proof's other branch is its register's key, so a register of another key under the handle's name would let that key's holder prove any p₀: the reader passes over any register under the name that isn't its key's (session/inbox.rs:693, an ownership test of use 7m). Once built, those are the Seedelf's M_S, a retired one among them until 48 hours after a move (protocol.md §21.8);
+  - p₀, by the base proof against the reader's own M_S, or a held base. The base proof's other branch is its register's key, so a register of another key under the handle's name would let that key's holder prove any p₀: the reader passes over any register under the name that isn't its key's (session/inbox.rs:706–707, an ownership test of use 7m). The crate makes each handle from the Seedelf and the reader's own key (`Seedelf::handle`), so none is another's; the wallet passes the M_S its view of the chain holds now, since keeping a retired one until 48 hours after a move is for 1.10.x (protocol.md §21.8);
   - c by c = [r]p and p by p = [o]p₀, both checked once the message decrypts.
 
   A request replayed from storage (`Request::read`, `Inbox::accept`, a join) isn't checked again for its window, stamp or base proof: it rests on the record's sealing, since only the wallet writes that record, after those checks passed. The keys proof is checked again on every replay, and the rule that every message carries the first's header key both when the record is read and on every replay.
@@ -251,22 +270,25 @@ Rule 1's table applies to x_m as to x. A hashed point is no one's choice. Where 
 - **Use 6, the reader's w₀ = [x_m]p₀, in the associated data.** It's unhashed there in effect: whoever holds a message's key gets one GF(2¹²⁸)-linear equation in w₀'s three GCM blocks from each AES-GCM tag, so the other side recovers w₀ from three replies. That's safe because that side already knew w₀. A first message from a handle proves, for the reader's M_S = (h_S, m_S), that the writer knows b with p₀ = [b]h_S, or the reader's key, so knows w₀ (= [b]m_S); and a continuation is read only when verified, on a base and values both sides had. Third parties hold no message keys.
 - **Use 6, the writer's A = [x_m]p₀:** p₀ = [b]h_S, with b the writer's secret and h_S the reader's hashed base. So (p₀, A) is a uniformly random register of x_m: a *blinded* answer. In the one-key design a leaked b unblinded A into [x]g_S on a generator the attacker chose. Now it would give [x_m]h_S, x_m on a hashed point, which no one chose and which a reduction makes itself (§7.4). The hedge on b stays (rule 2m), but no key rests on it.
 - **Use 6′, a continuation's A = [x_m]p₀** on a base the other side chose: published only for a verified continuation (§6), where that side already knew it. It made p₀ = [b]h_S and proved it knows b (or the reader's key), so it knows [x_m]p₀ = [b]m_S; or its AES-GCM tag held w₀ = [x_m]p₀ in the associated data. protocol.md §3, "w₀ in it is load-bearing", is why both stay.
-- **Uses 4, 10 and 11m, the proofs,** only for a true statement whose public value is already public:
-  - use 4 refuses unless A = [x_m]p₀, m_S = [x_m]h_S and the Seedelf's certificate is good (protocol.md §21.9; today, reveal.rs:318–319 checks A and (g_S, u_S) against x);
+- **Uses 4, 10, 11m and 12, the proofs,** only for a true statement whose public value is already public:
+  - use 4 refuses unless A = [x_m]p₀ and m_S = [x_m]h_S (session/reveal.rs:356–357), and the bindings refuse unless the Seedelf's certificate is good (wasm/src/messaging.rs:796–806);
   - use 10's prover computes [x_m]p₀ on F's base and refuses any other A (session/first_contact.rs:806–811), and `begin` makes the base itself. The OR's other branch is the reader's own w₀, so the proof convinces only the reader, given a sound random source when it's made (§9);
-  - use 11m refuses unless m_S = [x_m]h_S (§21.4, step 1).
-- **Use 1m:** M_S on a hashed base. Nobody chooses h_S, so publishing m_S answers no static-DH question (protocol.md §21.3). R_A sits on the reader's hashed base, re-randomized by b.
+  - use 11m refuses unless m_S = [x_m]h_S (§21.4, step 1);
+  - use 12 refuses unless the certificate checks (§21.4) and its m_S is [x_m]h_S. It's then a proof about (h_S, m_S), both public in that certificate. For another key's certificate, z = k + c·x_m would hand out [x_m]h_S on a base the wallet didn't certify: on a hashed point, so no static-DH answer, but a register of x_m that no certificate binds.
+- **Use 1m:** M_S on a hashed base. Nobody chooses h_S, so publishing m_S answers no static-DH question (protocol.md §21.3). The bindings' `messagingValue` gives [x_m]h_S for any Seedelf its caller names, owned or not, with no certificate: an output of x_m on a point, but on a hashed one, so no static-DH answer either, and one a reduction makes itself (§7.4). The worker asks it only for its own Seedelfs (W8, W12). R_A sits on the reader's hashed base, re-randomized by b.
 
 So x_m gives no static-DH answer either. On g_S, the plan's first design, a Seedelf minted under the key from the wallet's own registers would have made m_S one (§7.4).
 
-**Where it's enforced, once built: no API carries a base.**
-- start, reveal and receive take (network, policy, N, g_S, u_S), with m_S where there's one, and compute h_S in the crate.
-- A messaging register's type is built only through hash_to_G1, so no caller hands x_m a base of its own.
-- Today the worker passes registers: the handles (wasm/src/messaging.rs, about :225–257), start's handle (:577) and reveal's Seedelf (:725). So both are 55b's and 55d's to build, and §10 names the test.
+**Where it's enforced: no API carries a base.**
+- A messaging register, the crate's `Handle` (session/seedelf.rs:166), has no public constructor: it's made only by `Seedelf::handle` (:147), from the wallet's own key, or by a checked `Certificate`, from the other side's. Either way the crate computes h_S itself, by `hash_to_curve` (:136).
+- A reveal hands out no `Handle`: `Reveal::seedelf()` (session/reveal.rs:245) returns the `Seedelf`, its chain, name and datum register. A reveal's m_S is shown to share a key, never certified, so nothing may write to it. The crate's own constructor from a base and a value is for its tests.
+- So that sentence is now true of the whole API, and src/compile_fail.rs's nine `compile_fail` doctests hold it, the ninth that a reveal hands out no `Handle`.
+- The bindings take a Seedelf as its chain, name and datum register (wasm/src/messaging.rs, `chain()` :255, `handles()` :282), never a base.
+- The crate's `Register::from_bytes` (register.rs:25) is public and takes any base. It's the type of a Seedelf's datum register (g_S, u_S), never of a messaging register, which tests/two_keys.rs's `a_datum_register_never_serves_as_a_messaging_register` holds.
 
 #### Rule 2m: no nonce, and no b, rests on the random source alone
 
-Uses 4, 10 and 11m all compute z = k + c·x_m, and one k under two challenges gives x_m. So:
+Uses 4, 10, 11m and 12 all compute z = k + c·x_m, and one k under two challenges gives x_m. So:
 - **Use 4:** k₁ = HMAC-SHA-512(x_m, `…|reveal-nonce` ‖ 0x01 ‖ statement ‖ c₂ ‖ z₂ ‖ aux), the statement §21.9's. The challenge also covers T₂ = [z₂]p₀ − [c₂]w₀, which is why c₂ and z₂ are in the message. In the one-key design k₁ first came from the random source alone (§9).
 - **Use 10:** k₁ = HMAC-SHA-512(x_m, `…|keys-nonce|a` ‖ M ‖ T_e ‖ T_s ‖ c₂ ‖ z₂ ‖ aux), with M = p₀ ‖ A ‖ w₀ ‖ E_A ‖ S_A ‖ F″.
   - k_e and k_s are HMAC-SHA-512, keyed by e_A and by s_A, over their labels ‖ M ‖ c₂ ‖ z₂ ‖ aux. One aux serves all three, drawn after c₂ and z₂, which come after the base proof's draws.
@@ -276,12 +298,13 @@ Uses 4, 10 and 11m all compute z = k + c·x_m, and one k under two challenges gi
 - **Use 11m:** k_m = HMAC-SHA-512(x_m, `…|certificate-nonce|m` ‖ statement ‖ aux). The statement and aux fix T_m, then k_x and T_x (rule 2), so the whole challenge. With an aux for each half, a source that repeated aux_m and not aux_x would put k_m under two challenges, and x_m = (z_m − z_m′)/(c − c′).
   - **k_m is hedged only while one (statement, aux) always gives one T_x.** Its message can't cover T_x, which comes after it. So both nonce derivations and H_cert's input are fixed by the version byte, and the wallet makes a certificate in one call that takes no commitment from outside (protocol.md §21.4, "One maker, one derivation").
   - A second derivation of k_x under the same version, another implementation's or a changed one's, would, with a repeated aux, put k_m under two challenges and give x_m. x has no such dependence (rule 2).
+- **Use 12:** k = HMAC-SHA-512(x_m, `…|withdrawal-nonce` ‖ statement ‖ h_S ‖ m_S ‖ aux). The challenge covers the statement, h_S, m_S and T, and T follows from k, so one k means one challenge. It's one nonce, with one aux: a source that fails or repeats gives the same withdrawal again. A zero k draws aux again.
 - **The writer's b and the base proof's k** (protocol.md §16.2, §16.3):
   - b = HMAC-SHA-512(x_m, `…|session|base-scalar` ‖ h_S ‖ m_S ‖ F's head ‖ aux_b) mod q, F's head being F's bytes before p₀ (cid, t, `to`, `replaces`). Keyed by x_m, b is secret even when the source is predictable, and it's new for each handle, name, time and cid.
   - k = HMAC-SHA-512(b, `…|session|base-nonce` ‖ h_S ‖ m_S ‖ p₀ ‖ F′ ‖ c₂ ‖ z₂ ‖ aux_k) mod q, with c₂ and z₂ the simulated branch's (the reader's key's). The base challenge covers h_S, m_S, p₀, T₁, T₂ and F′, with T₁ = [k]h_S and T₂ = [z₂]h_S − [c₂]m_S. So one k never meets two challenges, which would give b = (z₁ − z₁′)/(c₁ − c₁′). A zero k draws c₂, z₂ and aux_k again, through the same helper.
   - k is keyed by b, the witness it hides, as RFC 6979 keys a nonce by the signing key: the proof then depends on b alone, and x_m meets one HMAC here (N_b), not two.
   - In the one-key design both first came from the source alone, in the order b, cid, e_A, s_A, k. A stuck source gave k = b, and z = b(1 + c) gave b away from one F (§9).
-- **Across uses:** N_rev, N_b, N_keys and N_cert_m are one function, HMAC-SHA-512 keyed by x_m, on messages whose labels differ (`…|reveal-nonce`, `…|base-scalar`, `…|keys-nonce|a`, `…|certificate-nonce|m`). N_k, N_e and N_s are HMAC-SHA-512 keyed by b, e_A and s_A, under labels of their own. So the nonces and b are independent functions of their inputs, and no two uses share one except by a collision.
+- **Across uses:** N_rev, N_b, N_keys, N_cert_m and N_wd are one function, HMAC-SHA-512 keyed by x_m, on messages whose labels differ (`…|reveal-nonce`, `…|base-scalar`, `…|keys-nonce|a`, `…|certificate-nonce|m`, `…|withdrawal-nonce`). N_k, N_e and N_s are HMAC-SHA-512 keyed by b, e_A and s_A, under labels of their own. So the nonces and b are independent functions of their inputs, and no two uses share one except by a collision.
 
 So a random source that fails or repeats costs x_m nothing: the same statement gives the same proof again, two different statements get independent nonces, and b stays secret.
 
@@ -296,7 +319,7 @@ So a random source that fails or repeats costs x_m nothing: the same statement g
   - **A certificate's x half against the spend's verifier.** A spend's challenge is blake2b-224 over the raw bytes of g ‖ T ‖ u ‖ vkh, a hash no reduction programs. A certificate's (T_x, z_x) can be mauled into a pair for any challenge t, T′ = T_x + [c − t]u_S. But T′ is then fixed by t, so a spend needs blake2b-224(g_S ‖ T′ ‖ u_S ‖ vkh) = t, for a vkh the attacker can sign under: a chance of about 2⁻²²⁴ a try, what a forger has with no certificate at all (B5).
 - **H_lj and Cardano's own blake2b-256** (transaction and datum hashes): Lovejoin's challenges start with `lovejoin/sigmajoin/v1/`, which no CBOR transaction body or datum does.
 - **SHA-256:**
-  - raw SHA-256 runs over labelled inputs: `Seedelf-Messaging|v1|session|{reveal,base,stamp,keys|handle,keys|continuation}`, `Seedelf-Messaging|v1|certificate`, the envelope's `Seedelf-Messaging|v1|envelope|tag`, the relay's `Seedelf-Messaging|v1|stamp|` and, for a certificate's post, `Seedelf-Messaging|v1|listing-stamp|` (protocol.md §21.7), Lovejoin's `lovejoin/sigmajoin/v1/` for N_lj's message, and the worker's `seedelf.contract.owner.`, which comes before the base register's two points in hex, a dot between them, and names a local record's owner (extension contract-scan.ts, `ownerOf`; it holds no secret, §4). None is a prefix of another. It also runs over the three stamps' unlabelled `digest ‖ nonce`, which are 40 bytes, shorter than any labelled input;
+  - raw SHA-256 runs over labelled inputs: `Seedelf-Messaging|v1|session|{reveal,base,stamp,keys|handle,keys|continuation}`, `Seedelf-Messaging|v1|certificate`, the withdrawal's `Seedelf-Messaging|v1|withdrawal`, the envelope's `Seedelf-Messaging|v1|envelope|tag`, the relay's `Seedelf-Messaging|v1|stamp|` and, for a certificate's and a withdrawal's posts, `Seedelf-Messaging|v1|listing-stamp|` and `Seedelf-Messaging|v1|unlisting-stamp|` (protocol.md §21.7), Lovejoin's `lovejoin/sigmajoin/v1/` for N_lj's message, and the worker's `seedelf.contract.owner.`, which comes before the base register's two points in hex, a dot between them, and names a local record's owner (extension contract-scan.ts, `ownerOf`; it holds no secret, §4). None is a prefix of another: `…|withdrawal` isn't a prefix of `…|unlisting-stamp|`, `…|listing-stamp|`, `…|certificate`, `…|stamp|` or any `…|session|…` label, nor any of them of it. It also runs over the four stamps' unlabelled `digest ‖ nonce`, which are 40 bytes, shorter than any labelled input. A withdrawal's challenge input is 209 bytes and its stamp's 143 or 144, so neither is a b₁ to b₄ input's 98;
   - **outside the rule:** the worker's `envelopeHash` (extension background/messaging.ts:1075), an unlabelled SHA-256 over bytes the relay serves, taken before any check, which names an envelope in a mark or the skip list. Its input is public and its output only a local name, so a query it shares with another use gives no one anything that use's reduction must hide: anyone can make the same query;
   - **H_base's inputs.** RFC 9380's expand_message_xmd hashes b₀ over 64 zero bytes ‖ msg ‖ I2OSP(128, 2) ‖ 0x00 ‖ DST′, then b₁ over b₀ ‖ 0x01 ‖ DST′, and b₂ to b₄ over (b₀ ⊕ bᵢ₋₁) ‖ i ‖ DST′. Each of b₁ to b₄'s inputs is 98 bytes here: the DST is 64 bytes, ending in the suite's ID, and DST′ is it and its length, 65.
     - No other raw SHA-256 input starts with 64 zero bytes, since each starts with an ASCII label or is a stamp's 40 bytes.
@@ -304,9 +327,9 @@ So a random source that fails or repeats costs x_m nothing: the same statement g
     - So H_base's queries are apart from every other use's, as RFC 9380 asks of a hash shared with other uses. No other hash to the curve exists in the workspace;
   - HMAC-SHA-256 and HKDF-SHA-256 are keyed by labels that differ from each other (`Seedelf-Messaging|v1|…|salt`, `seedelf-one-time-key-v1`, `seedelf-wallet-v1`, `seedelf-messaging-v1`), or by fresh secrets (rk, the ratchet's salt, chain keys). Under one key (the ratchet salt and mk) HKDF-SHA-256 takes three infos, `…|ratchet|{message,outer,envelope-ephemeral}`, none a prefix of another. Each HMAC-SHA-256 input starts with its key xored with ipad or opad, and no key here is 64 bytes of 0x36 or 0x5c, so none starts as b₀'s does;
   - the seed enters HKDF-SHA-256 under the two salts, and x itself enters SHA-256 as H_ot's ikm, under the key `seedelf-one-time-key-v1`, and in N_lj's DRBG. That DRBG's first HMAC is keyed by 32 zero bytes, with x in the message after RFC 6979's 32 bytes of 0x01 and a 0x00: separated by that prefix, since nothing else in Seedelf uses a zero HMAC key. x_m enters no SHA-256 but as an HMAC-SHA-512 key.
-- **SHA-512:** HMAC-SHA-512 keyed by x (N_spend, N_cert_x), by x_m (N_rev, N_b, N_keys, N_cert_m), by b (N_k), or by e_A and s_A (N_e, N_s), whose inner hash is at least 128 bytes. No label of one is a prefix of another, across both keys. `…|session|base` is a prefix of `…|base-scalar` and `…|base-nonce`, and `…|certificate` of `…|certificate-nonce|x` and `…|certificate-nonce|m`, but each shorter one is raw SHA-256's, another function. Then there's Ed25519's expansion of a 32-byte seed (use 9 and the one-time keys), and BIP39's PBKDF2 over the phrase. They differ in key or in length.
+- **SHA-512:** HMAC-SHA-512 keyed by x (N_spend, N_cert_x), by x_m (N_rev, N_b, N_keys, N_cert_m, N_wd), by b (N_k), or by e_A and s_A (N_e, N_s), whose inner hash is at least 128 bytes. No label of one is a prefix of another, across both keys. `…|session|base` is a prefix of `…|base-scalar` and `…|base-nonce`, `…|session|reveal` of `…|reveal-nonce`, `…|certificate` of `…|certificate-nonce|x` and `…|certificate-nonce|m`, and `…|withdrawal` of `…|withdrawal-nonce`, but each shorter one is raw SHA-256's, another function. Then there's Ed25519's expansion of a 32-byte seed (use 9 and the one-time keys), and BIP39's PBKDF2 over the phrase. They differ in key or in length.
 
-Treating these as independent random oracles is the standard step of "oracle cloning" by domain separation (Bellare, Davis and Günther, *Separate Your Domains*, EUROCRYPT 2020). A reviewer should check this rule against the code more than anything else in this section, once the certificate and H_base are built.
+Treating these as independent random oracles is the standard step of "oracle cloning" by domain separation (Bellare, Davis and Günther, *Separate Your Domains*, EUROCRYPT 2020). A reviewer should check this rule against the code more than anything else in this section, the certificate's, the withdrawal's and H_base's inputs first.
 
 #### Rule 4: decision bits are only DDH answers
 
@@ -316,12 +339,12 @@ The wallet's behaviour shows bits that depend on its keys. Each is a function of
 - **x_m's bits:** whether an envelope is its own (the scan, and what it fetches), whether a first message is accepted (and answered), and which messaging registers are its own (7m).
   - **The scan** compares the envelope's tag with H_tag([x_m]p). Its bit is still at most a DDH answer: in the random-oracle model, a tag the scan accepts is H_tag(W) for a W the attacker hashed, and the answer says whether W = [x_m]p.
   - **Since the keys proof,** accepting a first message is no longer a DDH answer on a point the writer chose: every point the reader multiplies is bound first (rule 1m). What's left: the scan's tag of [x_m]p, the outer layer's opening before c is checked, and the ownership tests.
-  - **Whether a reveal verifies isn't one of these bits.** Checking a reveal uses no key: `Conversation::verify_reveal` (session/reveal.rs:340) reads the w₀ the reader stored when it took the first message, and the binding's `check_reveal` (wasm/src/messaging.rs:769) takes none. Once built, the reveal carries m_S and its proof is checked first. The press then reads the chain and the list, and applies §21.5's conflict rule: none of that takes a key either.
+  - **Whether a reveal verifies isn't one of these bits.** Checking a reveal uses no key: `Conversation::verify_reveal` (session/reveal.rs:378) reads the w₀ the reader stored when it took the first message, and the binding's `check_reveal` (wasm/src/messaging.rs:847) takes none. The reveal carries m_S, and its proof is checked first. The press then reads the chain and the list, and applies §21.5's conflict rule: none of that takes a key either.
 - **A bit that depends on both,** such as accepting a first message to N (N must be a Seedelf of x's, and M_S a register of x_m's), is a function of one DDH answer on each key. Each part's reduction holds the other key, and answers that one itself.
 
 #### Rule 5: every point is checked before a key touches it
 
-Canonical encoding, in G1, not O: register.rs's `is_valid` (and blst's `from_compressed`), and the messaging crate's `decode_point` at every parse (security.md, "Order of checks"). The certificate's maker checks g_S and u_S so before x meets them in its ownership test, and its checker checks every point before it multiplies one (protocol.md §21.4). h_S is RFC 9380's output, in G1 by its cofactor clearing, and refused if O. Without these checks, a key applied to a point of small order outside G1 leaks it modulo h₁'s small primes (§3), as ElfTalk's unchecked decompression did.
+Canonical encoding, in G1, not O: register.rs's `is_valid` (and blst's `from_compressed`), and the messaging crate's `decode_point` at every parse (security.md, "Order of checks"). The certificate's maker takes g_S and u_S only as a decoded `Register`, so checked before x meets them in its ownership test, and its checker checks every point before it multiplies one (protocol.md §21.4). h_S is RFC 9380's output, in G1 by its cofactor clearing, and refused if O. Without these checks, a key applied to a point of small order outside G1 leaks it modulo h₁'s small primes (§3), as ElfTalk's unchecked decompression did.
 
 #### Rule 6: neither key meets G2
 
@@ -330,15 +353,15 @@ There's no pairing anywhere either key is used. A public [x]h or [x_m]h in G2 wo
 ### 5.4 Rule 8: the keys stay apart
 
 - **x_m is in no funds use.** The funds scan never tests a register against x_m, x_m makes no spending or Lovejoin proof, and no one-time key derives from it (protocol.md §21.6). So x_m holds nothing. Funds sent to a register of x_m, R_A among them, are stranded: the wallet never finds or spends them, and nothing in it offers to pay one.
-- **x meets no point of Messages.** No envelope's, first-contact block's or ratchet header's point reaches x: the scan, opening, the handshake, continuations, the keys proof and the reveal take x_m. The one Messages call that takes x makes a certificate, for a Seedelf of the wallet's own (§4.3).
+- **x meets no point of Messages.** No envelope's, first-contact block's or ratchet header's point reaches x: the scan, opening, the handshake, continuations, the keys proof and the reveal take x_m. The one Messages call that takes x makes a certificate, for a Seedelf of the wallet's own (§4.3). x never makes a withdrawal: use 12 is x_m's alone.
 - **Neither half's nonce follows from the other key:** k_x is keyed by x alone, and k_m by x_m alone (§21.4).
 
 **Why:** Part B hands the attacker x_m. That's sound only if nothing that holds x answers Messages' inputs but the certificate's maker, on the wallet's own Seedelfs, and if no funds hang on x_m. Part C, which hands the attacker x, doesn't lean on this rule.
 
-**Where it's enforced, once built:**
-- **A WebAssembly class of its own,** `MessagingKey`, holds x_m, with no funds method: no `isOwned`, no `createProof`, no `baseRegister`, no one-time key. Every `messaging*` export takes only it.
-- **The certificate's maker is the only function that takes both keys,** and it refuses when [x_m]G = [x]G, the case (probability 1/q) in which the two keys would be one.
-- **Today neither exists:** the worker hands every `messaging*` export x itself (§4.3, "Who calls them"). Both are 55b's and 55d's to build, and §10 names the test.
+**Where it's enforced:**
+- **A WebAssembly class of its own,** `MessagingKey` (wasm/src/lib.rs:7067), holds x_m and its network, with no funds method: no `isOwned`, no `createProof`, no `baseRegister`, no one-time key. Every `messaging*` export that takes a key takes it alone, but `messagingCertificate` (:8443).
+- **The certificate's maker is the only function that takes both keys,** and it refuses when [x_m]G = [x]G (`SameKey`, session/certificate.rs:149–151), the case (probability 1/q) in which the two keys would be one.
+- **The worker** hands every `messaging*` call `keys.messaging[network]` (wallet.ts:253), and `keys.seedelf` only to the certificate (messaging.ts:4083, :4502). Every `isOwned` caller in the extension uses `keys.seedelf` (§4.3). §10 says which tests hold all of it.
 
 ## 6. The theorem
 
@@ -347,7 +370,7 @@ There's no pairing anywhere either key is used. A public [x]h or [x_m]h in G2 wo
   - **Spend** any set of its registers in a transaction whose other parts (outputs, other inputs) the attacker chooses. The wallet makes a fresh one-time key, proves each register under its hash, and signs that transaction alone (rule 7).
   - **Lovejoin's owner proof** on any of its boxes, under any ctx.
   - **Certify** any of its Seedelfs: the wallet makes a certificate with its own M_S, under the draws it's given, as it does at the switch and whenever the list holds none that's good (protocol.md §21.8).
-- **Messages, with x_m:** **reveal**, in any conversation the wallet started and that has been answered, any of its Seedelfs with a good certificate. **Open** any envelope and say what it holds, **scan** any bytes, **start** a conversation to any handle, **receive** any first or later message and answer it, **continue** any conversation.
+- **Messages, with x_m:** **reveal**, in any conversation the wallet started and that has been answered, any of its Seedelfs with a good certificate. **Open** any envelope and say what it holds, **scan** any bytes, **start** a conversation to any handle, **receive** any first or later message and answer it, **continue** any conversation, **withdraw** any of its own certificates, under the draws it's given, as it does at turn-off (protocol.md §21.7), and give **the value** m_S = [x_m]h_S of any Seedelf named, as `messagingValue` does.
 - **What the wallet shows:** which registers it spends, shows and refuses, and which Seedelfs it holds and turns on.
 - **Every random oracle,** H_base among them, **and the network and relay:** it can drop, reorder, replay and forge envelopes, and withhold, drop or post certificates. The chain data source is honest (§8).
 - **In Parts B and C, the wallet's random source too.** The attacker may choose every value the wallet draws: that's what "a source that fails" means below. A seed it repeats gives one one-time key to two spends, and each of that key's signatures is still on a transaction the wallet built, which is all B5 uses. Part A is for a sound source: secrecy doesn't survive a failing one (§8).
@@ -362,8 +385,8 @@ There's no pairing anywhere either key is used. A public [x]h or [x_m]h in G2 wo
     q_pf · (q_H + q_pf) / q + ε_key + ε_seed
 
 where:
-- q_pf is the number of x_m's proofs made (keys proofs, reveals and certificates), and q_H the attacker's hash queries;
-- ε_key is the chance the attacker queries a keyed oracle under its key: N_rev, N_b, N_keys or N_cert_m under x_m, which R_P can use as x_m, or N_e, N_s or N_k under e_A, s_A or b. That's at most the advantage of finding the discrete log of E_A or S_A on p₀, or of p₀ on h_S;
+- q_pf is the number of x_m's proofs made (keys proofs, reveals, certificates and withdrawals), and q_H the attacker's hash queries;
+- ε_key is the chance the attacker queries a keyed oracle under its key: N_rev, N_b, N_keys, N_cert_m or N_wd under x_m, which R_P can use as x_m, or N_e, N_s or N_k under e_A, s_A or b. That's at most the advantage of finding the discrete log of E_A or S_A on p₀, or of p₀ on h_S;
 - the terms for e_A and s_A need a sound source: a stuck one prints both in F (§8);
 - the term for b is the discrete log of p₀ on h_S for an attacker that may hold the reader's key, which this document doesn't reduce to the ordinary one: a reduction that plants its instance in p₀ needs w₀ = [b]m_S, which only the reader's key gives.
 
@@ -381,11 +404,12 @@ From the second, an algorithm of about twice the attacker's running time finds x
 
 **(C′) x_m's proofs are proofs of knowledge.** Say an attacker makes, with probability ε, one of these:
 - the wallet accept, as reader, a base proof, a keys proof or a reveal;
-- a certificate good for a register (h, m) of x_m whose statement the wallet didn't certify.
+- a certificate good for a register (h, m) of x_m whose statement the wallet didn't certify;
+- a withdrawal that checks, against a certificate whose m_S is the wallet's, and that the wallet didn't make.
 
 Forking it at that proof's challenge yields a witness, with probability about ε′²/q_H − ε′·3/2²⁵⁶ (§7.3):
 - for a proof the wallet accepts as reader, the writer-side witness (b for a base proof, the key of A for a keys proof or a reveal) or the reader's, x_m;
-- for a certificate, x_m.
+- for a certificate or a withdrawal, x_m.
 
 So an attacker that makes the wallet accept such a proof without holding its writer-side witness finds x_m.
 
@@ -400,20 +424,21 @@ So an attacker that makes the wallet accept such a proof without holding its wri
 This is Theorem 2's first half (DLPSS §4.4, "Security of the KEM component"), done once for each of x_m's proof systems. x's uses need no step here: R_P picks x itself (§3) and runs them, the certificate's x half among them, as the wallet does.
 
 - **Game A0:** P's game, with every oracle of §6.
-- **Game A1: nonces drawn.** Replace N_rev, N_b, N_keys, N_cert_m, N_e, N_s and N_k with fresh uniform values for each distinct input, the same value for a repeated one.
+- **Game A1: nonces drawn.** Replace N_rev, N_b, N_keys, N_cert_m, N_wd, N_e, N_s and N_k with fresh uniform values for each distinct input, the same value for a repeated one.
   - A0 and A1 differ only if the attacker queries one of those functions with its key: x_m, or e_A, s_A or b. In the random-oracle model nothing else in its view depends on how they're computed, which is ε_key. For e_A and s_A that needs a sound source: they're draws, and a stuck source prints them in F as c₂ and z₂ (§8). The attacker then computes N_e and N_s itself, and this step isn't valid for them. Part C never takes it for them: it holds e_A, s_A and b, and computes N_e, N_s and N_k as the wallet does (§7.3).
   - **This step is where the old reveal failed.** With k₁ drawn from the random source alone, a source that repeats gives one k₁ to two challenges, and A1's "fresh value per input" isn't what the wallet did: the real wallet then leaks its key. Rule 2m makes the nonce a function of everything the challenge covers, so A1 holds whatever the source does. The old drawn b failed the same way: a b that a stuck source gave away wasn't a fresh value either.
-  - N_keys's input holds everything H_keys's does but T₁, which follows from it, so A1 holds for it whatever the source does. N_e's and N_s's inputs fix their challenge too (M fixes the three keys, so T_e, T_s and T₁ follow), and N_k's holds everything the base challenge does but T₁ and T₂, which follow from it. N_cert_m's input fixes T_m, then k_x and T_x, so the certificate's challenge. So none of them meets two challenges, whatever the source does: that's rule 2m. It isn't secrecy: A1 holds for N_e and N_s only while e_A and s_A are secret (above).
+  - N_keys's input holds everything H_keys's does but T₁, which follows from it, so A1 holds for it whatever the source does. N_e's and N_s's inputs fix their challenge too (M fixes the three keys, so T_e, T_s and T₁ follow), and N_k's holds everything the base challenge does but T₁ and T₂, which follow from it. N_cert_m's input fixes T_m, then k_x and T_x, so the certificate's challenge, and N_wd's holds everything H_wd's does but T, which follows from it. So none of them meets two challenges, whatever the source does: that's rule 2m. It isn't secrecy: A1 holds for N_e and N_s only while e_A and s_A are secret (above).
 - **Game A2: proofs simulated.** Answer each proof query without x_m, by the honest-verifier zero-knowledge simulator, and program the proof's random oracle:
   - **Use 4:** take c₂, z₂ and aux from the random source, as the prover does (session/reveal.rs:176–178). Draw H_rev's 32-byte output h, and set c = h mod q and c₁ = c − c₂. Draw z₁ uniform mod q, and compute T₁ = [z₁]p₀ − [c₁]A, T₁′ = [z₁]h_S − [c₁]m_S and T₂ = [z₂]p₀ − [c₂]w₀ as the reader does; if T₁ is O, draw z₁ again. Program H_rev at the statement and those commitments as h. A repeated (statement, c₂, z₂, aux) gets the answer it got.
   - **Use 10, by a simulator that holds e_A and s_A** (Part C's, which has them): take c₂, z₂ and aux from the random source, as the prover does (session/draw.rs:123–125). Make k_e and k_s by their real HMACs, and T_e = [k_e]p₀ and T_s = [k_s]p₀. Draw H_keys's 32-byte output h, and set c = h mod q and c₁ = c − c₂. Draw z₁ uniform mod q, and set T₁ = [z₁]p₀ − [c₁]A, drawing z₁ again if it's O, and T₂ = [z₂]p₀ − [c₂]w₀. Program H_keys(label ‖ M ‖ T_e ‖ T_s ‖ T₁ ‖ T₂) := h, and answer z_e = k_e + c·e_A and z_s = k_s + c·s_A. Only A's branch is simulated. It needs A (rule 1m) and w₀. A repeated (M, c₂, z₂, aux) gets the answer it got.
   - **Use 10, by one that doesn't** (a reduction of Part A that plants its instance in E_A or S_A): the same, but it draws z_e and z_s uniform too, and sets T_e = [z_e]p₀ − [c]E_A and T_s = [z_s]p₀ − [c]S_A.
   - **Use 11m, with x's half real:** take aux from the random source, as the wallet does. Draw H_cert's 32-byte output h, set c = h mod q, and draw z_m uniform mod q; set T_m = [z_m]h_S − [c]m_S, drawing z_m again if it's O. Make k_x by its real HMAC over the statement, that T_m and aux, drawing aux again for a zero k_x as the wallet does, and T_x = [k_x]g_S. Program H_cert(label ‖ statement ‖ T_x ‖ T_m) := h, and answer z_x = k_x + c·x. A repeated (statement, aux) gets the answer it got.
-  - **Why it's the same:** in A1 each proof is a Schnorr, CDS or AND transcript with a uniform nonce. The simulator's response stands for the nonce: z₁ − c₁·x_m in uses 4 and 10, z_m − c·x_m in use 11m, uniform as the real one is. The rest is the same function of it and of the hash's answer. In use 11m, k_x then has the input the wallet's would, since T_m does.
-  - **What each is exact under.** Use 4's simulator, use 10's first and use 11m's: once N_rev, N_keys and N_cert_m are A1's fresh values, the answer is distributed exactly as the wallet's proof, whatever the random source does, since both take the same draws from it. They part only when the real nonce is 0 and the prover draws again (about 1/q), when a simulated nonce's 64 bytes reduced mod q miss uniform (2⁻²⁵⁹), or when the programming fails (below). Use 10's second: only while N_e and N_s are fresh values to the attacker too, so only with a sound source. An attacker that chooses the draws holds e_A, s_A and aux, checks z_e − c·e_A against k_e's HMAC, and tells this simulator from the wallet; a stuck source prints e_A and s_A in F by itself (§8). Part C uses the first.
-  - **Where it fails:** only if the point being programmed was already queried. T₁ or T_m is uniform in G, so that's at most (q_H + q_pf)/q for each proof.
+  - **Use 12:** take aux from the random source, as the wallet does. Draw H_wd's 32-byte output h, set c = h mod q, and draw z uniform mod q; set T = [z]h_S − [c]m_S, drawing z again if it's O. Program H_wd(label ‖ statement ‖ h_S ‖ m_S ‖ T) := h, and answer (c, z). A repeated (statement, aux) gets the answer it got.
+  - **Why it's the same:** in A1 each proof is a Schnorr, CDS or AND transcript with a uniform nonce. The simulator's response stands for the nonce: z₁ − c₁·x_m in uses 4 and 10, z_m − c·x_m in use 11m, z − c·x_m in use 12, uniform as the real one is. The rest is the same function of it and of the hash's answer. In use 11m, k_x then has the input the wallet's would, since T_m does.
+  - **What each is exact under.** Use 4's simulator, use 10's first, use 11m's and use 12's: once N_rev, N_keys, N_cert_m and N_wd are A1's fresh values, the answer is distributed exactly as the wallet's proof, whatever the random source does, since both take the same draws from it. They part only when the real nonce is 0 and the prover draws again (about 1/q), when a simulated nonce's 64 bytes reduced mod q miss uniform (2⁻²⁵⁹), or when the programming fails (below). Use 10's second: only while N_e and N_s are fresh values to the attacker too, so only with a sound source. An attacker that chooses the draws holds e_A, s_A and aux, checks z_e − c·e_A against k_e's HMAC, and tells this simulator from the wallet; a stuck source prints e_A and s_A in F by itself (§8). Part C uses the first.
+  - **Where it fails:** only if the point being programmed was already queried. T₁, T_m or T is uniform in G, so that's at most (q_H + q_pf)/q for each proof.
   - **It needs the public value to be public,** which rule 1m makes sure of: no proof is made for a register that isn't x_m's.
-  - **Rule 3 makes the programming invisible to the other uses:** H_rev, H_keys and H_cert each take inputs no other use hashes, so another computation queries one only to verify such a proof, where a programmed answer is what the real proof's would be (receiving a first message verifies keys proofs, under the reader's own w₀; a writer checks certificates); and no proof queries H_kdf.
+  - **Rule 3 makes the programming invisible to the other uses:** H_rev, H_keys, H_cert and H_wd each take inputs no other use hashes, so another computation queries one only to verify such a proof, where a programmed answer is what the real proof's would be (receiving a first message verifies keys proofs, under the reader's own w₀; a writer checks certificates; the relay checks withdrawals); and no proof queries H_kdf.
 
 In A2, x_m appears only in uses 1m and 5 to 7m, which is P's own game. So R_P applies as it stands. ∎(A)
 
@@ -422,7 +447,7 @@ In A2, x_m appears only in uses 1m and 5 to 7m, which is P's own game. So R_P ap
 The reduction B gets a DLP instance X = [x]G and a DDH oracle, of which it asks only "is W = [x]P?" (§3). It draws x_m, every network's, uniformly as the derivation gives it (§3), and hands it to the attacker: only a query at the wallet's own seed, ε_seed, tells this from the real derivation. It runs the attacker and simulates every funds oracle without x, taking each value the wallet would draw from the attacker (§6). It also makes the wallet's one-time keys itself, so it can sign as rule 7 says: one key for each seed, and the same key for a seed the attacker repeats.
 
 - **Game B1: registers.** Each register the wallet publishes is ([d]G, [d]X) for a fresh d that B keeps, as re-randomization makes them. The root is (G, X).
-- **Game B2: the nonces and keys derived from x drawn:** N_spend, N_lj, N_cert_x, H_ot and H_ed get fresh values for each distinct input, as A1 does. The one-time and external keys' Ed25519 signatures are then made with keys independent of x. If the attacker ever queries one under some x′ with [x′]G = X, B outputs x′. For the two keyed by x itself through HMAC-SHA-512, B tests a query's key in the form HMAC gives it, padded with zero bytes to the hash's block: its first 32 bytes are the candidate x′, so x's 32 bytes with zero bytes after them are caught as x's alone are. x_m's keyed functions (N_rev, N_b, N_keys, N_cert_m) B computes as the wallet does: it holds x_m.
+- **Game B2: the nonces and keys derived from x drawn:** N_spend, N_lj, N_cert_x, H_ot and H_ed get fresh values for each distinct input, as A1 does. The one-time and external keys' Ed25519 signatures are then made with keys independent of x. If the attacker ever queries one under some x′ with [x′]G = X, B outputs x′. For the two keyed by x itself through HMAC-SHA-512, B tests a query's key in the form HMAC gives it, padded with zero bytes to the hash's block: its first 32 bytes are the candidate x′, so x's 32 bytes with zero bytes after them are caught as x's alone are. x_m's keyed functions (N_rev, N_b, N_keys, N_cert_m, N_wd) B computes as the wallet does: it holds x_m.
 - **Game B3: x's proofs simulated,** programming each proof's random oracle:
   - **Use 2:** draw c uniform in [0, 2²²⁴) and z uniform mod q; set T = [z]g − [c]u; program H_spend(g ‖ T ‖ u ‖ vkh) := c.
   - **Use 3:** likewise, with H_lj's 256-bit output chosen uniformly and c its value mod q.
@@ -431,7 +456,7 @@ The reduction B gets a DLP instance X = [x]G and a DDH oracle, of which it asks 
   - **Where it fails:** only if the point being programmed was already queried. T and T_x are uniform in G, so that's at most (q_H + q_pf)/q for each proof. (2⁻²²⁴, the spend's challenge space, matters only to the fork in B5.)
   - **It needs u to be public,** which rule 1 makes sure of. For a Seedelf the attacker minted under the key, B decides u_S = [x]g_S with the DDH oracle, as the wallet's own test would.
   - **Rule 3 makes the programming invisible to the other uses:** H_spend, H_lj and H_cert each take inputs no other use hashes, so another computation queries one only to verify such a proof, where a programmed answer is what the real proof's would be.
-- **Game B4: Messages, run as the wallet runs them.** B holds x_m, so it opens, scans, starts, receives, continues and reveals as the wallet does. Nothing there takes x (rule 8), but Messages depends on two things that do: which Seedelfs are the wallet's, so its handles, which the DDH oracle decides, and the certificates, which B3 makes. The other ownership tests (7x) are DDH answers too: is (G, X, g, u) a DH tuple? That's all of B4. The one-key B4's simulation of the scan, opening, receiving and starting moves to Part C (§7.3), where x_m is the secret.
+- **Game B4: Messages, run as the wallet runs them.** B holds x_m, so it opens, scans, starts, receives, continues, reveals and withdraws as the wallet does. The withdrawal changes nothing in Part B: x makes none (rule 8). Nothing there takes x (rule 8), but Messages depends on two things that do: which Seedelfs are the wallet's, so its handles, which the DDH oracle decides, and the certificates, which B3 makes. The other ownership tests (7x) are DDH answers too: is (G, X, g, u) a DH tuple? That's all of B4. The one-key B4's simulation of the scan, opening, receiving and starting moves to Part C (§7.3), where x_m is the secret.
 - **Game B5: forking.** The attacker's transaction spends a register (g*, u*) of x that the wallet didn't sign for, with a proof (T*, z*) under some vkh*.
   - **If vkh* is the hash of one of the wallet's one-time keys,** the transaction carries a signature the wallet didn't make (rule 7), under that key or under another key with the same blake2b-224 hash: an Ed25519 forgery under a key independent of x (B2), or a second preimage, at most n_v·q_H/2²²⁴ for the wallet's n_v one-time keys. B gives up; that's the first case of (B).
   - **Otherwise the query wasn't programmed:** B3 programs H_spend only at points (g ‖ T ‖ u ‖ vkh) whose vkh is a wallet key.
@@ -441,7 +466,7 @@ The reduction B gets a DLP instance X = [x]G and a DDH oracle, of which it asks 
   - **A certificate is no spending proof.** B3 programs H_cert, never H_spend, so the fork is untouched. And a certificate is simulatable without x (B3), so it gives a forger nothing it couldn't make itself.
     - Concretely, its transcript (T_x, c, z_x) is on (g_S, u_S), the Seedelf's own register, where its token sits. It can be mauled into a pair for any challenge t: T′ = T_x + [c − t]u_S verifies with z_x under t.
     - But T′ is then fixed by t, so a spend needs blake2b-224(g_S ‖ T′ ‖ u_S ‖ vkh) = t, for a vkh the attacker can sign under. That's a chance of about 2⁻²²⁴ a try, what a forger has with no certificate at all, and it holds because H_spend is never programmed. The same goes for [d](g_S, u_S), and for Lovejoin's verifier, at about 3/2²⁵⁶ a try.
-    - The test 55b adds is in §10.
+    - Its test is in §10.
   - **x_m's transcripts bear on no spend.** A keys proof's or a reveal's transcripts are now under x_m, on registers of x_m, which are no register of x but with probability 1/q.
   - **The loss:** ε′ = ε − δ, where δ is at most the sum of:
     - the first case's chance, an Ed25519 forgery's and n_v·q_H/2²²⁴;
@@ -464,8 +489,8 @@ The reduction B_C gets X_m = [x_m]G and a DDH oracle, of which it asks only "is 
 
 - **Game C1: hashed bases programmed.** B_C answers each new query to H_base, the attacker's or the wallet's, with [η]G for a fresh η uniform in [1, q − 1], and keeps η. A random oracle to G1 gives a uniform point, so this is exact but for O, which the real one gives with probability 1/q a query and the wallet refuses: q_H/q in all.
 - **Game C2: registers.** Each of the wallet's messaging registers is (h_S, [η_S]X_m), with η_S = log_G h_S from C1. Each R_A comes from a start (C5).
-- **Game C3: the nonces keyed by x_m drawn,** as A1: N_rev, N_b, N_keys and N_cert_m. If the attacker queries one under some x_m′ with [x_m′]G = X_m, B_C outputs x_m′, testing the padded key as B2 does. N_e, N_s and N_k stay as they are: B_C holds e_A and s_A, which the attacker chose, and b, which is N_b's answer.
-- **Game C4: proofs simulated,** as A2: reveals, keys proofs by the simulator that holds e_A and s_A, and certificates by use 11m's, with x's half real. B_C knows each statement's public value (rule 1m, C2).
+- **Game C3: the nonces keyed by x_m drawn,** as A1: N_rev, N_b, N_keys, N_cert_m and N_wd. If the attacker queries one under some x_m′ with [x_m′]G = X_m, B_C outputs x_m′, testing the padded key as B2 does. N_e, N_s and N_k stay as they are: B_C holds e_A and s_A, which the attacker chose, and b, which is N_b's answer.
+- **Game C4: proofs simulated,** as A2: reveals, keys proofs by the simulator that holds e_A and s_A, certificates by use 11m's, with x's half real, and withdrawals by use 12's, programming H_wd. B_C knows each statement's public value (rule 1m, C2).
 - **Game C5: Messages simulated,** as the one-key Part B's B4, with x_m, X_m and (h_S, m_S) where it had x, X and (g_S, v_S):
   - **The scan and ownership tests** (use 7m): is (G, X_m, h, m) a DH tuple? The DDH oracle answers, or C2 for the wallet's own M_S. The scan has no public value to test, only the envelope's tag: an envelope (p, tag) is the wallet's exactly when H_tag's table holds a query W answered with that tag and (G, X_m, p, W) is a DH tuple, which the DDH oracle decides. With no such query the wallet would have accepted with probability about 2⁻²⁵⁶, which B_C counts as a refusal.
   - **Opening an envelope** (use 5): as in ECIES's gap-DH proof (Abdalla–Bellare–Rogaway; Cramer–Shoup). B_C keeps H_kdf's table. For an envelope with c and header H, if the attacker already queried H_kdf at (salt, Z, info ‖ H) with (G, X_m, c, Z) a DH tuple, that answer is the key. Otherwise B_C draws one, and gives it to any later query whose Z the DDH oracle accepts.
@@ -481,9 +506,10 @@ The reduction B_C gets X_m = [x_m]G and a DDH oracle, of which it asks only "is 
     - [x_m]w₀ only enters H_kdf, which B_C handles with the DDH oracle on (G, X_m, w₀, ·). It looks in H_kdf's table before it draws SK: an attacker that chooses the draws can make a start repeat, F and all, and may have asked for that SK already.
   - **Continuing** (use 6′): the A it publishes is [x_m]p₀ for an old p₀, which B_C already has from that conversation's start or first message.
   - **Revealing** (use 4): simulated as in C4, since A and the Seedelf's M_S are known to B_C.
+  - **The value of any Seedelf** (use 1m's `messagingValue`): [η]X_m, η being h_S's log from C1. No static-DH answer either.
 - **The win: x_m itself.** The attacker outputs some x_m′, and B_C checks [x_m′]G = X_m. There's no fork, so the reduction is tight: B_C finds x_m with probability at least ε − δ_C, where δ_C is at most the sum of:
   - C1's q_H/q;
-  - a programming collision, q_pf·(q_H + q_pf)/q, with q_pf here x_m's proofs (keys proofs, reveals, certificates);
+  - a programming collision, q_pf·(q_H + q_pf)/q, with q_pf here x_m's proofs (keys proofs, reveals, certificates, withdrawals), so (q_H + q_pf)/q for each withdrawal;
   - a real nonce of 0 drawn again, q_pf/q;
   - a simulated nonce's 64 bytes reduced mod q, q_pf·2⁻²⁵⁹;
   - for each envelope the attacker delivers, a tag met by chance, 2⁻²⁵⁶, and a keys proof's challenge guessed, 3/2²⁵⁶;
@@ -495,7 +521,8 @@ The reduction B_C gets X_m = [x_m]G and a DDH oracle, of which it asks only "is 
 - **A keys proof or a reveal the wallet accepts as reader.** Two accepting proofs on the same commitments with different challenges differ in c₁ or in c₂. If in c₁, (z₁ − z₁′)/(c₁ − c₁′) is the writer's key. For a reveal that one scalar is the key of both A and the Seedelf's m_S on h_S, and with different keys there the commitments fix c₁, so the fork lands on c₂. If in c₂, (z₂ − z₂′)/(c₂ − c₂′) is the key of w₀ on p₀: the reader's own x_m.
 - **A base proof the wallet accepts:** the same, to b or to the key of the reader's M_S, x_m.
 - **A certificate good for a register (h, m) of x_m, under a statement the wallet didn't certify:** (z_m − z_m′)/(c − c′) = x_m. h is the hash of the statement's own Seedelf, so the wallet's own m_S fits only the wallet's own statement. Such a certificate shows a value [x_m]h on a hashed point the wallet never multiplied, and the back-signature makes it a proof of x_m besides.
-- **The fork's hash point is never one B_C programmed:** a keys proof B_C made names someone else's handle, since the wallet refuses its own (7m); a reveal B_C made is for another statement; and a certificate B_C made is for a statement of the wallet's own.
+- **A withdrawal that checks against a certificate whose m_S is the wallet's, and that the wallet didn't make:** forking at H_wd, (z − z′)/(c − c′) = log_{h_S} m_S = x_m. It needs no new statement: a second (c, z) for a digest the wallet withdrew is a new hash point too, T being another.
+- **The fork's hash point is never one B_C programmed:** a keys proof B_C made names someone else's handle, since the wallet refuses its own (7m); a reveal B_C made is for another statement; a certificate B_C made is for a statement of the wallet's own; and a withdrawal other than one B_C made has another T, so another hash point.
 
 Each yields its witness with probability about ε′²/q_H − ε′·3/2²⁵⁶, with ε′ = ε − δ_C. So a proof the wallet accepts from an attacker that doesn't hold the writer-side witness gives x_m. ∎(C′)
 
@@ -518,7 +545,7 @@ Each yields its witness with probability about ε′²/q_H − ε′·3/2²⁵�
 
 **What it rests on:**
 - **H_base as a programmable random oracle to G1.** RFC 9380's indifferentiability result gives that for single-stage games such as these, with SHA-256 a random oracle and H_base's queries kept apart from its other uses (rule 3).
-- **Every base x_m multiplies into an output is a hash or a bound one:** h_S, the writer's p₀ = [b]h_S, a reader's p₀ that the base proof binds to its M_S, a continuation's old base. That's rule 1m. 55b's tests must hold it: a writer computes h_S itself, and never takes a base from the list or from a message.
+- **Every base x_m multiplies into an output is a hash or a bound one:** h_S, the writer's p₀ = [b]h_S, a reader's p₀ that the base proof binds to its M_S, a continuation's old base. That's rule 1m. The crate holds it by its types: a messaging register is made only by `Seedelf::handle` or a checked `Certificate`, so a writer computes h_S itself and never takes a base from the list or from a message. src/compile_fail.rs's doctests hold it (§5, §10).
 
 **What would bring it back:** M_S on g_S, which the chunk 55 plan's design and its call 5 proposed before §21.3 chose the hash. A Seedelf minted under the key from the wallet's own registers would then put x_m exactly where the one-key proof had x, class C and all.
 
@@ -537,18 +564,18 @@ This section's claim is new with this version. Both of 55a's attacks found it so
 3. **The hashed base** (§7.4), which takes the static-DH step out of Part C. Push: indifferentiability as applied here, rule 3's separation of H_base, and every place x_m meets a base.
 4. **Many bases.** Each key's public side is a set of registers, not one key. B handles x's by re-randomizing X (B1), and extraction needs no log_G g* (B5); B_C handles x_m's by programming H_base (C1). The step to check is that the attacker can't gain from registers it re-randomized itself.
    - **Pushed** for x: each proof is simulated from its own public value alone. Each challenge covers its base and public value, so a transcript moved to [d](g, u) answers another hash input. And a combination of transcripts across bases must meet one hash, not a sum of several the attacker arranges. Nothing found.
-5. **Six proof systems on two keys:** x's spend, Lovejoin's and certificate half, and x_m's reveal, keys proof and certificate half. That's rules 2 and 2m, and the hedging, as the hypothesis that keeps A1 and B2 true when the random source fails. In the one-key design the reveal didn't meet it at first, and the keys proof's first design didn't either (§9).
-   - **Pushed** for all but the certificate: with every draw the attacker's to choose, each proof is still a function of its nonce's key and message, and no nonce meets two challenges. What it found is beside the key: the simulated branch's draws (§9). The certificate's nonces were confirmed by §21's review (2026-11-26).
+5. **Seven proof systems on two keys:** x's spend, Lovejoin's and certificate half, and x_m's reveal, keys proof, certificate half and withdrawal. That's rules 2 and 2m, and the hedging, as the hypothesis that keeps A1 and B2 true when the random source fails. In the one-key design the reveal didn't meet it at first, and the keys proof's first design didn't either (§9).
+   - **Pushed** for all but the certificate: with every draw the attacker's to choose, each proof is still a function of its nonce's key and message, and no nonce meets two challenges. What it found is beside the key: the simulated branch's draws (§9). The certificate's nonces were confirmed by §21's review (2026-11-26). The withdrawal (use 12) came after 55a's review, and hasn't been pushed on.
 6. **The funds game** (§6, rule 7): a spend is safe only if its proofs are bound to a fresh key of the wallet's that signs nothing else. That's a rule about the worker, not about x.
    - **Pushed:** under a predictable source it doesn't cover the CLI (§6). The certificate's transcript on the Seedelf's own register has a bound (B5), and will have a test (§10).
 7. **Decision bits beyond decryption:** the scan, acceptance, what the wallet spends. Rule 4 claims each is a DDH answer. That claim is checked against the code in §4, not proved.
    - **Pushed,** in the crate and its bindings: each bit is computable from "is W = [k]P?" and the attacker's own hash queries (C5), and a reveal's check isn't one of them (rule 4). Left: timing. A relay that times a wallet's reads against envelopes it sealed itself gets that answer a page at a time. It's an oracle for linking, not on a key, and it's declared (§8), not measured.
 8. **Domain separation** (rule 3), across functions that Cardano and Lovejoin also use.
-   - **Pushed** for Messaging's own labels: where each pair first differs, in raw SHA-256 and under HMAC-SHA-512. Not checked again: SHA-512's other uses (Ed25519, BIP39), and HKDF taken as one oracle though it's HMAC twice. Routine, and still to do. The certificate's labels and H_base's inputs are new, and not built.
+   - **Pushed** for Messaging's own labels: where each pair first differs, in raw SHA-256 and under HMAC-SHA-512. Not checked again: SHA-512's other uses (Ed25519, BIP39), and HKDF taken as one oracle though it's HMAC twice. Routine, and still to do. The certificate's and the withdrawal's labels and H_base's inputs are new. labels.rs holds every label prefix-free and scans every raw SHA-256 call in the crate (§10).
 9. **Rule 8,** the separation, is a property of code not written yet. Its tests (§10) are what make Part B's "attacker that holds x_m" honest.
 
 **Where the next reviewer should push:**
-- **The code against this document,** once 55b to 55e are built: rule 8's and rule 1m's enforcement points (§5), and rule 3's table against every SHA-256 input as built.
+- **The code against this document:** rule 8's and rule 1m's enforcement points (§5), §10's missing tests, and rule 3's table against every SHA-256 input as built.
 - **ε_key's term for b** (§6), which no one has reduced to the ordinary discrete log.
 - **The send's salt and the simulated draws' fix** (§9), before either is built: the fix is a new use of x_m.
 - **Part A:** write one reduction R_P, for any Messaging property, so Part A says something.
@@ -557,12 +584,15 @@ This section's claim is new with this version. Both of 55a's attacks found it so
 
 ## 8. What this doesn't cover
 
-- **Memory-level bugs.** x and x_m live in the same WebAssembly module (protocol.md §21.1), held the same way (the plan's 55d). A bug that reads the module's memory reaches both, and Part B's attacker that holds x_m isn't one that reads the module. Those bugs are hunted in review (the owner, 2026-11-26).
-- **Side channels.** Timing, caches, and the WebAssembly engine, which promises nothing about timing (security.md, "Before production"). Whether the module's time depends on its key was measured on 2026-11-24, with x in Messages' roles, and nothing was found above the measurement's floor: security.md, *Assumptions*, says what was measured and what wasn't. It's measured again with x_m once built. The scan has no early return: it answers one digit an envelope, at the same cost whether the envelope is ours (the wasm's `scan`; `tag_matches` compares in constant time). What the wallet does next with one that is ours, opening it and taking it in, takes time a watcher can measure: a timing signal of the kind rule 4 counts.
+- **Memory-level bugs.** x and x_m live in the same WebAssembly module (protocol.md §21.1), held the same way: a `MessagingKey`, freed and wiped at a lock (free_wipes_key.test.mjs). A bug that reads the module's memory reaches both, and Part B's attacker that holds x_m isn't one that reads the module. Those bugs are hunted in review (the owner, 2026-11-26).
+- **Side channels.** Timing, caches, and the WebAssembly engine, which promises nothing about timing (security.md, "Before production"). Whether the module's time depends on its key was measured on 2026-11-24, with x in Messages' roles, and nothing was found above the measurement's floor: security.md, *Assumptions*, says what was measured and what wasn't. It's to be measured again with x_m, now that it's built. The scan has no early return: it answers one digit an envelope, at the same cost whether the envelope is ours (the wasm's `scan`; `tag_matches` compares in constant time). What the wallet does next with one that is ours, opening it and taking it in, takes time a watcher can measure: a timing signal of the kind rule 4 counts.
 - **A data source that lies about a register.** A certificate is good for N only against N's register in the reader's own read of the contract (protocol.md §21.5). A source that lies about it can make an old certificate good again, a replay, or offer a made-up register beside a certificate its maker made. A writer then writes to the wrong M_S. That costs messages and spends nothing, since the writer pays nothing. It's the limit already accepted for paying by name (protocol.md §2).
 - **Re-certifying after a move is the user's action.** A Seedelf that moves gets its new certificate only when the user turns it on again (protocol.md §21.8). Were it automatic, a lying data source that showed a turned-on Seedelf at some other register would learn from whether the wallet posts whether that register is the wallet's: an ownership bit on x (rule 4), handed to whoever runs the source.
 - **A certificate for a Seedelf someone else minted** at a register built from the wallet's own, such as the sum of two, is a public and lasting proof that x knows that register's key, so that those registers share a key (protocol.md §21.8, §2). The switch says so before such a Seedelf is turned on. It costs linking, not a key: the certificate's x half is a proof on public values (rule 1).
-- **The relay sees each certificate post's address** (protocol.md §11, §21.7), and so which Seedelfs an address has turned on. Posting apart hides them from a reader of the list, not from the relay.
+- **The relay sees each certificate post's address** (protocol.md §11, §21.7), and so which Seedelfs an address has turned on. Posting apart hides them from a reader of the list, not from the relay. It sees each withdrawal's address the same way, and so which address took which listed Seedelf off.
+- **Withdrawals and replays** (protocol.md §21.7). An old withdrawal names an old digest, and a later posting, with a fresh aux, is other bytes and another digest, which it can't reach. Only a random source that repeated aux would make a re-post the same bytes. The old withdrawal could then take it down again, and a post with another aux lists it again. No key is at stake.
+  - **A withdrawal lasts** (protocol.md §21.7, check 3′). A certificate's bytes are public while it's listed, so anyone who kept them could post them again after a withdrawal, and the Seedelf would read as taking messages though its owner turned them off. The relay keeps each withdrawn digest and refuses those bytes, 409 `withdrawn`. An owner who turns back on posts with a fresh aux, so another digest. Found while arguing the withdrawal (2026-11-26); no key was at stake.
+- **Remove wallet doesn't withdraw** [choice, protocol.md §21.7]. Its warning says that the wallet's listed Seedelfs stay listed, and to turn Messages off first. A wallet removed with Messages on leaves its certificates listed, and writers keep writing to Seedelfs nobody reads here.
 - **The relay withholding certificates.** It can withhold or drop one, and then writers who read its list can't write to that Seedelf. It can't forge one (B′).
 - **x stolen.** The thief can certify its own m_S for the wallet's Seedelfs (§21.5, §21.8).
   - Beside the wallet's certificate, that leaves the Seedelf taking first messages from no one.
@@ -584,7 +614,7 @@ This section's claim is new with this version. Both of 55a's attacks found it so
 - **The contracts' correctness:** seedelf-verification, for Seedelf's three scripts and Lovejoin v2's (mix_logic's Owner withdrawal included, in every transaction). Part B takes the validators as they're stated there: Seedelf's frozen variant 1 hashes raw bytes with blake2b-224, takes z of any length below q, and needs the vkh in the extra signatories; Lovejoin's owner proof is bound to its ctx, a blake2b-256 hash of the outputs, the input references and the mix box's script hash (`owner_context`, seedelf-core/src/lovejoin/mod.rs:1307).
 - **Many wallets at once.** The reductions are for one wallet. Against many they lose a factor of up to the number of keys, as any discrete-log scheme's do.
 - **Storage and export of either key:** the vault, the CLI's wallet file, `util expose-key`. Nor what a lock leaves in memory.
-  - On a lock the web wallet frees its key objects, and each overwrites its key where it lies before releasing it (the wasm's `Wiped`, since 2026-11-24: before, the freed cell still held the key). 55d holds x_m the same way.
+  - On a lock the web wallet frees its key objects, and each overwrites its key where it lies before releasing it (the wasm's `Wiped`, since 2026-11-24: before, the freed cell still held the key). `MessagingKey` holds x_m the same way.
   - A copy a call left on the WebAssembly stack isn't reached by that. The worker scrubs the stack's top 512 KiB after a lock's frees, and after each derivation of keys, before a later call can copy stale stack bytes into the heap (`scrubStack`).
   - A copy a later call built into the heap is reached by neither, and the review found bytes of the Seedelf key there after a lock. So a lock ends by replacing the module's instance and zeroing the old one's whole memory (`renewWasm`).
   - What can still hold a copy is outside the module: JavaScript's own strings and the browser's memory. So wiping is best effort (the wallet's docs/keys-and-accounts.md, "Lock and wipe").
@@ -593,7 +623,7 @@ This section's claim is new with this version. Both of 55a's attacks found it so
 
 ## 9. Gaps found
 
-Each was found in the one-key design, where the key in each was x. Each now says which key it concerns once chunk 55 is built. Writing this version found no new gap in protocol.md §21. What it found is a step taken away (§7.4) and tests 55b must add (§10).
+Each was found in the one-key design, where the key in each was x. Each now says which key it concerns since chunk 55. Writing this version found no new gap in protocol.md §21. What it found is a step taken away (§7.4) and tests 55b must add (§10).
 
 ### Fixed: the writer's b and the base proof's k
 
@@ -610,7 +640,7 @@ b unblinded A into [x]g_S, a static-DH answer on a generator the attacker chose.
 - The session vectors were re-recorded with b's and k's messages and HMACs, and the reveal vectors too, since their conversations start from a handle: a deliberate format change. The relay's and v1's vectors are byte for byte as they were, and the reveal's 31 checks give the results they gave.
 - Later, in the 1.10.0 gate review, the base proof became designated-verifier (protocol.md §16.2): b's branch or the reader's key's, so the reader can make one itself. k's message gained the simulated branch's c₂ and z₂, for the reason the reveal's holds them, and a zero k draws all three again.
 
-**Once chunk 55 is built:** b is keyed by x_m and blinds A = [x_m]p₀ on p₀ = [b]h_S. A leaked b would give [x_m]h_S on a hashed base, which no one chose: no longer what rule 1m forbids, and nothing Part C rests on (§7.4). The hedge stays: it costs nothing, and rule 2m has no exceptions.
+**Since chunk 55:** b is keyed by x_m and blinds A = [x_m]p₀ on p₀ = [b]h_S. A leaked b would give [x_m]h_S on a hashed base, which no one chose: no longer what rule 1m forbids, and nothing Part C rests on (§7.4). The hedge stays: it costs nothing, and rule 2m has no exceptions.
 
 ### Fixed before it was built: the keys proof's nonce
 
@@ -620,7 +650,7 @@ The 1.10.0 gate review added use 10, the keys proof, to bind E_A, S_A and A befo
 
 **The fix** is rule 2m's use 10: one draw of c₂, z₂ and aux for all three nonces, each nonce's message holding everything its challenge covers, and one helper that draws and derives them together, all again on a zero. A third review then varied every subset of a start's eight draws (cid, aux_b, e_A, s_A, aux_k, aux, c₂, z₂), and t, and no pair gave the key, e_A, s_A or b. The tests now vary each of a start's ten draws (the base proof's c₂ and z₂ came with its designated-verifier form) and every subset of them, and the three mutants each give a secret away under a single varied draw (§10).
 
-**Once chunk 55 is built:** k₁ is keyed by x_m. The same repeat would have given x_m: messages, not funds.
+**Since chunk 55:** k₁ is keyed by x_m. The same repeat would have given x_m: messages, not funds.
 
 ### Fixed: the reveal's nonce
 
@@ -631,13 +661,13 @@ The 1.10.0 gate review added use 10, the keys proof, to bind E_A, S_A and A befo
 
 The handoff that found it proposed HMAC over the statement and aux alone. That isn't enough: the challenge also covers T₂, built from the drawn c₂ and z₂, so a source that repeats aux but not them would put one k₁ under two challenges. They're in the message for that reason.
 
-**Once chunk 55 is built:** k₁ is keyed by x_m, over §21.9's statement.
+**Since chunk 55:** k₁ is keyed by x_m, over §21.9's statement.
 
 ### Fixed: use 2's guard
 
 It came out of the same sweep. `create_proof` made a proof for any register it was given, so the rule that no proof is made for a register x doesn't own rested on every caller. They all keep it today, but there are about 12 of them, and a JS export (`createProof`) took any register. It now refuses one, at the cost of one scalar multiplication per input.
 
-**Once chunk 55 is built:** x's, unchanged. The certificate's x half has the same guard from its first draft, behind rule 5's point checks (protocol.md §21.4, step 1).
+**Since chunk 55:** x's, unchanged. The certificate's x half has the same guard from its first draft, behind rule 5's point checks (protocol.md §21.4, step 1).
 
 ### Open: the simulated branch's draws
 
@@ -652,7 +682,7 @@ In the base proof, the keys proof and the reveal, the writer simulates the reade
 - **Beside it, with the writer's key.** b, k and each k₁ are HMACs under the writer's key, or under b, over 32 drawn bytes. Whoever later holds that key and can guess those bytes can check them against a proof, and no proof of the reader's would pass. A sound source leaves the bytes unguessable. No derivation takes this away: it comes with deriving anything from the key.
 - **The fix, not built yet:** derive c₂ and z₂ as the nonces are, by an HMAC under the prover's key over the statement and the 32 drawn bytes. A stuck or repeating source then prints values that look drawn. It changes only what a writer does: the reader's check and every format stay, and the session and reveal vectors are re-recorded. It would publish values derived from the key, so it's a new use: §4 and §5 to §7 take it in before it's built (§10's rule).
 
-**Once chunk 55 is built:** all three proofs are x_m's, and so is the fix's new use. The certificate has no simulated branch: both its halves are proved, and it's public by design (§8).
+**Since chunk 55:** all three proofs are x_m's, and so is the fix's new use. The certificate has no simulated branch: both its halves are proved, and it's public by design (§8).
 
 ### Guarded: a repeated start
 
@@ -665,7 +695,7 @@ A new conversation's ID, its e_A and s_A and its first message's salt are all dr
 - **What the guard can't see.** It's as good as what storage remembers. A snapshot of the machine restored twice rolls the records back with the random source, so any send then repeats. So does a wipe followed by the same draws in the same ten minutes: Remove wallet, Start Messages again, or the deletion of a conversation that can't be read. Under those it can still happen. In the one-key proof the side condition S then failed, and the funds stood on the line of its table that needed neither S nor AES-GCM.
 - **The remedy, not built yet,** is in the crate: derive a send's salt from the message key, the drawn bytes and the plaintext, so a repeated draw with another text gives another salt. It re-records the vectors, and it belongs with the other change from drawn to derived, the proofs' c₂ and z₂ (above).
 
-**Once chunk 55 is built:** x_m's conversations. No part of the theorem needs S now (§7.4), so it costs a message's secrecy and integrity, and neither key.
+**Since chunk 55:** x_m's conversations. No part of the theorem needs S now (§7.4), so it costs a message's secrecy and integrity, and neither key.
 
 ## 10. Keeping it true
 
@@ -675,11 +705,11 @@ A new conversation's ID, its e_A and s_A and its first message's salt are all dr
 - `sk: Scalar`, `&Scalar`, `key.scalar()` and `SecretKey::from_scalar` in seedelf-crypto, seedelf-core, seedelf-messaging, seedelf-web-wallet/wasm/src and seedelf-cli/src;
 - `keys.seedelf`, `laneKey` and `seedelf.` in seedelf-web-wallet/extension/src/background;
 - `create_proof`, `prove_schnorr`, `one_time_key`, `convert::`, `G2`, `pairing`;
-- once chunk 55 is built, x_m's type and its WebAssembly handle, `hash_to`, and every export that takes x: only the certificate's may be a `messaging*` one.
+- `MessagingKey`, `messaging_key_v1`, `hash_to_curve` and `Handle`, and every export that takes a `SeedelfKey`: only the certificate's may be a `messaging*` one.
 
 Each hit is a use in §4's tables, a caller of one, or a new use, which needs this document first.
 
-**What the tests hold today,** on the one-key code. Where a test's key changes once chunk 55 is built, the new key is in brackets.
+**What the one-key tests hold,** now on the two keys. Where a test's key changed with chunk 55, the key it holds now is in brackets.
 - **Rule 1, use 2:** schnorr.rs's `a_register_the_key_doesnt_own_gets_no_proof_which_would_reveal_sk_times_g`, and proptest_crypto.rs's `schnorr_proof_refuses_a_register_the_scalar_doesnt_own`.
 - **Rule 1, use 4** [x_m, rule 1m]: reveal.rs's `a_reveal_names_a_seedelf_of_the_key_and_the_key_is_the_conversations`.
 - **Rule 1, use 10** [x_m]: session/tests/keys_proof.rs's `the_keys_proof_is_made_only_from_a_handle_and_only_for_begins_a`.
@@ -695,33 +725,40 @@ Each hit is a use in §4's tables, a caller of one, or a new use, which needs th
   - session/tests/ratchet.rs's `the_labels_are_prefix_free_within_each_function`, the keys proof's and the envelope's tag labels included;
   - session/tests/keys_proof.rs's `no_keys_proof_transcript_passes_the_chain_verifier` (seedelf-crypto's `prove` refuses a keys proof's (T₁, z₁) for (p₀, A) and for [d](p₀, A));
   - session/tests/reveal.rs's `the_spending_verifiers_refuse_a_reveals_transcripts_and_its_share_is_none_of_their_challenges` (the spending verifiers refuse a reveal's two transcripts, on (p₀, A) and on the Seedelf's own register, for three reveals, the reader's own two among them).
-  - Once chunk 55 is built, the last two run x_m's transcripts on x_m's registers, which hold no funds of the wallet's. They stay, as tests of the spending verifiers' separation, and the certificate's test below takes their place for the funds.
+  - Since chunk 55 the last two run x_m's transcripts on x_m's registers, which hold no funds of the wallet's. They stay, as tests of the spending verifiers' separation, and the certificate's and the withdrawal's transcript tests (below) take their place for the funds.
 - **§9's guard on a repeated start:** the extension's tests/messaging-start-held.test.ts. A second start, a second continuation, a start under an ID a tombstone holds or a listed request has, a record's ID that's taken, and a request accepted again after its conversation was deleted: each with the first press's draws replayed, and each refused with nothing written. A control with a sound source goes through.
 - **Rule 5:** tests/invalid_inputs.rs, and the parsers' refusals throughout.
 - **The mutation passes** (2026-11-22): over the reveal's hedge and use 2's guard, 13 mutants, 12 killed; over b and k, 28 mutants, 27 killed. Each survivor keeps a zero nonce instead of drawing aux again, an event of probability 2⁻²⁵⁵ that no test can reach. Since then (2026-11-23), the three nonce mutants were applied to the crate's own prover, each killed, and the gate's spec review ran 30 over call 16's checks (protocol.md §16.6). The one-key version's §10 lists every mutant.
 - **The clean-room checks:** protocol.md §19.6 and §16.6, "Checked again": another model's harness, written from the spec and the vector files alone, reproduced the session and reveal files, both F proofs included (2026-11-22 to 2026-11-24). §16.6 says what it didn't reproduce.
 
-**What chunk 55 must add,** in 55b unless said. None of it exists yet:
-- **Rule 1, use 11:** a certificate refused for a register x doesn't own, and for an m_S that isn't [x_m]h_S. A g_S or u_S that isn't canonical, in G1 and not O is refused before x meets it, and a test shows the ownership test isn't reached.
+**Chunk 55's tests,** each marked as it stands: existing, with its file and name; held by construction; or missing. Paths are seedelf-messaging's unless said. The crate's suite is 255 tests and doctests.
+- **The files,** with their tests:
+  - session/tests/certificate.rs (11), session/tests/seedelf.rs (7), session/tests/withdrawal.rs (11), session/tests/certificate_mutants.rs (8, each nonce mutant shown giving a key away, or the vectors catching it), session/tests/labels.rs (4); tests/certificate_vectors.rs (2), tests/two_keys.rs (3); src/compile_fail.rs (9 `compile_fail` doctests);
+  - session/tests/mutants.rs's gate, `no_mutant_of_a_vector_proof_verifies`: 780,597 mutants of the session and reveal files' 13 proofs and of everything each is checked against, a reveal's chain included, and none verifies. It doesn't take certificates or withdrawals, which certificate_mutants.rs covers by mutating their derivations;
+  - seedelf-crypto's tests/messaging_key_test.rs (9);
+  - the bindings' wasm/tests/messaging_test.rs (23), messaging.test.mjs (14), messaging-key.test.mjs (4) and free_wipes_key.test.mjs, whose key classes include `MessagingKey`;
+  - the worker's extension tests/messaging-certificates.test.ts (25);
+  - and the clean-room reproduction from the spec alone, 1,042 of 1,042 values in the session, reveal and certificate files (protocol.md §16.6, §19.6).
+- **Rule 1, use 11:**
+  - **exists:** a register x doesn't own, and one key for both: certificate.rs `make_refuses_one_key_for_both_and_a_seedelf_not_the_keys`, the wasm's `a_certificate_refuses_one_key_twice_and_another_keys_register`, and messaging.test.mjs's "a certificate round trip, and what it refuses"; a bad point never reaching the ownership test, two_keys.rs `a_bad_point_never_reaches_the_ownership_test`;
+  - **by construction:** an m_S that isn't [x_m]h_S, since the maker computes m_S. The parser's own refusals are certificate.rs `from_bytes_refuses_each_fault_in_its_order` and `a_point_with_x_zero_is_a_bad_encoding`.
 - **Rule 1m, uses 4 and 10:**
-  - the reveal refused unless A = [x_m]p₀, m_S = [x_m]h_S and the Seedelf's certificate is good, and the keys proof's A check on x_m;
-  - a reader checking a reveal's proof, with the m_S it carries, before any read of the chain or the list, then refusing at the press under §21.5's conflict rule.
-- **Rule 1m, no API carries a base** (55b and 55d), named `no_messaging_api_takes_a_base`. start, reveal and receive take (network, policy, N, g_S, u_S[, m_S]) and compute h_S in the crate, and the messaging register type has no public constructor but the one through hash_to_G1.
+  - **exists:** the reveal's guard on A and m_S, session/tests/reveal.rs `a_reveal_names_a_seedelf_of_the_key_and_the_key_is_the_conversations`; on the certificate, the wasm's `a_reveal_through_the_bindings` and messaging-certificates' "is refused for a Seedelf whose good certificate names another key"; the proof checked before any read, the extension's messaging-reveal.test.ts "fails one whose proof doesn't verify at once…"; the conflict rule, messaging-certificates' "fails where exactly one good certificate doesn't name the reveal's m_S" and "is refused where the good certificates… name two keys"; the keys proof's check of A, keys_proof.rs `the_keys_proof_is_made_only_from_a_handle_and_only_for_begins_a`.
+- **Rule 1m, no API carries a base:**
+  - **exists:** compile_fail.rs's nine doctests: `Handle` has no public constructor and no struct literal, the crate's constructor from a base and a value is its own, `Seedelf::handle` takes a key and never a base, `Conversation::start` and `Inbox::start` take a `Handle` and neither a register nor a name, the start on a bare register is the crate's tests', and a reveal hands out no `Handle`. two_keys.rs `the_compile_fail_doctests_twins_compile` checks that each one's twin, written right, compiles. Beside them: seedelf.rs `h_s_is_the_hash_of_the_seedelf_and_never_its_generator`, `a_handle_is_the_messaging_keys_and_never_on_g_s` and `a_handle_never_has_its_seedelfs_datum_register_for_any_key`; two_keys.rs `a_datum_register_never_serves_as_a_messaging_register`; the wasm's `a_start_takes_only_a_certificate_for_the_chain_reads_seedelf`.
 - **Rule 2, use 11:**
-  - k_m and k_x byte for byte from their specified messages, in `messaging_certificate_v1.json` and a test that rebuilds them, as vectors.rs does b's and k's;
-  - a stuck source giving the same certificate again, and a varied aux giving no key;
-  - mutants, each caught: an aux for each half, k_x keyed by x_m or by both keys, k_m without the statement. k_x without T_m is caught by the byte vectors alone: with one maker, T_m is a function of the statement and aux, so no behaviour shows it;
-  - a test that shows why there's one maker (rule 2m): a second derivation of k_x, under the same aux, gives x_m.
-- **Rule 3, the transcript:** a certificate's (T_x, z_x), and pairs mauled from it to other challenges, refused by seedelf-crypto's `prove`, the chain's verifier, and by Lovejoin's `verify_schnorr`, for (g_S, u_S) and two [d] of it, under several vkhs, as the reveal's test does.
-- **Rule 3, the labels:** the prefix test with `…|certificate`, `…|certificate-nonce|x`, `…|certificate-nonce|m` and `…|listing-stamp|`. And a test that every raw SHA-256 input but H_base's and `envelopeHash`'s starts with an ASCII label of at least 21 bytes or is a 40-byte stamp, so none starts with 64 zero bytes.
+  - **exists:** k_m and k_x byte for byte, certificate.rs `the_nonces_are_hmac_sha512_of_the_statement_under_each_key` and `certificate_vectors_match_the_file`, rebuilt through the public API by certificate_vectors.rs `every_certificate_and_refusal_reads_through_the_public_api`; a stuck source, `a_repeated_draw_gives_the_identical_certificate`;
+  - **exists, the mutants** (certificate_mutants.rs): `an_aux_for_each_nonce_puts_k_m_under_two_challenges`, `k_m_without_the_statement_puts_k_m_under_two_challenges`, `k_x_keyed_by_x_m_gives_x_to_whoever_holds_x_m`, `k_m_keyed_by_x_gives_x_m_to_whoever_holds_x`, `k_x_keyed_by_both_keys_gives_neither_key_alone`, `a_second_derivation_of_k_x_under_the_same_aux_gives_x_m`, `k_x_without_t_m_gives_x_under_a_second_derivation_of_k_m` (T_m in k_x's message, x's margin, shown needed), and `the_vectors_catch_every_mutant_but_an_aux_for_each`.
+- **Rule 3, the transcript:** **exists:** certificate.rs `the_spending_verifiers_refuse_a_certificates_transcript`, on (g_S, u_S) and two [d] of it, under four vkhs, through `prove` and `verify_schnorr`, mauled to c, to the verifier's own challenge and to another t.
+- **Rule 3, the labels:** **exists:** relay.rs `the_certificate_labels_are_prefix_free`; labels.rs `every_hmac_sha512_label_keyed_by_x_or_x_m_is_prefix_free` (the certificate's and the withdrawal's nonce labels among them), `every_raw_sha256_label_is_prefix_free_ascii_and_at_least_21_bytes`, `every_label_in_the_source_is_in_exactly_one_list`, and `every_raw_sha256_starts_with_a_listed_label_or_is_a_stamp`, which scans every raw SHA-256 call in the crate. The worker's `envelopeHash`, outside the rule, isn't the crate's.
+- **Use 12, the withdrawal:**
+  - **exists:** another key's certificate, withdrawal.rs `make_refuses_a_certificate_whose_messaging_value_isnt_the_keys`; k by HMAC-SHA-512 directly, `the_nonce_is_hmac_sha512_of_the_statement_and_register_under_x_m`; a repeated draw, `a_repeated_draw_gives_the_identical_withdrawal`; the crate's refusals in order, `from_bytes_refuses_each_fault_in_its_order` and `check_refuses_another_certificate_a_changed_proof_and_another_key`; the spending verifiers, `the_spending_verifiers_refuse_a_withdrawals_transcript`; a certificate's check, `a_withdrawals_transcript_never_passes_a_certificates_check_and_the_reverse`; the two formats apart, `a_withdrawal_and_a_certificate_never_read_as_each_other`; its stamp, `the_unlisting_digest_is_its_label_over_the_pool_and_the_withdrawal`; vectors, the certificate file's withdrawals, certificate_vectors.rs `every_withdrawal_and_its_refusal_reads_through_the_public_api` and the wasm's `the_vectors_withdrawals_are_made_again_through_the_bindings`;
+  - **by construction:** a certificate that doesn't check, since the maker takes a checked `Certificate`. The relay's own refusals, a digest it doesn't hold and a withdrawn digest's bytes among them, are seedelf-data's tests.
 - **Rule 8:**
-  - the funds scan never tests a register against x_m: every `isOwned` caller (55e), and a payment to a register of x_m that the wallet doesn't find;
-  - no envelope, F or ratchet-header path reaches x: the `messaging*` exports take x_m, and only the certificate's export takes x (55d);
-  - the WebAssembly `MessagingKey` class has no funds method and every `messaging*` export takes only it (55d), named `messaging_key_has_no_funds_methods`;
-  - the certificate's maker refuses when [x_m]G = [x]G, named `certificate_maker_refuses_one_key_for_both`;
-  - k_x not computable from x_m: the mutant above.
-- **x_m's derivation:** its own vectors file beside `seedelf_key_v1.json`, which stays as it is, with the account, network and generation bytes each varied.
-- **A clean-room reproduction** of the certificate's file and of the four re-recorded ones from the spec alone, and a mutation pass (the plan's 55b).
+  - **exists:** no envelope, F or ratchet path reaches x, seedelf.rs `a_first_message_to_a_certified_handle_reads_with_the_messaging_key_alone`, the wasm's `a_first_message_is_taken_with_the_messaging_key_never_the_seedelf_key`, and messaging-certificates' "is the only key any messaging call is handed…"; `MessagingKey` with no funds method, and only `messagingCertificate` taking both classes, `messagingWithdrawal` among the rest, messaging-key.test.mjs "a MessagingKey has none of the funds methods, and only messagingCertificate takes both classes"; one key for both refused, as under rule 1 above; k_x never keyed by x_m, certificate_mutants.rs `k_x_keyed_by_x_m_gives_x_to_whoever_holds_x_m`; the key freed and wiped at a lock, free_wipes_key.test.mjs and messaging-certificates' "is freed at a lock";
+  - **by audit:** every `isOwned` caller takes `keys.seedelf` (§4.3), and `MessagingKey` has no such method;
+  - **missing:** a payment to a register of x_m that the funds scan doesn't find.
+- **x_m's derivation:** **exists:** seedelf-crypto's tests/vectors/seedelf_messaging_key_v1.json, 22 vectors (v1's seven phrases at account 0 on both networks, generation 1 on each, and account 1 once), held by messaging_key_test.rs `messaging_key_v1_vectors`, `the_vectors_cover_every_phrase_network_and_generation`, `networks_generations_and_accounts_derive_different_keys` and `the_messaging_key_is_never_the_seedelf_key`, and through the bindings by the wasm's `the_messaging_key_is_the_vectors_on_both_networks` and messaging-key.test.mjs's first test.
 
 **Reviews of the one-key version** (2026-11-22 to 2026-11-24). Section numbers in this record are that version's (c096eab9). What they found is folded in above where it still holds.
 

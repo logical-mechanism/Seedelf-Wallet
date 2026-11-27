@@ -66,6 +66,44 @@ pub fn stamp_digest(pool: &str, envelope: &[u8]) -> Result<[u8; 32], Error> {
         .into())
 }
 
+/// SHA-256's label for a certificate post's stamp and its listing digest
+/// (docs/protocol.md §21.7). Neither it nor the certificate's challenge
+/// label, `…|certificate`, is a prefix of the other, or of [`STAMP_LABEL`].
+pub const LISTING_STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|listing-stamp|";
+
+/// A certificate's listing digest under `pool`:
+/// `SHA-256(LISTING_STAMP_LABEL ‖ len(pool) ‖ pool ‖ certificate)`. Its post's
+/// stamp is over it, as an envelope's is over [`stamp_digest`], and a
+/// removal entry in the list names a certificate by it (§21.7). A pool's
+/// name is at most 255 bytes.
+pub fn listing_digest(pool: &str, certificate: &[u8]) -> Result<[u8; 32], Error> {
+    let len = u8::try_from(pool.len()).map_err(|_| Error::InvalidLength)?;
+    Ok(Sha256::new()
+        .chain_update(LISTING_STAMP_LABEL)
+        .chain_update([len])
+        .chain_update(pool.as_bytes())
+        .chain_update(certificate)
+        .finalize()
+        .into())
+}
+
+/// SHA-256's label for a withdrawal post's stamp (docs/protocol.md §21.7).
+pub const UNLISTING_STAMP_LABEL: &[u8] = b"Seedelf-Messaging|v1|unlisting-stamp|";
+
+/// A withdrawal's stamp digest under `pool`:
+/// `SHA-256(UNLISTING_STAMP_LABEL ‖ len(pool) ‖ pool ‖ withdrawal)`, what its
+/// post's stamp is solved over (§21.7). A pool's name is at most 255 bytes.
+pub fn unlisting_digest(pool: &str, withdrawal: &[u8]) -> Result<[u8; 32], Error> {
+    let len = u8::try_from(pool.len()).map_err(|_| Error::InvalidLength)?;
+    Ok(Sha256::new()
+        .chain_update(UNLISTING_STAMP_LABEL)
+        .chain_update([len])
+        .chain_update(pool.as_bytes())
+        .chain_update(withdrawal)
+        .finalize()
+        .into())
+}
+
 /// The work `nonce` shows for `digest`: the leading zero bits of
 /// `SHA-256(digest ‖ nonce)`, the most significant bit of the first byte
 /// first.
@@ -400,8 +438,9 @@ mod tests {
         use crate::session::Inbox;
         let (alice, bob) = (SecretKey::generate(), SecretKey::generate());
         let mut inbox = Inbox::new();
+        // Below the handle layer: the relay reads no handle, so any register.
         let cid = inbox
-            .start(&alice, &bob.register(), b"bob", 1_800_000_000)
+            .start_on(&alice, &bob.register(), b"bob", 1_800_000_000)
             .unwrap();
         // The relay doesn't read the first-contact stamp: any nonce sends.
         inbox.set_stamp(cid, 0).unwrap();
@@ -460,5 +499,49 @@ mod tests {
             post_body(0x0102_0304_0506_0708, b"env"),
             [1, 2, 3, 4, 5, 6, 7, 8, b'e', b'n', b'v']
         );
+    }
+    /// A certificate's listing digest is §21.7's SHA-256, over its own label,
+    /// the pool's name and length, and the certificate's bytes; never an
+    /// envelope's stamp digest of the same bytes.
+    #[test]
+    fn a_listing_digest_is_its_own_label_over_the_pool_and_the_certificate() {
+        let certificate = [0x5a; 273];
+        let mut expected = Sha256::new();
+        expected.update(b"Seedelf-Messaging|v1|listing-stamp|");
+        expected.update([7u8]);
+        expected.update(b"preprod");
+        expected.update(certificate);
+        let expected: [u8; 32] = expected.finalize().into();
+        assert_eq!(listing_digest("preprod", &certificate).unwrap(), expected);
+        assert_ne!(
+            listing_digest("preprod", &certificate).unwrap(),
+            stamp_digest("preprod", &certificate).unwrap()
+        );
+        assert_ne!(
+            listing_digest("preprod", &certificate).unwrap(),
+            listing_digest("mainnet", &certificate).unwrap()
+        );
+        assert_eq!(
+            listing_digest(&"x".repeat(256), b""),
+            Err(Error::InvalidLength)
+        );
+    }
+
+    /// The raw SHA-256 labels a certificate meets are prefix-free among
+    /// themselves and against the envelope's stamp (joint-security.md, rule 3).
+    #[test]
+    fn the_certificate_labels_are_prefix_free() {
+        let labels: [&[u8]; 5] = [
+            LISTING_STAMP_LABEL,
+            UNLISTING_STAMP_LABEL,
+            STAMP_LABEL,
+            b"Seedelf-Messaging|v1|certificate",
+            b"Seedelf-Messaging|v1|withdrawal",
+        ];
+        for (i, a) in labels.iter().enumerate() {
+            for (j, b) in labels.iter().enumerate() {
+                assert!(i == j || !b.starts_with(a), "{a:?} is a prefix of {b:?}");
+            }
+        }
     }
 }

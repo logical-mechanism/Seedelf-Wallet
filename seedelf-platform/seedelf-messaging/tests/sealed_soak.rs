@@ -60,6 +60,12 @@
 //! 5 min 23 s beside them. Before it, as a scratch test, 3,200,000 cases in
 //! 61 minutes and 150,000 steps in 27, beside other work. No finding in any.
 //!
+//! **Two keys.** Every reader's key is its messaging key; a handle is its
+//! Seedelf's messaging register, on the hashed base, taken with that key
+//! from the Seedelf's chain, name and datum register (another key's, the
+//! Seedelf key's), and a writer's is read from the Seedelf's certificate
+//! (docs/protocol.md §21).
+//!
 //! **A finding.** The builders draw from the operating system, so a seed
 //! doesn't give the same bytes twice. A finding therefore prints everything
 //! it read as one line of JSON: the reader's key, handles and records, the
@@ -81,8 +87,8 @@ use sha2::{Digest, Sha256};
 
 use seedelf_messaging::relay::find_stamp;
 use seedelf_messaging::session::{
-    Conversation, ConversationId, FirstContact, Handle, Inbox, Received, Requests, Reveal,
-    Tombstones, open,
+    Certificate, Chain, Conversation, ConversationId, FirstContact, Handle, Inbox, NETWORK_PREPROD,
+    Received, Requests, Reveal, Seedelf, Tombstones, open,
 };
 use seedelf_messaging::{
     Envelope, Error, Register, SecretKey, decrypt_message, encrypt_message, matches_envelope,
@@ -252,6 +258,31 @@ fn key_bytes(label: &str) -> [u8; 32] {
     bytes
 }
 
+/// The Seedelf policy this test's Seedelfs go by: variant 1's.
+fn policy() -> [u8; 28] {
+    hex::decode("84967d911e1a10d5b4a38441879f374a07f340945bcf9e7697485255")
+        .unwrap()
+        .try_into()
+        .unwrap()
+}
+
+/// The chain this test's Seedelfs live on, and that its reveals are read
+/// under: preprod.
+fn chain() -> Chain {
+    Chain::new(NETWORK_PREPROD, policy()).unwrap()
+}
+
+/// The handle a writer writes to `seedelf` at: its certificate, made with
+/// its owner's two keys and read back as the relay's list gives it.
+fn certified(spend: &SecretKey, messaging: &SecretKey, seedelf: &Seedelf) -> Handle {
+    let bytes = Certificate::make(spend, messaging, seedelf)
+        .unwrap()
+        .to_bytes();
+    let certificate = Certificate::from_bytes(seedelf.chain(), &bytes).unwrap();
+    assert!(certificate.is_for(seedelf));
+    certificate.handle().clone()
+}
+
 // ---------------------------------------------------------------------------
 // Sealing to a reader as any stranger can
 // ---------------------------------------------------------------------------
@@ -318,11 +349,30 @@ impl Seal {
 // Readers' contexts: the records a wallet holds when an envelope arrives
 // ---------------------------------------------------------------------------
 
-/// A Seedelf's name and the registers it has held.
+/// A Seedelf's chain, its name and the datum registers it has held, each a
+/// handle the reader takes with its messaging key; and `certificates`,
+/// other keys' certificates under the name, whose handles the reader lists
+/// by mistake.
 #[derive(Clone)]
 struct HandleDef {
+    network: u8,
+    policy: [u8; 28],
     name: Vec<u8>,
     registers: Vec<Register>,
+    certificates: Vec<Vec<u8>>,
+}
+
+impl HandleDef {
+    /// The reader's own Seedelf named `name` under [`chain`], at `registers`.
+    fn own(name: &[u8], registers: Vec<Register>) -> Self {
+        HandleDef {
+            network: NETWORK_PREPROD,
+            policy: policy(),
+            name: name.to_vec(),
+            registers,
+            certificates: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -346,14 +396,20 @@ impl Party {
     }
 
     fn handle_list(&self) -> Vec<Handle> {
-        self.handles
-            .iter()
-            .flat_map(|h| {
-                h.registers
-                    .iter()
-                    .map(|r| Handle::new(&h.name, *r).unwrap())
-            })
-            .collect()
+        let key = self.key();
+        let mut list = Vec::new();
+        for h in &self.handles {
+            let chain = Chain::new(h.network, h.policy).unwrap();
+            for register in &h.registers {
+                let seedelf = Seedelf::new(chain, &h.name, *register).unwrap();
+                list.push(seedelf.handle(&key).unwrap());
+            }
+            for certificate in &h.certificates {
+                let certificate = Certificate::from_bytes(&chain, certificate).unwrap();
+                list.push(certificate.handle().clone());
+            }
+        }
+        list
     }
 }
 
@@ -422,7 +478,13 @@ impl Ctx {
                         })
                     })
                     .collect();
-                serde_json::json!({ "name": hex::encode(&h.name), "registers": registers })
+                serde_json::json!({
+                    "network": h.network,
+                    "policy": hex::encode(h.policy),
+                    "name": hex::encode(&h.name),
+                    "registers": registers,
+                    "certificates": h.certificates.iter().map(hex::encode).collect::<Vec<_>>(),
+                })
             })
             .collect();
         serde_json::json!({
@@ -450,6 +512,14 @@ impl Ctx {
             .unwrap()
             .iter()
             .map(|h| HandleDef {
+                network: u8::try_from(h["network"].as_u64().unwrap()).unwrap(),
+                policy: bytes(&h["policy"]).try_into().unwrap(),
+                certificates: h["certificates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(bytes)
+                    .collect(),
                 name: bytes(&h["name"]),
                 registers: h["registers"]
                     .as_array()
@@ -655,29 +725,35 @@ fn build() -> Setup {
         SecretKey::from_bytes(&bob_b).unwrap(),
     );
     let carol = SecretKey::from_bytes(&key_bytes("soak carol")).unwrap();
-    let seedelf = rerandomize_register(&bob.register());
-    let alice_seedelf = rerandomize_register(&alice.register());
-    // Two registers under one name: the base proof is tried against each.
+    // Each wallet's Seedelf key, apart from its messaging key.
+    let seedelf_key = |label: &str| SecretKey::from_bytes(&key_bytes(label)).unwrap();
+    let (alice_x, bob_x, carol_x) = (
+        seedelf_key("soak alice's seedelf key"),
+        seedelf_key("soak bob's seedelf key"),
+        seedelf_key("soak carol's seedelf key"),
+    );
+    let seedelf = rerandomize_register(&bob_x.register());
+    let alice_seedelf = rerandomize_register(&alice_x.register());
+    // Two registers under one name, two handles: the base proof is tried
+    // against each.
     let bob_party = Party::new(
         bob_b,
-        vec![HandleDef {
-            name: name.clone(),
-            registers: vec![bob.register(), seedelf],
-        }],
+        vec![HandleDef::own(&name, vec![bob_x.register(), seedelf])],
     );
     let alice_party = Party::new(
         alice_b,
-        vec![HandleDef {
-            name: alice_name.clone(),
-            registers: vec![alice_seedelf],
-        }],
+        vec![HandleDef::own(&alice_name, vec![alice_seedelf])],
     );
     let bob_handles = bob_party.handle_list();
+    // What Alice writes to: Bob's Seedelf's handle, from its certificate.
+    let bobs_seedelf = Seedelf::new(chain(), &name, seedelf).unwrap();
+    let to_bob = certified(&bob_x, &bob, &bobs_seedelf);
+    assert_eq!(to_bob, bob_handles[1]);
 
     // Points for the mutator: four valid ones, then each way of not being one.
     s.points.push(bob.register().generator_bytes());
-    s.points.push(seedelf.generator_bytes());
-    s.points.push(seedelf.public_value_bytes());
+    s.points.push(to_bob.register().generator_bytes());
+    s.points.push(to_bob.register().public_value_bytes());
     s.points.push(carol.register().public_value_bytes());
     let mut identity = [0u8; 48];
     identity[0] = 0xc0;
@@ -698,7 +774,7 @@ fn build() -> Setup {
     // Alice writes to Bob's Seedelf: sixteen first-contact messages, a
     // request's whole share.
     let mut a = Inbox::new();
-    let cid = a.start(&alice, &seedelf, &name, T).unwrap();
+    let cid = a.start(&alice, &to_bob, T).unwrap();
     s.cids.push(cid.0);
     stamp(&mut a, cid, BITS);
     let lengths = [
@@ -736,12 +812,16 @@ fn build() -> Setup {
     };
     let note = "a stamp solved at 8 bits where 24 are asked";
     s.authentic(strict, T + 60, &m[0], expect, note);
-    // Handles that don't serve: another key's register under the name, and
-    // another name.
+    // Handles that don't serve: another key's register under the name, the
+    // handle Carol's certificate names, listed by mistake; and another name.
+    let carols_seedelf = Seedelf::new(chain(), &name, carol_x.register()).unwrap();
+    let carols_certificate = Certificate::make(&carol_x, &carol, &carols_seedelf)
+        .unwrap()
+        .to_bytes();
     let other_key = Party {
         handles: vec![HandleDef {
-            name: name.clone(),
-            registers: vec![carol.register()],
+            certificates: vec![carols_certificate],
+            ..HandleDef::own(&name, Vec::new())
         }],
         ..bob_party.clone()
     };
@@ -754,10 +834,7 @@ fn build() -> Setup {
     let note = "a register of another key";
     s.authentic(ctx, T + 60, &m[0], "invalid_base_proof", note);
     let other_name = Party {
-        handles: vec![HandleDef {
-            name: alice_name.clone(),
-            registers: vec![seedelf],
-        }],
+        handles: vec![HandleDef::own(&alice_name, vec![seedelf])],
         ..bob_party.clone()
     };
     let ctx = s.snap("bob, no handle of that name", &other_name, &b, BITS);
@@ -853,12 +930,15 @@ fn build() -> Setup {
     s.authentic(alice_held, T + 200, &r1, "message", note);
 
     // The reveal: Alice shows Bob her Seedelf.
-    let shown = Handle::new(&alice_name, alice_seedelf).unwrap();
+    let shown = Seedelf::new(chain(), &alice_name, alice_seedelf)
+        .unwrap()
+        .handle(&alice)
+        .unwrap();
     let reveal = a.conversation(cid).unwrap().reveal(&alice, &shown).unwrap();
     let reveal = reveal.to_bytes();
     let reader = b.conversation(cid).unwrap();
     reader
-        .verify_reveal(&Reveal::from_bytes(&reveal).unwrap())
+        .verify_reveal(&Reveal::from_bytes(&chain(), &reveal).unwrap())
         .unwrap();
     s.reveals.push((held3, reveal));
 
@@ -958,7 +1038,7 @@ fn build() -> Setup {
     // A request's share in bytes: two of the largest fit, a third doesn't.
     {
         let mut writer = Inbox::new();
-        let big = writer.start(&alice, &seedelf, &name, T).unwrap();
+        let big = writer.start(&alice, &to_bob, T).unwrap();
         s.cids.push(big.0);
         stamp(&mut writer, big, BITS);
         let most = writer.conversation(big).unwrap().max_text_len();
@@ -998,7 +1078,7 @@ fn build() -> Setup {
         let mut firsts = Vec::new();
         for i in 0..51u64 {
             let mut writer = Inbox::new();
-            let one = writer.start(&alice, &seedelf, &name, T + i).unwrap();
+            let one = writer.start(&alice, &to_bob, T + i).unwrap();
             stamp(&mut writer, one, BITS);
             firsts.push(writer.send(one, b"one of many").unwrap());
         }
@@ -1052,22 +1132,32 @@ fn build() -> Setup {
         serde_json::from_str(&std::fs::read_to_string(path).expect("reads the vectors")).unwrap();
     let bytes = |v: &Value| hex::decode(v.as_str().unwrap()).unwrap();
     for (i, session) in vectors["sessions"].as_array().unwrap().iter().enumerate() {
-        if session["handle"].is_null() {
+        let seedelf = &session["seedelf"];
+        if seedelf.is_null() {
             continue;
         }
+        // The reader's handle, from the Seedelf the file records.
         let register = Register::from_bytes(
-            &bytes(&session["handle"]["generator"]).try_into().unwrap(),
-            &bytes(&session["handle"]["public_value"])
-                .try_into()
-                .unwrap(),
+            &bytes(&seedelf["generator"]).try_into().unwrap(),
+            &bytes(&seedelf["public_value"]).try_into().unwrap(),
         )
         .unwrap();
         let reader = Party::new(
             bytes(&session["responder_secret_key"]).try_into().unwrap(),
             vec![HandleDef {
+                network: u8::try_from(seedelf["network"].as_u64().unwrap()).unwrap(),
+                policy: bytes(&seedelf["policy"]).try_into().unwrap(),
                 name: bytes(&session["to"]),
                 registers: vec![register],
+                certificates: Vec::new(),
             }],
+        );
+        assert_eq!(
+            reader.handle_list()[0]
+                .register()
+                .generator_bytes()
+                .to_vec(),
+            bytes(&session["handle"]["generator"])
         );
         let now = session["t"].as_u64().unwrap() + 60;
         let firsts: Vec<Vec<u8>> = session["events"]
@@ -1638,7 +1728,7 @@ impl Reader {
 
 /// A reveal's check at `conversation`: `ok` and the name, or the refusal.
 fn check_reveal(conversation: &Conversation, bytes: &[u8]) -> String {
-    let checked = Reveal::from_bytes(bytes)
+    let checked = Reveal::from_bytes(&chain(), bytes)
         .and_then(|reveal| conversation.verify_reveal(&reveal).map(|()| reveal));
     match checked {
         Ok(reveal) => format!("ok:{}", hex::encode(reveal.name())),
@@ -1982,15 +2072,12 @@ fn a_long_conversation_with_a_stranger_in_the_middle() {
     let started = Instant::now();
     let mut rng = Rng::new(seed ^ 0x0057_a1e5);
     let name = b"walker".to_vec();
-    let bob_key = SecretKey::from_bytes(&key_bytes("walk bob")).unwrap();
+    let bob_x = SecretKey::from_bytes(&key_bytes("walk bob's seedelf key")).unwrap();
     let parties = [
         Party::new(key_bytes("walk alice"), Vec::new()),
         Party::new(
             key_bytes("walk bob"),
-            vec![HandleDef {
-                name: name.clone(),
-                registers: vec![bob_key.register()],
-            }],
+            vec![HandleDef::own(&name, vec![bob_x.register()])],
         ),
     ];
     let keys = [parties[0].key(), parties[1].key()];
@@ -1998,9 +2085,9 @@ fn a_long_conversation_with_a_stranger_in_the_middle() {
     let mut inboxes = [Inbox::new(), Inbox::new()];
     inboxes[1].set_first_contact_bits(BITS);
     let mut now = T;
-    let cid = inboxes[0]
-        .start(&keys[0], &keys[1].register(), &name, now)
-        .unwrap();
+    let bobs_seedelf = Seedelf::new(chain(), &name, bob_x.register()).unwrap();
+    let to_bob = certified(&bob_x, &keys[1], &bobs_seedelf);
+    let cid = inboxes[0].start(&keys[0], &to_bob, now).unwrap();
     stamp(&mut inboxes[0], cid, BITS);
     // What the mutator puts in: this conversation's cid, a valid point, and
     // neither.

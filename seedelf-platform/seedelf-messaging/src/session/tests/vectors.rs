@@ -3,6 +3,11 @@
 //! through the crate's own functions. The generator checks each value it
 //! records against the state it came from.
 //!
+//! Every secret key here is a messaging key x_m (docs/protocol.md §21.6). A
+//! first contact from a handle writes to a Seedelf's messaging register
+//! M_S = (h_S, [x_m]h_S), h_S the hash of the Seedelf (§21.3), whose datum
+//! register is another key's, the Seedelf key's; each records its Seedelf.
+//!
 //! Each conversation's first-contact stamp is the first nonce from 0 with
 //! [`FIRST_CONTACT_STAMP_BITS`] of work. Finding it takes 2²⁴ attempts on
 //! average, so only recording searches (in a release build:
@@ -16,7 +21,10 @@ use group::Curve;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::support::{Seeded, handle, identity, key, off_curve, opened, outside_g1, test_scalar};
+use super::support::{
+    Seeded, handle, handle_named, identity, key, off_curve, opened, outside_g1, spend_key,
+    test_chain, test_scalar,
+};
 use crate::HEADER_LEN;
 use crate::SecretKey;
 use crate::envelope::ENVELOPE_OVERHEAD;
@@ -38,6 +46,7 @@ use crate::session::ratchet::{
     envelope_ephemeral_scalar, kdf_ck, kdf_rk, message_key_and_nonce, outer_okm, outer_scalar,
 };
 use crate::session::secret::Secret32;
+use crate::session::seedelf::{HANDLE_BASE_DST, Handle, Seedelf};
 use crate::session::wire::ENVELOPE_SIZES;
 
 const VECTORS: &str = "tests/vectors/messaging_session_v1.json";
@@ -82,6 +91,26 @@ fn register_json(register: &Register) -> Value {
     json!({
         "generator": hex(register.generator_bytes()),
         "public_value": hex(register.public_value_bytes()),
+    })
+}
+
+/// The Seedelf a handle is of, as a writer reads it from the chain, and its
+/// messaging register: the datum register (g_S, u_S), h_S's message and h_S
+/// as the hash gives it, and m_S = [x_m]h_S for the reader's messaging key.
+fn seedelf_json(handle: &Handle, reader: &SecretKey) -> Value {
+    let seedelf = handle.seedelf();
+    assert_eq!(&seedelf.handle(reader).unwrap(), handle);
+    let base = G1Projective::hash_to_curve(&seedelf.base_message(), HANDLE_BASE_DST, &[]);
+    assert_eq!(handle.register().generator(), base);
+    json!({
+        "network": seedelf.chain().network(),
+        "policy": hex(seedelf.chain().policy()),
+        "name": hex(seedelf.name()),
+        "generator": hex(seedelf.register().generator_bytes()),
+        "public_value": hex(seedelf.register().public_value_bytes()),
+        "base_message": hex(seedelf.base_message()),
+        "base": hex(handle.register().generator_bytes()),
+        "messaging_value": hex(handle.register().public_value_bytes()),
     })
 }
 
@@ -388,10 +417,11 @@ fn keys_proof_json(
 fn start_json(
     initiator: &mut Side,
     responder: &Side,
-    handle: Option<&Register>,
+    to: Option<&Handle>,
     drawn: &[Vec<u8>],
     index: usize,
 ) -> (Value, Secret32) {
+    let handle = to.map(Handle::register);
     let stamp = stamp_of(initiator.conversation.as_mut().unwrap(), index);
     let conversation = initiator.conversation.as_ref().unwrap();
     let first = &conversation.first;
@@ -516,6 +546,7 @@ fn start_json(
         json!({
             "initiator_secret_key": hex(initiator.key.scalar().to_bytes_be()),
             "responder_secret_key": hex(responder.key.scalar().to_bytes_be()),
+            "seedelf": to.map(|to| seedelf_json(to, &responder.key)),
             "handle": handle.map(register_json),
             "t": first.started_at,
             "to": hex(&first.to),
@@ -728,8 +759,12 @@ fn base_proof_checks(sessions: &[&Value]) -> Value {
             with_proof(&f1, readers),
         ),
         (
-            "session 1's base proof against another register of the same key".into(),
-            bob.register(),
+            "session 1's base proof against another register of the same key: another Seedelf's handle"
+                .into(),
+            handle(
+                "seedelf-messaging session v1 bob",
+                "seedelf-messaging session v1 bob's other seedelf",
+            ),
             f1.clone(),
         ),
         (
@@ -830,14 +865,23 @@ fn all_vectors() -> Value {
     //    ways, one pair delivered out of order.
     let mut alice = side("initiator", "seedelf-messaging session v1 alice");
     let mut bob = side("responder", "seedelf-messaging session v1 bob");
-    let bob_handle = handle(
-        "seedelf-messaging session v1 bob",
-        "seedelf-messaging session v1 bob's seedelf",
-    );
     let mut to = hex::decode("5eed0e1f").unwrap();
     to.extend((0u8..28).map(|i| i.wrapping_mul(37)));
-    alice.conversation =
-        Some(Conversation::start_with(&alice.key, &bob_handle, &to, t, &mut draw).unwrap());
+    let bob_handle = handle_named(
+        "seedelf-messaging session v1 bob",
+        "seedelf-messaging session v1 bob's seedelf",
+        &to,
+    );
+    alice.conversation = Some(
+        Conversation::start_with(
+            &alice.key,
+            bob_handle.register(),
+            bob_handle.name(),
+            t,
+            &mut draw,
+        )
+        .unwrap(),
+    );
     let drawn = draw.drain();
     let (start, sk) = start_json(&mut alice, &bob, Some(&bob_handle), &drawn, 0);
     let mut events = Vec::new();
@@ -920,15 +964,30 @@ fn all_vectors() -> Value {
     let mut second = with_events(start, "the responder continues the conversation", events);
     second["continues"] = json!("a first contact to a handle, then replies both ways");
 
-    // 3. The smallest first contact: a root register under a 1-byte `to`,
-    //    no `replaces`, F of 491 bytes. No first-contact message fits 512
-    //    bytes: 1,314 bytes of text fill 2 KiB, 1,315 take 8 KiB, and an
-    //    empty one is 2 KiB.
+    // 3. The smallest first contact: a Seedelf at its Seedelf key's root
+    //    register under a 1-byte `to`, no `replaces`, F of 491 bytes. No
+    //    first-contact message fits 512 bytes: 1,314 bytes of text fill
+    //    2 KiB, 1,315 take 8 KiB, and an empty one is 2 KiB.
     let mut carol = side("initiator", "seedelf-messaging session v1 carol");
     let mut dave = side("responder", "seedelf-messaging session v1 dave");
-    let dave_root = dave.key.register();
-    carol.conversation =
-        Some(Conversation::start_with(&carol.key, &dave_root, b"d", t + 7, &mut draw).unwrap());
+    let dave_root = Seedelf::new(
+        test_chain(),
+        b"d",
+        spend_key("seedelf-messaging session v1 dave").register(),
+    )
+    .unwrap()
+    .handle(&dave.key)
+    .unwrap();
+    carol.conversation = Some(
+        Conversation::start_with(
+            &carol.key,
+            dave_root.register(),
+            dave_root.name(),
+            t + 7,
+            &mut draw,
+        )
+        .unwrap(),
+    );
     let drawn = draw.drain();
     let (start, sk) = start_json(&mut carol, &dave, Some(&dave_root), &drawn, 2);
     assert_eq!(carol.conversation.as_ref().unwrap().first_bytes.len(), 491);
@@ -960,12 +1019,14 @@ fn all_vectors() -> Value {
     //    whose two challenge hashes are both at least q.
     let mut erin = side("initiator", "seedelf-messaging session v1 erin");
     let mut frank = side("responder", "seedelf-messaging session v1 frank");
-    let frank_handle = handle(
-        "seedelf-messaging session v1 frank",
-        "seedelf-messaging session v1 frank's seedelf",
-    );
     let mut name = hex::decode("5eed0e1f").unwrap();
     name.extend((0u8..28).map(|i| i.wrapping_mul(53).wrapping_add(11)));
+    let frank_seedelf = handle_named(
+        "seedelf-messaging session v1 frank",
+        "seedelf-messaging session v1 frank's seedelf",
+        &name,
+    );
+    let frank_handle = *frank_seedelf.register();
     let replaces = crate::session::first_contact::ConversationId([0x2a; 16]);
     let mut draw = (0..)
         .map(|i| {
@@ -1003,7 +1064,7 @@ fn all_vectors() -> Value {
         "session 4's challenge hashes are at least q, so a reader reduces them"
     );
     let drawn = draw.drain();
-    let (start, sk) = start_json(&mut erin, &frank, Some(&frank_handle), &drawn, 3);
+    let (start, sk) = start_json(&mut erin, &frank, Some(&frank_seedelf), &drawn, 3);
     assert_eq!(erin.conversation.as_ref().unwrap().first_bytes.len(), 538);
     let mut events = Vec::new();
     let (event, e1) = send(
@@ -1041,7 +1102,7 @@ fn all_vectors() -> Value {
     );
 
     json!({
-        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16). Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt` and `new_ratchet_secret`; b and the proofs' nonces aren't drawn but derived (§16.2): b from `aux_b`, the base proof's k from `base_c2`, `base_z2` and `aux_k`, and the keys proof's k_e, k_s and k1 from `keys_c2`, `keys_z2` and `aux_keys` (a continuation's from `aux_keys` alone), with their HMACs under `base_scalar`, `base_proof.nonce` and `keys_proof.nonces`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and r = envelope_ephemeral_scalar, both derived from the message key and the salt, so a send draws its salt alone; it seals the inner message padded with 0x80 then zeros to envelope_size - 145 bytes. A session with `continues` is a continuation (§16.3), written by the continued session's responder: its `replaces` and `base` are that session's cid and base, and its public values and secret keys are that session's, swapped. `plaintext` is the session layer's bytes, with no kind byte (§18).",
+        "description": "Seedelf Messaging session layer v1 test vectors (docs/protocol.md §3, §4, §9 and §16, with §21's two keys). Every secret key is a messaging key x_m; a session from a handle writes to its Seedelf's messaging register `handle` = (h_S, [x_m]h_S), with h_S RFC 9380's hash to G1 of the Seedelf's `base_message` (network ‖ policy ‖ len(N) ‖ N ‖ g_S ‖ u_S) under `handle_base_dst` (§21.3), the Seedelf's datum register (g_S, u_S) being another key's. Scalars are 32-byte big-endian; points are 48-byte compressed G1. Every random value is given under `draws`, `salt` and `new_ratchet_secret`; b and the proofs' nonces aren't drawn but derived (§16.2): b from `aux_b`, the base proof's k from `base_c2`, `base_z2` and `aux_k`, and the keys proof's k_e, k_s and k1 from `keys_c2`, `keys_z2` and `aux_keys` (a continuation's from `aux_keys` alone), with their HMACs under `base_scalar`, `base_proof.nonce` and `keys_proof.nonces`; the first-contact stamp's nonce is the first from 0 with `bits` of work. The outer envelope is v1 (tests/vectors/messaging_v1.json) with b = outer_scalar and r = envelope_ephemeral_scalar, both derived from the message key and the salt, so a send draws its salt alone; it seals the inner message padded with 0x80 then zeros to envelope_size - 145 bytes. A session with `continues` is a continuation (§16.3), written by the continued session's responder: its `replaces` and `base` are that session's cid and base, and its public values and secret keys are that session's, swapped. `plaintext` is the session layer's bytes, with no kind byte (§18).",
         "version": 1,
         "labels": {
             "session_salt": String::from_utf8(SESSION_SALT.to_vec()).unwrap(),
@@ -1050,6 +1111,7 @@ fn all_vectors() -> Value {
             "base_nonce_label": String::from_utf8(BASE_NONCE_LABEL.to_vec()).unwrap(),
             "base_label": String::from_utf8(BASE_LABEL.to_vec()).unwrap(),
             "keys_handle_label": String::from_utf8(KEYS_HANDLE_LABEL.to_vec()).unwrap(),
+            "handle_base_dst": String::from_utf8(HANDLE_BASE_DST.to_vec()).unwrap(),
             "keys_continuation_label": String::from_utf8(KEYS_CONTINUATION_LABEL.to_vec()).unwrap(),
             "keys_nonce_e_label": String::from_utf8(KEYS_NONCE_E_LABEL.to_vec()).unwrap(),
             "keys_nonce_s_label": String::from_utf8(KEYS_NONCE_S_LABEL.to_vec()).unwrap(),
@@ -1184,6 +1246,30 @@ fn the_files_b_and_k_are_the_hmacs_of_their_specified_messages() {
         let g = bytes(&session["handle"]["generator"]);
         let v = bytes(&session["handle"]["public_value"]);
         let to = bytes(&session["to"]);
+        // The handle is the Seedelf's messaging register: its base the hash
+        // of the Seedelf as §21.3 spells it, never its datum's generator.
+        let seedelf = &session["seedelf"];
+        assert_eq!(bytes(&seedelf["name"]), to);
+        let network = u8::try_from(seedelf["network"].as_u64().unwrap()).unwrap();
+        let base_message: Vec<u8> = [
+            &[network][..],
+            &bytes(&seedelf["policy"]),
+            &[to.len() as u8],
+            &to,
+            &bytes(&seedelf["generator"]),
+            &bytes(&seedelf["public_value"]),
+        ]
+        .concat();
+        assert_eq!(bytes(&seedelf["base_message"]), base_message);
+        assert_eq!(
+            label("handle_base_dst"),
+            b"Seedelf-Messaging|v1|handle-base|BLS12381G1_XMD:SHA-256_SSWU_RO_"
+        );
+        let h_s = G1Projective::hash_to_curve(&base_message, &label("handle_base_dst"), &[]);
+        assert_eq!(h_s.to_compressed()[..], g[..]);
+        assert_eq!(bytes(&seedelf["base"]), g);
+        assert_eq!(bytes(&seedelf["messaging_value"]), v);
+        assert_ne!(bytes(&seedelf["generator"]), g);
         let replaces = if session["replaces"].is_null() { 0 } else { 16 };
         // F's head: cid, t, len, to, len, replaces.
         let head = &f[..16 + 8 + 1 + to.len() + 1 + replaces];

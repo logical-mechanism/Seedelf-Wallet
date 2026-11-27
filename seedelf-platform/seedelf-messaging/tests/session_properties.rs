@@ -141,7 +141,12 @@ fn established() -> (Side, Side, ConversationId) {
         Side::new(SecretKey::generate()),
         Side::new(SecretKey::generate()),
     );
-    let cid = common::start(&mut alice.inbox, &alice.key, &bob.key.register(), T);
+    let cid = common::start(
+        &mut alice.inbox,
+        &alice.key,
+        &common::handle_of(&bob.key),
+        T,
+    );
     send(&mut alice, &mut bob, cid, b"first".to_vec());
     let first = bob.in_flight.remove(0);
     assert!(matches!(
@@ -251,8 +256,8 @@ proptest! {
     ) {
         let (alice, bob) = (SecretKey::generate(), SecretKey::generate());
         let (mut a, mut b) = (common::test_bits(Inbox::new()), common::test_bits(Inbox::new()));
-        let ab = common::start(&mut a, &alice, &bob.register(), T);
-        let ba = common::start(&mut b, &bob, &alice.register(), T);
+        let ab = common::start(&mut a, &alice, &common::handle_of(&bob), T);
+        let ba = common::start(&mut b, &bob, &common::handle_of(&alice), T);
         let mut to_bob: Vec<_> = (0..from_alice).map(|i| (ab, a.send(ab, &[i as u8]).unwrap(), i)).collect();
         let mut to_alice: Vec<_> = (0..from_bob).map(|i| (ba, b.send(ba, &[i as u8]).unwrap(), i)).collect();
         let mut bits = order;
