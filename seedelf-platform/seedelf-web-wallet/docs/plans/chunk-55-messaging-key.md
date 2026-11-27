@@ -1,6 +1,6 @@
 # Chunk 55 · The messaging key
 
-**Status: 🚧 55a, the argument and the spec** (`web-wallet/messaging-key-spec`): protocol.md §21 specifies the key, the hashed base and the certificate, joint-security.md argues the two keys, and both were reviewed and attacked (2026-11-26); nothing is built. The plan was written 2026-11-26 on `web-wallet/messaging-key` from `main` (828cf7db) and merged as #418. **1.10.0 waits on it:** chunk 54's gate (54g) resumes for the release once this chunk's own gate (55h) is done. Each step gets its own branch, `web-wallet/messaging-key-<step>`, and its own PR from `main`, as chunk 54's steps do.
+**Status: ✅ 55a merged** (#419): protocol.md §21 specifies the key, the hashed base and the certificate, and joint-security.md argues the two keys, reviewed and attacked (2026-11-26). **🚧 55b, 55d and 55e** (`web-wallet/messaging-key-crate`, one PR): x_m's derivation is built and checked; the crate's Seedelf, handle and certificate modules and the bindings' `MessagingKey` build; the tests, vectors and the worker are under way. The plan was written 2026-11-26 on `web-wallet/messaging-key` from `main` (828cf7db) and merged as #418. **1.10.0 waits on it:** chunk 54's gate (54g) resumes for the release once this chunk's own gate (55h) is done. Each step gets its own branch, `web-wallet/messaging-key-<step>`, and its own PR from `main`, as chunk 54's steps do.
 
 **The idea** came from a suggestion the owner pasted from ChatGPT (2026-11-26): "Maintain a single Seedelf identity while deriving independent spending and messaging secrets from the same recovery phrase using domain-separated HKDF. The spending secret authorizes the messaging public register through a domain-separated Schnorr proof that binds the messaging register to the Seedelf identity, network, and protocol version." It's chunk 54's call 21, the messaging-only key, with the binding made by a signature instead of a second Seedelf, so the handle stays one name.
 
@@ -112,7 +112,33 @@ Today Messages names no Seedelf to any server, and nothing public says which See
   - what a writer's wallet does when a Seedelf's certificate is missing or doesn't verify. Weighed: it writes nothing, does no work and says the Seedelf doesn't take messages; two good certificates for one register with different m_S count as none (protocol.md §21.5, §21.8).
 - **Reviewed before 55b:** two models attacking the argument, as 1.10.0's written arguments were, and a fresh read of the spec. Done 2026-11-26: a fresh read of §21 (Sonnet) and two attacks on §21 and joint-security.md (Fable and Opus). None found a way to x or x_m, or to forge a spend, a certificate, a reveal or a first message, and both attacks found the claim that x_m needs no static DH sound. Their findings are folded in: the headline scoped (an x_m thief can forge a "Verified" label to its owner), the policy in the certificate, m_S in the reveal, re-certifying after a move left to the user, the key type and the base computed in the crate (55b, 55d), and call 9.
 
-### 55b ⬜ The crate and seedelf-crypto
+### 55b 🚧 The crate and seedelf-crypto
+
+**55b, 55d and 55e land together** (a 55b call, 2026-11-26): one branch, `web-wallet/messaging-key-crate`, a commit for each step, one PR. A writer can't start without the reader's certificate, so the crate's new start, receive and reveal move the bindings and the worker in the same mergeable state, or main's Messages tests fail. A one-key shim in between would have meant a second reveal format and its own vectors for one step. The relay (55c) is seedelf-data's and its own PR, its copy of the certificate checks with it.
+
+**Built so far (2026-11-26):**
+- **x_m's derivation** in seedelf-crypto (`messaging_key_v1`, `messaging_key_v1_from_entropy`, `messaging_okm_v1`): v1 untouched, 22 vectors in `seedelf_messaging_key_v1.json` (every v1 phrase, both networks, generation 1, account 1), 83 crate tests, and an independent standard-library Python check, 88 of 88 values, a pure-Python BLS12-381 for the public values.
+- **The crate:** `session/seedelf.rs` (`Chain`, `Seedelf`, h_S by blstrs's `hash_to_curve`, `Handle` with no public constructor) and `session/certificate.rs` (`make`, `from_bytes` that checks, `is_for`); the public `start` takes a `Handle`, the register-taking forms are test-only `start_on`; the reveal carries m_S; four new error codes.
+- **The bindings:** `MessagingKey` (no funds methods; every `messaging*` export takes it), `messagingCertificate` and `messagingCheckCertificate`, and a `network` on the requests, the chain's policy taken from seedelf-core.
+- **The crate's tests** (196 → 215, none removed or weakened): the certificate's every refusal in order, its nonces recomputed with HMAC directly, the spending and Lovejoin verifiers refusing its transcripts (mauled too), h_S held to RFC 9380's J.9.1 answer, and the two keys kept apart end to end. Session and reveal vectors re-recorded; a new `messaging_certificate_v1.json` (4 good, 60 refusals); `messaging_v1.json` and `messaging_relay_v1.json` unchanged.
+- **Found by 55b's mutation pass:** the reveal's statement carried neither the chain nor h_S, so the reader's own reveal with c₁ = z₁ = 0 verified under every chain. h_S is now in the statement (protocol.md §21.9), the reveal vectors re-recorded, and the full mutant gate passes: 780,597 mutants, none verifies (740,232 fail the equation, 40,365 don't parse).
+- **The bindings, after their tests' findings:** a `MessagingKey` holds its network, from a strict string, and every request naming another throws; `messagingValue` gives the wallet's own m_S from x_m alone; `messagingReveal` takes the certificate and refuses one that doesn't name the Seedelf or this key's m_S; `messagingListingDigest`. 408 native and 92 JS tests, the README test included; `MessagingKey.free()` meets `SeedelfKey`'s memory check.
+- **The clean-room check (2026-11-26):** an implementation from protocol.md, construction.md and the vector files alone, no Rust read, reproduced 1,042 of 1,042 values (certificate 145, reveal 115, session 782). Its gaps are fixed: protocol.md §2 to §20 now describe the two keys in place, §19's formulas are on h_S, §16.6 and §19.6 match the files, §21.4 names each refusal's code in order; and the certificate file pins nine more refusals (a scalar plus q, the generation's and policy's place, x = 0) and each certificate's listing digest (69 refusals, sha256 `5514bbf2…`).
+- **The relay (55c), built:** the list and both routes; check 8 on both pools (mainnet the data layer's names index, read once a tip, and a sweep every 2 minutes dropping moved Seedelfs' certificates and withdrawn digests; preprod Koios's `asset_utxos` per post, 5 s, 4 in flight, cached 60 s); the withdrawal's route; check 3′, withdrawn digests kept and refused (409 `withdrawn`). 324 tests (from 265), held to the certificate file's 4 certificates, 69 refusals, 4 withdrawals and 29 withdrawal refusals.
+  - **The owner's calls (2026-11-26):** preprod's chain read stays one Seedelf per post, over paging the whole contract (Koios learns which Seedelf the relay asked about, from the relay's address); and the API ships a TLS client (rustls with ring and bundled webpki roots) to reach Koios.
+- **The withdrawal (call 9, in 1.10.0):** protocol.md §21.7 specifies it; joint-security.md's new use of x_m is being written; the crate's `Withdrawal` (make, parse, check against the certificate it names) and the bindings' `messagingWithdrawal` build, their tests and vectors under way; the worker posts one at turn-off.
+- **The worker (55e), built:** `Keys.messaging`, a `MessagingKey` per open network; the list's copy (`messagingList.<network>`, a 256 KiB cap); certificates at the switch, spaced 2 to 10 minutes through a persisted queue; start only on exactly one good certificate; Show my Seedelf on the wallet's own; the press; withdrawals at turn-off, waiting through a lock; both test relays with the list's routes; 26 new tests and about 30 adapted, 4,713 in all. Checked: no wallet flow moves a Seedelf's token (only Remove burns one).
+- **The review (2026-11-26), four independent reviewers:** crypto and bindings (Fable), the relay and its deploy (Opus), the worker (Opus), and the cross-area contracts and docs (Fable). Every finding was checked against the code before a fix.
+  - **Crypto:** no high or medium, and no path to x or x_m. `Reveal::seedelf()` handed out a `Handle` that could start a conversation without a certificate; it now returns the `Seedelf`, and a `compile_fail` check holds that.
+  - **Relay:** two highs. Posting and withdrawing in a loop could fill the list for good; fixed by compacting removals past a horizon, capping withdrawn digests at 32 for each register, and a daily preprod re-check. A percent-encoded pool name walked past the per-network off switch; fixed by refusing `%` under `/messaging/`. Then a rollback across a pool-list drop-in, saving at once after a withdrawal, unreadable files moved aside, and the deploy script's edge cases.
+  - **Worker:** a mint's certificate refused before the chain had it, and never retried; withdrawals lost to a queued certify or a lock; and the copy's cap leading to withdrawing the wrong bytes, a half-seen conflict, and decisions on a partial read. Fixed by retrying with backoff, recording the withdrawal intent with the switch, group eviction that never drops the wallet's own, the relay's `already` naming the held digest, and reading to the end.
+  - **Docs:** one-key sentences left in security.md, protocol.md §7, privacy.md and the policy, and the relay's timing visible at a first message, now stated.
+- **Left for 1.10.x:**
+  - keeping a moved Seedelf's retired M_S as a handle for 48 hours (§21.8: not built, since the wallet never moves one);
+  - a binding that checks a withdrawal, so the test relays can check its proof (the relay's Rust does);
+  - a withdrawal made from the wallet's own messaging register and a listing digest, without the certificate's bytes. Today, an `already` naming other bytes has the wallet re-read the list for them, and a switch off before that read ends leaves the relay's certificate listed until the relay drops it;
+  - a lock between a Remove's mark and its queuing loses that Seedelf's withdrawal (the relay's chain check takes it down, within a day on preprod);
+  - the copy's cap and preprod's per-Seedelf lookup, to look at again before mainnet.
 
 - **x_m's derivation** in seedelf-crypto, beside v1, with its own vectors file, frozen when mainnet opens.
 - **The certificate** in seedelf-messaging: making, checking, its bytes. Its vectors are `messaging_certificate_v1.json`, recorded by `RECORD_MESSAGING_CERTIFICATE_VECTORS=1` [choice].
@@ -124,17 +150,17 @@ Today Messages names no Seedelf to any server, and nothing public says which See
   - a mutation pass;
   - the spending verifiers refusing a certificate's transcripts;
   - a soak, as 1.10.0's.
-- **The relay's copy of the checks** (seedelf-data can't depend on the workspace), held to the certificate vectors.
+- **The relay's copy of the checks** (seedelf-data can't depend on the workspace), held to the certificate vectors: built in 55c, with the list's routes.
 - **The two CLAUDE.md files change with it:** the root's *One key, many uses* invariant and seedelf-platform's line that the crate's key is the Seedelf key, once the code has two keys.
 
-### 55c ⬜ The relay
+### 55c ✅ The relay (built, the same PR's seedelf-data part, deployed after the merge)
 
 - **The list's routes, per network:** post one certificate; read the list in pages behind a cursor, as the pool is read.
 - **Checks, as for an envelope:** points, sizes and both proofs. Priced with a stamp, with a cap per name and per pool.
 - **On mainnet [choice; call 6],** each kept certificate is checked against the data layer's own view of the contract, and dropped once its register isn't the Seedelf's. So a flood of certificates under made-up registers can't push the real one out. Preprod has no chain on the data layer, so there it's the proofs and the caps alone.
 - **Kept in memory with a snapshot,** as the pool is; the off switch covers it. Deployed before the wallet's upload.
 
-### 55d ⬜ WebAssembly
+### 55d ✅ WebAssembly (built with 55b, the same PR)
 
 - **x_m derived at unlock beside x, and held as x is:**
   - in an allocation of its own, wiped in place at `free()`;
@@ -143,13 +169,34 @@ Today Messages names no Seedelf to any server, and nothing public says which See
 - **A key type of its own** (rule 8; both attacks, 2026-11-26): a `MessagingKey` class with none of the funds methods (no `isOwned`, `createProof`, `baseRegister` or one-time key). Every `messaging*` export takes only it, so passing x where x_m belongs fails at the call instead of quietly running on the spending key. The certificate's maker alone takes both keys, and refuses when [x_m]G = [x]G.
 - **There are exports to make and check a certificate.** Making a certificate is the only Messages call that takes x.
 
-### 55e ⬜ The worker
+### 55e ✅ The worker (built, the same PR)
 
-- **Certificates at the switch** (the owner, 2026-11-26): turning Messages on, and turning a Seedelf on, reads the list first. For each Seedelf that takes first messages, a certificate good for its register and this wallet's m_S is used; otherwise the wallet makes one and posts it, several apart from each other. A Seedelf made here while Messages is on gets one the same way. A handle becomes (name, register, m_S).
-- **Reading the list** whole, at a first message's read and at a reveal's check. When else it's read, on each sync or less often, is 55e's [choice].
-- **A first message goes only to a Seedelf whose certificate verifies** against the contract read the wallet already makes for it. The reveal's press checks the certificate with the register.
-- **A Seedelf that moves under the key:** its handle goes, as now (`gone`), and only the user's turning it on again posts a new certificate, never the wallet by itself (protocol.md §21.8). The retired M_S stays a handle for 48 hours.
-- **The funds scan never tests a register against x_m.** Check every `isOwned` caller [code].
+The design, for the session that builds it (2026-11-26; protocol.md §21.7 and §21.8 are what it implements):
+
+- **Keys** (`wallet.ts` `Keys`): `messaging`, a `MessagingKey` for each network in `MESSAGING_NETWORKS` (preprod alone now), derived at unlock from the vault's entropy beside `seedelf` (`MessagingKey.fromEntropy(entropy, 0, network)`), freed at a lock with the rest, before `renewWasm`. A closed network gets none, so no unused key sits in memory.
+  - Messages' `withKey` and `laneKey` take a network and hand the task that network's messaging key, never `keys.seedelf`.
+  - The one task that takes both is the certificate's.
+- **The list's client** (`relay.ts`): `postCertificate` and `readCertificates`, §21.7's bytes, with the envelope client's rate-limit and refusal handling (`mayAsk` after the rate limit, `Retry-After`, the 410 off switch). The stamp is solved at the page's `price` with `messagingFindStamp` over the listing digest.
+- **The list's copy:** a sealed record per network, its cursor and its entries by listing digest. Removals are applied; on a gap it's dropped and read again from the start. Kept apart from the 5 MB history budget, within a cap of its own [choice].
+- **When the list is read:**
+  - at a network's switch on, and a Seedelf's turn-on;
+  - before a first message;
+  - at a reveal's check press;
+  - at the first sync of an unlock while the switch is on, which also finds a missing certificate of the wallet's own.
+
+  Never by name; what's new after the cursor.
+- **Certificates at the switch** (the owner, 2026-11-26): turning Messages on, and turning a Seedelf on, reads the list first. For each Seedelf that takes first messages (W8, W12), with its own m_S from `messagingValue`:
+  - a good certificate with that m_S is used as it is;
+  - a good one naming another m_S means another key holds it, so nothing is posted and the overview says so;
+  - with none, the wallet makes one (`messagingCertificate`, both keys) and posts it, several apart from each other [choice: a random wait between posts].
+
+  A Seedelf made here while Messages is on gets one at its mint's pair. A moved Seedelf's handle goes, as now (`gone`), and only the user's turning it on again posts.
+- **A first message** (`start`): the contract read it makes now, then the list's new entries. Exactly one m_S among the good certificates for (name, register) gives the certificate it passes to `messagingStart`. None, or two, refuses before any work or post, with a code the screens show as "doesn't take messages" (55f).
+- **Show my Seedelf** (`reveal`): the wallet's own good certificate for the pair, from the copy (made and posted first if it's missing), passed to `messagingReveal`, which refuses any other.
+- **A reveal's check:** `messagingCheckReveal` with the network as it arrives. At the press, the contract read it makes now and the list's new entries: verified only when the name's register is the reveal's and exactly one good certificate names the reveal's `messaging`.
+- **Receiving:** `messagingReceive` with the network. The handles stay the (name, register) pairs W8 and W12 give, each a retired one too for 48 hours after a move.
+- **The test relays:** `tests/fake-relay.ts` and `e2e/relay.ts` gain §21.7's routes, so the harness's two wallets post at the switch and read before writing. Every Messages test file runs through them.
+- **The funds scan never tests a register against x_m:** `isOwned` is `SeedelfKey`'s alone, and `MessagingKey` has no such method, so the types hold it.
 
 ### 55f ⬜ The screens
 
@@ -203,15 +250,21 @@ Each has a recommendation, which the owner can overturn.
    - **Recommended: h_S = hash_to_G1(network ‖ N ‖ g_S ‖ u_S)** (protocol.md §21.3). A restore still rebuilds it from the chain and the phrase, nobody chooses the point, so no certificate is a static-DH answer on x_m, and a Seedelf's messaging register is never on another register's base.
    - The plan first recommended the Seedelf's own generator g_S. A Seedelf someone else minted under the key has a g_S they built from the wallet's public registers, and turning it on would then publish x_m times their point.
    - The cost is one hash to the curve each time a writer or the relay checks a certificate.
-6. ❓ **The relay checking certificates against the chain on mainnet.**
-   - **Recommended: yes,** against the data layer's own view, so made-up registers can't crowd out the real one.
-   - The relay has read no chain until now, so this is a change to 54c's design.
+6. ✅ **The relay checks every certificate against the chain, on both networks** (the owner, 2026-11-26, as recommended, once 55c found the list could otherwise be filled for good: a certificate needs only a key pair, so about 30 addresses could fill preprod's list in 36 hours).
+   - Mainnet from the data layer's own view, with removals as Seedelfs move; preprod from Koios at post time, with no re-check yet (protocol.md §21.7, check 8).
+   - The relay has read no chain until now: a change to 54c's design.
+   - **No per-address cap on certificates held** (the owner, 2026-11-26): it would keep a record of which address posted how many for as long as certificates live, and the chain check already holds the list to two certificates for each real Seedelf.
 7. ❓ **Call 18's warning after the split** (with chunk 54's call 22). Funds no longer depend on Messages' math, but a memory-level bug still reaches both keys.
    - **Recommended: keep a short warning until mainnet opens,** in the owner's words.
 8. ❓ **Rotation later,** with the generation in the format now. **Recommended: yes.**
-9. ✅ **Withdrawing a certificate: a withdrawal signed by x_m** (Opus's attack; the owner, 2026-11-26, as recommended). Turning Messages off leaves the Seedelf's certificate good on the public list, so it still reads as taking messages, and writers still pay a first message's stamp for nothing.
+9. ✅ **Withdrawing a certificate: a withdrawal signed by x_m** (Opus's attack; the owner, 2026-11-26, as recommended), **built in 1.10.0** (the owner the same day: "In 1.10.0"): protocol.md §21.7's withdrawal, joint-security.md's new use of x_m first, then the crate, the bindings, the relay's route and the worker's post at turn-off, in this PR. Turning Messages off leaves the Seedelf's certificate good on the public list, so it still reads as taking messages, and writers still pay a first message's stamp for nothing.
    - **Recommended: a withdrawal, signed by x_m, never x,** posted when the user turns Messages or that Seedelf off. It proves x_m on h_S over a hash of the one certificate it withdraws, so a later posting, made with a fresh aux, is other bytes that an old withdrawal can't take down. It's a new use of x_m, so joint-security.md and protocol.md §21 come first, in 55c.
    - The alternative is to say at the switch that turning off doesn't take the Seedelf off the list, and that moving it does.
+10. ✅ **An off switch for each network, from GitHub Actions** (the owner, 2026-11-26: "since preprod is free basically the monetary limits that mainnet apply do not work. So we should have an github action to turn off preprod and github action to turn off mainnet. This way mainnet could work as expected but still limit a preprod side attack that could overload the server. Easy fix for something that potentially could happen.").
+   - `DATA_MESSAGING_OFF` takes a list of pools as well as `true`, a stopped pool's routes answer 410 alone, and the wallet already pauses only that network.
+   - The deploy script gains `messaging off|on <pool>`, keeping the runbook's drop-in.
+   - The workflow gains four choices, each approved by the owner as every run is.
+   - The new script needs one by-hand install on the VPS before the Actions work (the runbook's block).
 
 ## Unknowns
 
